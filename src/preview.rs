@@ -205,15 +205,16 @@ fn header_line(node: &Node, p: &Preview) -> Line<'static> {
 /// synchronous in Phase 2 (the socket call is fast; the debounce handles
 /// the perceptual latency). Pane preview fetches scrollback via
 /// `pane.read`; the others are built from the tree node itself.
+#[allow(unreachable_patterns)]
 fn resolve_preview(node: &Node, socket_path: &str) -> Preview {
     match node.kind {
         Kind::Pane => pane_preview(node, socket_path),
         Kind::Agent => agent_preview(node, socket_path),
         Kind::Dir | Kind::Zox => dir_preview(node),
+        Kind::Plugin => plugin_preview(node, socket_path),
         Kind::Group => group_preview(node),
         Kind::Workspace => workspace_preview(node),
         Kind::Tab => tab_preview(node),
-        // Other kinds land with their provider phases.
         _ => Preview {
             icon: kind_glyph(node.kind),
             title: node.label.clone(),
@@ -426,6 +427,73 @@ fn dir_entries(path: &str) -> Vec<DirEntry> {
     files.sort_by(|a, b| a.name.cmp(&b.name));
     dirs.extend(files);
     dirs
+}
+
+/// Plugin preview (spec §7): one-line description,
+/// declared actions, chips: enabled/version. Fetches
+/// the plugin's actions from `plugin.list`.
+fn plugin_preview(node: &Node, socket_path: &str) -> Preview {
+    let pid = node.id.strip_prefix("plugin:").unwrap_or(&node.id);
+    let chips = vec![Chip {
+        text: node.meta.clone(),
+        semantic: if node.meta == "disabled" {
+            ChipSemantic::Error
+        } else {
+            ChipSemantic::Ok
+        },
+    }];
+    let mut body = vec![
+        Line::raw(""),
+        Line::styled(
+            "Actions",
+            Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    // Fetch the plugin's actions from the socket.
+    if !socket_path.is_empty() {
+        if let Ok(r) =
+            crate::socket_client::request(socket_path, "plugin.list", serde_json::json!({}))
+        {
+            if let Some(plugins) = r.get("plugins").and_then(|v| v.as_array()) {
+                for plugin in plugins {
+                    if plugin.get("plugin_id").and_then(|v| v.as_str()) == Some(pid) {
+                        let actions = plugin
+                            .get("actions")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if actions.is_empty() {
+                            body.push(Line::raw("  (no actions declared)"));
+                        } else {
+                            for a in &actions {
+                                let aid = a.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                                let title = a.get("title").and_then(|v| v.as_str()).unwrap_or(aid);
+                                body.push(Line::from(vec![
+                                    Span::raw("  ▸ "),
+                                    Span::raw(title.to_string()),
+                                ]));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Preview {
+        icon: kind_glyph(Kind::Plugin),
+        title: node.label.clone(),
+        subtitle: format!("plugin {pid}"),
+        chips,
+        body_label: "PLUGIN",
+        body,
+        action: if node.meta == "no actions" || node.meta == "disabled" {
+            String::new()
+        } else {
+            "open actions".to_string()
+        },
+        alt: String::new(),
+    }
 }
 
 /// Group preview (spec §7): aggregate roster of children + one line
