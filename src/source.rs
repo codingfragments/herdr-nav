@@ -1481,6 +1481,7 @@ fn pane_label(pane: &serde_json::Value, pane_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports)]
     use super::*;
 
     pub(crate) fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
@@ -1664,6 +1665,7 @@ mod tests {
 
 #[cfg(test)]
 mod name_map_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
@@ -1714,6 +1716,7 @@ mod name_map_tests {
 
 #[cfg(test)]
 mod agents_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     fn agent(pane_id: &str, agent: &str, status: &str, title: &str) -> serde_json::Value {
@@ -1754,6 +1757,7 @@ mod agents_tests {
 
 #[cfg(test)]
 mod dir_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     #[test]
@@ -1801,6 +1805,7 @@ mod dir_tests {
 
 #[cfg(test)]
 mod name_default_tests {
+    #![allow(unused_imports)]
     use super::*;
     #[test]
     fn workspace_name_default_is_last_segment() {
@@ -1814,6 +1819,7 @@ mod name_default_tests {
 
 #[cfg(test)]
 mod template_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     #[test]
@@ -1934,6 +1940,7 @@ tabs:
 
 #[cfg(test)]
 mod resolve_cwd_tests {
+    #![allow(unused_imports)]
     use super::*;
     #[test]
     fn absolute_asis() {
@@ -1955,6 +1962,7 @@ mod resolve_cwd_tests {
 
 #[cfg(test)]
 mod plugins_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     fn plugin(pid: &str, version: &str, enabled: bool, actions: usize) -> serde_json::Value {
@@ -2001,6 +2009,7 @@ mod plugins_tests {
 
 #[cfg(test)]
 mod write_pin_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     #[test]
@@ -2033,6 +2042,7 @@ mod write_pin_tests {
 
 #[cfg(test)]
 mod unpin_tests {
+    #![allow(unused_imports)]
     use super::*;
 
     #[test]

@@ -26,14 +26,7 @@ use crate::socket_client;
 
 // ── Palette (shared with render.rs; finalized in Phase 9) ───────────────────────
 
-const MANTLE: Color = Color::Rgb(0x1e, 0x20, 0x30);
-const TEXT: Color = Color::Rgb(0xca, 0xd3, 0xf5);
-const SUBTEXT0: Color = Color::Rgb(0xa5, 0xad, 0xcb);
-const SURFACE2: Color = Color::Rgb(0x5b, 0x60, 0x78);
-const MAUVE: Color = Color::Rgb(0xc6, 0xa0, 0xf6);
-const GREEN: Color = Color::Rgb(0xa6, 0xda, 0x95);
-const RED: Color = Color::Rgb(0xed, 0x87, 0x96);
-const YELLOW: Color = Color::Rgb(0xee, 0xd4, 0x9f);
+use crate::theme::Palette;
 
 /// Debounce window for preview resolution (spec §7.4).
 const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(60);
@@ -55,27 +48,18 @@ fn kind_glyph(kind: Kind) -> char {
 }
 
 /// Kind colour (spec §9). Matches render.rs.
-fn kind_color(kind: Kind) -> Color {
-    match kind {
-        Kind::Group => MAUVE,
-        Kind::Workspace => Color::Rgb(0xb7, 0xbd, 0xf8),
-        Kind::Tab => Color::Rgb(0x91, 0xd7, 0xe3),
-        Kind::Pane => Color::Rgb(0x8a, 0xad, 0xf4),
-        Kind::Dir => Color::Rgb(0xee, 0xd4, 0x9f),
-        Kind::Zox => Color::Rgb(0x8b, 0xd5, 0xca),
-        Kind::Plugin => Color::Rgb(0xf5, 0xbd, 0xe6),
-        Kind::Agent => Color::Rgb(0xa6, 0xda, 0x95),
-    }
+fn kind_color(p: &Palette, kind: Kind) -> Color {
+    crate::theme::kind_color(p, kind)
 }
 
 /// Chip colour by semantics (spec §7/§9).
-fn chip_color(s: ChipSemantic) -> Color {
+fn chip_color(s: ChipSemantic, palette: &Palette) -> Color {
     match s {
-        ChipSemantic::Ok => GREEN,
-        ChipSemantic::Info => MAUVE,
-        ChipSemantic::Warn => YELLOW,
-        ChipSemantic::Error => RED,
-        ChipSemantic::Blocked => RED,
+        ChipSemantic::Ok => palette.green,
+        ChipSemantic::Info => palette.mauve,
+        ChipSemantic::Warn => palette.yellow,
+        ChipSemantic::Error => palette.red,
+        ChipSemantic::Blocked => palette.red,
     }
 }
 
@@ -89,6 +73,7 @@ pub fn draw(
     node: Option<&Node>,
     socket_path: &str,
     last_change: Option<Instant>,
+    palette: &Palette,
 ) {
     // Header bar (mantle) + body (transparent).
     let body_area = Layout::default()
@@ -98,20 +83,24 @@ pub fn draw(
 
     let (header, body, is_stale) = match node {
         Some(n) => {
-            let p = resolve_preview(n, socket_path);
-            (header_line(n, &p), p.body, is_stale(last_change))
+            let p = resolve_preview(n, socket_path, palette);
+            (header_line(n, &p, palette), p.body, is_stale(last_change))
         }
         None => (
             Line::styled(
                 " preview ",
-                Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.subtext0)
+                    .add_modifier(Modifier::BOLD),
             )
-            .style(Style::default().bg(MANTLE)),
+            .style(Style::default().bg(palette.panel_bg)),
             vec![
                 Line::raw(""),
                 Line::styled(
                     "no selection",
-                    Style::default().fg(SURFACE2).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(palette.overlay0)
+                        .add_modifier(Modifier::DIM),
                 ),
             ],
             false,
@@ -184,21 +173,23 @@ fn is_stale(last_change: Option<Instant>) -> bool {
 }
 
 /// The 2-row header: row 0 = kind glyph + title + chips; row 1 = subtitle.
-fn header_line(node: &Node, p: &Preview) -> Line<'static> {
+fn header_line(node: &Node, p: &Preview, palette: &Palette) -> Line<'static> {
     let glyph = kind_glyph(node.kind);
     let title = Span::styled(
         format!(" {glyph} {} ", node.label),
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
     );
     let mut spans = vec![title];
     for chip in &p.chips {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             format!(" {} ", chip.text),
-            Style::default().fg(chip_color(chip.semantic)),
+            Style::default().fg(chip_color(chip.semantic, palette)),
         ));
     }
-    Line::from(spans).style(Style::default().bg(MANTLE))
+    Line::from(spans).style(Style::default().bg(palette.panel_bg))
 }
 
 /// Resolve the preview for a node (spec §7). For Session kinds this is
@@ -206,15 +197,15 @@ fn header_line(node: &Node, p: &Preview) -> Line<'static> {
 /// the perceptual latency). Pane preview fetches scrollback via
 /// `pane.read`; the others are built from the tree node itself.
 #[allow(unreachable_patterns)]
-fn resolve_preview(node: &Node, socket_path: &str) -> Preview {
+fn resolve_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
     match node.kind {
-        Kind::Pane => pane_preview(node, socket_path),
-        Kind::Agent => agent_preview(node, socket_path),
-        Kind::Dir | Kind::Zox => dir_preview(node),
-        Kind::Plugin => plugin_preview(node, socket_path),
-        Kind::Group => group_preview(node),
-        Kind::Workspace => workspace_preview(node),
-        Kind::Tab => tab_preview(node),
+        Kind::Pane => pane_preview(node, socket_path, palette),
+        Kind::Agent => agent_preview(node, socket_path, palette),
+        Kind::Dir | Kind::Zox => dir_preview(node, palette),
+        Kind::Plugin => plugin_preview(node, socket_path, palette),
+        Kind::Group => group_preview(node, palette),
+        Kind::Workspace => workspace_preview(node, palette),
+        Kind::Tab => tab_preview(node, palette),
         _ => Preview {
             icon: kind_glyph(node.kind),
             title: node.label.clone(),
@@ -227,9 +218,9 @@ fn resolve_preview(node: &Node, socket_path: &str) -> Preview {
 /// preserved; footer line = cwd + cursor position. Chips:
 /// focused/running, pid, cpu (best-effort from the pane node — Phase 5
 /// fills the live fields; here we show what the tree carries).
-fn pane_preview(node: &Node, socket_path: &str) -> Preview {
+fn pane_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
     let pane_id = node.id.strip_prefix("session:pane:").unwrap_or(&node.id);
-    let body = read_pane_scrollback(socket_path, pane_id);
+    let body = read_pane_scrollback(socket_path, pane_id, palette);
     let body_label = "PANE PREVIEW";
     Preview {
         icon: kind_glyph(Kind::Pane),
@@ -246,11 +237,11 @@ fn pane_preview(node: &Node, socket_path: &str) -> Preview {
 /// Read the pane's scrollback via `pane.read` and parse ANSI into
 /// styled ratatui lines (spec §7; reuses the herdr-flash approach:
 /// format=ansi, strip_ansi=false, then `ansi-to-tui` IntoText).
-fn read_pane_scrollback(socket_path: &str, pane_id: &str) -> Vec<Line<'static>> {
+fn read_pane_scrollback(socket_path: &str, pane_id: &str, palette: &Palette) -> Vec<Line<'static>> {
     if socket_path.is_empty() {
         return vec![Line::styled(
             "(no socket — pane scrollback unavailable)",
-            Style::default().fg(SURFACE2),
+            Style::default().fg(palette.overlay0),
         )];
     }
     let params = serde_json::json!({
@@ -271,7 +262,7 @@ fn read_pane_scrollback(socket_path: &str, pane_id: &str) -> Vec<Line<'static>> 
         }
         Err(e) => vec![Line::styled(
             format!("pane.read failed: {e}"),
-            Style::default().fg(RED),
+            Style::default().fg(palette.red),
         )],
     }
 }
@@ -291,7 +282,7 @@ fn ansi_to_lines(text: &str) -> Vec<Line<'static>> {
 /// blocked, the pending question + its options verbatim. Chips:
 /// status + duration, token count. Phase 5 fetches the transcript
 /// via `pane.read` (the agent runs in a pane) and shows the tail.
-fn agent_preview(node: &Node, socket_path: &str) -> Preview {
+fn agent_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
     let pane_id = node.id.strip_prefix("agents:").unwrap_or(&node.id);
     let status = node.meta.clone();
     let chips = vec![Chip {
@@ -302,7 +293,7 @@ fn agent_preview(node: &Node, socket_path: &str) -> Preview {
             _ => ChipSemantic::Info,
         },
     }];
-    let body = read_pane_scrollback(socket_path, pane_id);
+    let body = read_pane_scrollback(socket_path, pane_id, palette);
     Preview {
         icon: kind_glyph(Kind::Agent),
         title: node.label.clone(),
@@ -319,7 +310,7 @@ fn agent_preview(node: &Node, socket_path: &str) -> Preview {
 /// first), then last-visit recency and hit count. Chips:
 /// git branch + dirty, entry count. Phase 6a reads the dir
 /// listing locally (the socket dir-listing method is TBD).
-fn dir_preview(node: &Node) -> Preview {
+fn dir_preview(node: &Node, palette: &Palette) -> Preview {
     let path = node.id.split_once(':').map(|(_, p)| p).unwrap_or(&node.id);
     let expanded = expand_path(path);
     let (branch, dirty) = git_status(&expanded);
@@ -344,7 +335,9 @@ fn dir_preview(node: &Node) -> Preview {
         Line::raw(""),
         Line::styled(
             "Directory",
-            Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     for e in entries.iter().take(8) {
@@ -432,7 +425,7 @@ fn dir_entries(path: &str) -> Vec<DirEntry> {
 /// Plugin preview (spec §7): one-line description,
 /// declared actions, chips: enabled/version. Fetches
 /// the plugin's actions from `plugin.list`.
-fn plugin_preview(node: &Node, socket_path: &str) -> Preview {
+fn plugin_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
     let pid = node.id.strip_prefix("plugin:").unwrap_or(&node.id);
     let chips = vec![Chip {
         text: node.meta.clone(),
@@ -446,7 +439,9 @@ fn plugin_preview(node: &Node, socket_path: &str) -> Preview {
         Line::raw(""),
         Line::styled(
             "Actions",
-            Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     // Fetch the plugin's actions from the socket.
@@ -498,7 +493,7 @@ fn plugin_preview(node: &Node, socket_path: &str) -> Preview {
 
 /// Group preview (spec §7): aggregate roster of children + one line
 /// explaining the group's role. Chips: counts, error counts.
-fn group_preview(node: &Node) -> Preview {
+fn group_preview(node: &Node, palette: &Palette) -> Preview {
     let mut body = vec![Line::raw("")];
     let role = match node.id.as_str() {
         "group:session" => "live panes in your current session",
@@ -514,7 +509,7 @@ fn group_preview(node: &Node) -> Preview {
     body.push(Line::raw(""));
     for c in &node.children {
         let glyph = kind_glyph(c.kind);
-        let color = kind_color(c.kind);
+        let color = kind_color(palette, c.kind);
         body.push(Line::from(vec![
             Span::styled(format!("{glyph} "), Style::default().fg(color)),
             Span::raw(c.label.clone()),
@@ -546,17 +541,19 @@ fn group_preview(node: &Node) -> Preview {
 /// Workspace preview (spec §7): child inventory (tabs) + chip
 /// active/detached. The ASCII layout diagram lands in Phase 9 (needs
 /// the tab layout from the daemon); here we list the tabs.
-fn workspace_preview(node: &Node) -> Preview {
+fn workspace_preview(node: &Node, palette: &Palette) -> Preview {
     let mut body = vec![
         Line::raw(""),
         Line::styled(
             "Tabs",
-            Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     for c in &node.children {
         let glyph = kind_glyph(c.kind);
-        let color = kind_color(c.kind);
+        let color = kind_color(palette, c.kind);
         let mark = if c.meta == "active" { "● " } else { "  " };
         body.push(Line::from(vec![
             Span::raw(mark.to_string()),
@@ -586,17 +583,19 @@ fn workspace_preview(node: &Node) -> Preview {
 
 /// Tab preview (spec §7): child inventory (panes) + ASCII split
 /// diagram (Phase 9; here we list the panes). Chips: layout name.
-fn tab_preview(node: &Node) -> Preview {
+fn tab_preview(node: &Node, palette: &Palette) -> Preview {
     let mut body = vec![
         Line::raw(""),
         Line::styled(
             "Panes",
-            Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     for c in &node.children {
         let glyph = kind_glyph(c.kind);
-        let color = kind_color(c.kind);
+        let color = kind_color(palette, c.kind);
         let mark = if c.meta == "active" { "● " } else { "  " };
         body.push(Line::from(vec![
             Span::raw(mark.to_string()),
@@ -645,7 +644,7 @@ mod tests {
     fn pane_preview_strips_id_prefix() {
         let n = pane_node("session:pane:w1:p1", "nvim");
         // No socket → body explains the absence, doesn't crash.
-        let p = resolve_preview(&n, "");
+        let p = resolve_preview(&n, "", &Palette::default());
         assert_eq!(p.body_label, "PANE PREVIEW");
         assert_eq!(p.subtitle, "pane w1:p1");
         assert_eq!(p.action, "jump to pane");
@@ -666,7 +665,7 @@ mod tests {
             preview: Preview::default(),
             actions: crate::nav::Actions::default(),
         };
-        let p = group_preview(&n);
+        let p = group_preview(&n, &Palette::default());
         assert_eq!(p.body_label, "SUMMARY");
         assert!(p.body.iter().any(|l| l.to_string().contains("live panes")));
         assert!(p.body.iter().any(|l| l.to_string().contains("a")));
@@ -686,7 +685,7 @@ mod tests {
             preview: Preview::default(),
             actions: crate::nav::Actions::default(),
         };
-        let p = group_preview(&n);
+        let p = group_preview(&n, &Palette::default());
         assert_eq!(p.chips[0].text, "unavailable");
         assert_eq!(p.chips[0].semantic, ChipSemantic::Error);
     }
@@ -712,7 +711,7 @@ mod tests {
             preview: Preview::default(),
             actions: crate::nav::Actions::default(),
         };
-        let p = workspace_preview(&n);
+        let p = workspace_preview(&n, &Palette::default());
         assert_eq!(p.chips[0].text, "active");
         assert_eq!(p.chips[0].semantic, ChipSemantic::Ok);
         assert!(p.body.iter().any(|l| l.to_string().contains("editor")));
