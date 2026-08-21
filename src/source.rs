@@ -493,17 +493,26 @@ fn build_pinned_tree() -> Node {
 /// Read `~/.config/herdr/targets.toml` → `Vec<(path, slot)>`. Empty
 /// if missing or malformed (no crash).
 fn read_targets_toml() -> Vec<(String, u32)> {
-    let Some(dir) = std::env::var("HERDR_PLUGIN_CONFIG_DIR").ok().or_else(|| {
-        std::env::var("HOME")
-            .ok()
-            .map(|h| format!("{h}/.config/herdr"))
-    }) else {
-        return Vec::new();
-    };
-    let path = format!("{dir}/targets.toml");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
+    // Spec §13: `~/.config/herdr/targets.toml` (herdr-level, shared —
+    // not the plugin's own config dir). Prefer the herdr-level file;
+    // fall back to the plugin dir, then HOME, so the tree still
+    // renders wherever the file lives.
+    let herdr_dir = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{h}/.config/herdr"));
+    let plugin_dir = std::env::var("HERDR_PLUGIN_CONFIG_DIR").ok();
+    let candidates = [herdr_dir, plugin_dir];
+    for dir in candidates.into_iter().flatten() {
+        let path = format!("{dir}/targets.toml");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return parse_targets_toml(&content);
+        }
+    }
+    Vec::new()
+}
+
+/// Parse `targets.toml` content → `Vec<(path, slot)>`.
+fn parse_targets_toml(content: &str) -> Vec<(String, u32)> {
     let mut pins = Vec::new();
     for line in content.lines() {
         let line = line.trim();
