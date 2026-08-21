@@ -723,9 +723,14 @@ the command palette §1 disclaims as a non-goal.
    `agent`. The singular/plural difference (`agent` vs `agents`) is the
    user-visible cue that one is a kind and the other is a group;
    document it in `?` and in `doc/query-filters.md`.
-- **Status strip** shows the active filters: e.g. `agents · @pane`.
-- **Filter tokens in the search bar** stay visible as typed (they are not
-  consumed into chips). The status strip is the confirmation.
+- **Status strip** shows the active filters: e.g. `pane · fuzzy: nvim`
+  or `agents · dir · !zox`. Updated on every keystroke.
+- **Search bar display (decided 2026-08-21): inline raw text (option A).**
+  The full query stays in the bar as typed, editable character by
+  character; no chips, no per-token colouring in the bar. The status
+  strip is the parser-confirmation surface. This keeps the bar exactly as
+  the spec defines it (§2: `❯ prompt, query, block caret, placeholder`)
+  and avoids a chip-cursor interaction model the spec doesn't anticipate.
 
 **Deliverables:**
 - `doc/query-filters.md` — the user-facing query syntax doc: operators,
