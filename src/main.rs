@@ -320,11 +320,20 @@ fn event_loop<B: ratatui::backend::Backend>(
 fn invoke_action(socket_path: &str, id: &str) -> Result<nav::Outcome, String> {
     use crate::nav::Provider;
     // Dispatch to the right provider based on the node-id prefix.
-    // session:pane:... → SessionProvider; agents:... → AgentsProvider.
-    // Future providers (pinned/zox/plugin) land in later phases.
     if id.starts_with("agents:") {
         let provider = source::AgentsProvider::new(socket_path.to_string());
         provider.invoke(&id.to_string(), nav::Act::Default)
+    } else if id.starts_with("pinned:") || id.starts_with("zox:") {
+        // Both dir groups share the same action: open a new workspace
+        // at the path (spec §8.2). Dispatch by prefix to the right
+        // provider so each owns its own nodes.
+        if id.starts_with("pinned:") {
+            let provider = source::PinnedProvider::new();
+            provider.invoke(&id.to_string(), nav::Act::Default)
+        } else {
+            let provider = source::ZoxideProvider::new();
+            provider.invoke(&id.to_string(), nav::Act::Default)
+        }
     } else {
         let provider = source::SessionProvider::new(socket_path.to_string());
         provider.invoke(&id.to_string(), nav::Act::Default)

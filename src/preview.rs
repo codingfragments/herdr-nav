@@ -209,6 +209,7 @@ fn resolve_preview(node: &Node, socket_path: &str) -> Preview {
     match node.kind {
         Kind::Pane => pane_preview(node, socket_path),
         Kind::Agent => agent_preview(node, socket_path),
+        Kind::Dir | Kind::Zox => dir_preview(node),
         Kind::Group => group_preview(node),
         Kind::Workspace => workspace_preview(node),
         Kind::Tab => tab_preview(node),
@@ -311,6 +312,120 @@ fn agent_preview(node: &Node, socket_path: &str) -> Preview {
         action: "jump to agent pane".to_string(),
         alt: String::new(),
     }
+}
+
+/// Directory preview (spec §7): first ~8 entries (dirs
+/// first), then last-visit recency and hit count. Chips:
+/// git branch + dirty, entry count. Phase 6a reads the dir
+/// listing locally (the socket dir-listing method is TBD).
+fn dir_preview(node: &Node) -> Preview {
+    let path = node.id.split_once(':').map(|(_, p)| p).unwrap_or(&node.id);
+    let expanded = expand_path(path);
+    let (branch, dirty) = git_status(&expanded);
+    let mut chips = Vec::new();
+    if let Some(b) = &branch {
+        let text = if dirty { format!("{b}*") } else { b.clone() };
+        chips.push(Chip {
+            text,
+            semantic: if dirty {
+                ChipSemantic::Warn
+            } else {
+                ChipSemantic::Ok
+            },
+        });
+    }
+    let entries = dir_entries(&expanded);
+    chips.push(Chip {
+        text: format!("{} entries", entries.len()),
+        semantic: ChipSemantic::Info,
+    });
+    let mut body = vec![
+        Line::raw(""),
+        Line::styled(
+            "Directory",
+            Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    for e in entries.iter().take(8) {
+        let mark = if e.is_dir { "/" } else { " " };
+        body.push(Line::from(vec![
+            Span::raw(format!(" {mark} ")),
+            Span::raw(e.name.clone()),
+        ]));
+    }
+    if entries.len() > 8 {
+        body.push(Line::raw(format!(" … ({} more)", entries.len() - 8)));
+    }
+    Preview {
+        icon: kind_glyph(node.kind),
+        title: node.label.clone(),
+        subtitle: expanded.clone(),
+        chips,
+        body_label: "DIRECTORY",
+        body,
+        action: "open workspace".to_string(),
+        alt: String::new(),
+    }
+}
+
+/// Expand `~`/`$HOME` in a path (mirrors source::expand_path).
+fn expand_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{rest}");
+        }
+    }
+    path.to_string()
+}
+
+/// Git branch + dirty for a path (best-effort).
+fn git_status(path: &str) -> (Option<String>, bool) {
+    let out = std::process::Command::new("git")
+        .args(["-C", path, "status", "--porcelain", "--branch"])
+        .output();
+    let Ok(out) = out else { return (None, false) };
+    if !out.status.success() {
+        return (None, false);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let branch = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("## ").and_then(|s| s.split(' ').next()))
+        .map(str::to_string);
+    let dirty = !out.stdout.is_empty() && stdout.lines().any(|l| !l.starts_with("## "));
+    (branch, dirty)
+}
+
+/// Directory entries (dirs first), best-effort.
+struct DirEntry {
+    name: String,
+    is_dir: bool,
+}
+
+fn dir_entries(path: &str) -> Vec<DirEntry> {
+    let Ok(read) = std::fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for e in read.flatten() {
+        let Ok(name) = e.file_name().into_string() else {
+            continue;
+        };
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            dirs.push(DirEntry { name, is_dir: true });
+        } else {
+            files.push(DirEntry {
+                name,
+                is_dir: false,
+            });
+        }
+    }
+    dirs.sort_by(|a, b| a.name.cmp(&b.name));
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    dirs.extend(files);
+    dirs
 }
 
 /// Group preview (spec §7): aggregate roster of children + one line
