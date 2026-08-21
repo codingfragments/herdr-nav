@@ -892,6 +892,21 @@ pub fn build_workspace_from_template(
         .and_then(|v| v.as_str())
         .map(str::to_string);
 
+    // Focus the new workspace's root pane before any splits —
+    // herdr's pane.split targets the ACTIVE pane in the ACTIVE
+    // workspace, so without focusing first the split lands in
+    // the current workspace (confirmed live), not the new one.
+    if let Some(fp) = &first_pane {
+        let _ = crate::socket_client::request(
+            &socket,
+            "pane.focus",
+            serde_json::json!({"pane_id": fp}),
+        );
+    }
+    // Remember the pane that was focused before we built, so we
+    // can restore focus to it (the user stays in the current ws).
+    let prev_focused = current_focused_pane(&socket);
+
     for (tab_i, tab) in template.tabs.iter().enumerate() {
         // The first tab uses the workspace's initial pane; later
         // tabs need tab.create.
@@ -949,7 +964,33 @@ pub fn build_workspace_from_template(
             );
         }
     }
+    // Restore focus to the pane that was focused before the build
+    // (the user stays in the current workspace, not the new one).
+    if let Some(prev) = prev_focused {
+        let _ = crate::socket_client::request(
+            &socket,
+            "pane.focus",
+            serde_json::json!({"pane_id": prev}),
+        );
+    }
     Ok(first_pane)
+}
+
+/// Best-effort: which pane is currently focused? (None if the
+/// socket call fails.) Used to restore focus after building a
+/// workspace from a template.
+fn current_focused_pane(socket: &str) -> Option<String> {
+    let r = crate::socket_client::request(socket, "pane.list", serde_json::json!({})).ok()?;
+    let panes = r.get("panes").and_then(|v| v.as_array())?;
+    for p in panes {
+        if p.get("focused").and_then(|v| v.as_bool()) == Some(true) {
+            return p
+                .get("pane_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+        }
+    }
+    None
 }
 
 /// Preselect the template whose `match` glob fits `path`, else the
