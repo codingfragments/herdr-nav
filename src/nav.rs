@@ -317,7 +317,7 @@ impl Tree {
             Twisty::Closed
         };
         out.push(VisibleRow {
-            path,
+            path: path.clone(),
             depth,
             kind: node.kind,
             id: node.id.clone(),
@@ -328,7 +328,12 @@ impl Tree {
         });
         if is_expanded && !is_leaf {
             for (i, child) in node.children.iter().enumerate() {
-                let mut child_path = out.last().unwrap().path.clone();
+                // Child path = THIS node's path + child index. Do NOT
+                // read `out.last().path`: that is the most recently
+                // pushed row, which after recursing into an earlier
+                // sibling's subtree is a *descendant*, not this node —
+                // so a later sibling would inherit the descendant's path.
+                let mut child_path = path.clone();
                 child_path.push(i);
                 self.flatten_into(child, child_path, depth + 1, out);
             }
@@ -562,5 +567,81 @@ mod tests {
         assert!(t.expanded.contains("group:session"));
         assert!(t.expanded.contains("ws"));
         assert!(t.expanded.contains("tab"));
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn sibling_after_expanded_subtree_has_correct_path() {
+        // Session with two workspaces; expand the first workspace's
+        // tab + pane, then the second workspace's path must be [0,1]
+        // (sibling of the first), NOT inherited from the pane.
+        let pane = |id: &str| Node {
+            id: id.into(),
+            kind: Kind::Pane,
+            label: id.into(),
+            meta: String::new(),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: Actions::default(),
+        };
+        let tab = |id: &str, panes: Vec<Node>| Node {
+            id: id.into(),
+            kind: Kind::Tab,
+            label: id.into(),
+            meta: String::new(),
+            crumbs: None,
+            children: panes,
+            preview: Preview::default(),
+            actions: Actions::default(),
+        };
+        let ws = |id: &str, tabs: Vec<Node>| Node {
+            id: id.into(),
+            kind: Kind::Workspace,
+            label: id.into(),
+            meta: String::new(),
+            crumbs: None,
+            children: tabs,
+            preview: Preview::default(),
+            actions: Actions::default(),
+        };
+        let w1 = ws(
+            "session:ws:w1",
+            vec![tab("session:tab:t1", vec![pane("session:pane:p1")])],
+        );
+        let w2 = ws(
+            "session:ws:w2",
+            vec![tab("session:tab:t2", vec![pane("session:pane:p2")])],
+        );
+        let session = Node {
+            id: "group:session".into(),
+            kind: Kind::Group,
+            label: "S".into(),
+            meta: String::new(),
+            crumbs: None,
+            children: vec![w1, w2],
+            preview: Preview::default(),
+            actions: Actions::default(),
+        };
+        let mut t = Tree::new(vec![session]);
+        // Pre-expand everything so both subtrees are visible.
+        t.expanded.insert("group:session".into());
+        t.expanded.insert("session:ws:w1".into());
+        t.expanded.insert("session:tab:t1".into());
+        t.expanded.insert("session:ws:w2".into());
+        t.expanded.insert("session:tab:t2".into());
+        let rows = t.visible_rows();
+        // w2 must be at depth 1, path [0,1] — NOT [0,0,0,0,1].
+        let w2 = rows.iter().find(|r| r.id == "session:ws:w2").unwrap();
+        assert_eq!(w2.depth, 1);
+        assert_eq!(w2.path, vec![0, 1]);
+        // And its pane p2 at depth 3, path [0,1,0,0].
+        let p2 = rows.iter().find(|r| r.id == "session:pane:p2").unwrap();
+        assert_eq!(p2.depth, 3);
+        assert_eq!(p2.path, vec![0, 1, 0, 0]);
     }
 }
