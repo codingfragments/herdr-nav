@@ -835,6 +835,9 @@ filter tokens behaves exactly as Phase 4.
 - Passive host-status-line notification for agents needing input.
 - MRU ordering (most-recently-focused pane first when query empty).
 - Cross-workspace navigation if Herdr exposes multiple workspaces.
+- Richer tab preview: an ASCII split diagram of the tab's pane layout
+  (up to ~5 panes) instead of the plain child inventory — needs the
+  tab layout / pane rects from the daemon (confirm in Phase 9).
 
 ## License
 
