@@ -815,9 +815,16 @@ pub struct Template {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TemplateTab {
     pub name: String,
-    /// Startup commands, one per pane.
+    /// Startup commands, one per pane. An empty command =
+    /// a plain login shell (no nested shell).
     #[serde(default)]
     pub panes: Vec<String>,
+    /// Working directory for every pane in this tab. None =
+    /// the workspace's cwd (the path the workspace was
+    /// opened at). Passed to pane.split/tab.create as `cwd`,
+    /// so no `cd` command is needed.
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// `"v"` (vertical/side-by-side) or `"h"` (horizontal/stacked).
     #[serde(default = "default_split")]
     pub split: String,
@@ -908,6 +915,10 @@ pub fn build_workspace_from_template(
     let prev_focused = current_focused_pane(&socket);
 
     for (tab_i, tab) in template.tabs.iter().enumerate() {
+        // Per-tab cwd (None = the workspace's cwd = the path
+        // the workspace was opened at). Passed to tab.create /
+        // pane.split so no `cd` command is needed.
+        let cwd = tab.cwd.as_deref().unwrap_or(path);
         // The first tab uses the workspace's initial pane; later
         // tabs need tab.create.
         let (pane_id, _new_tab) = if tab_i == 0 {
@@ -916,7 +927,7 @@ pub fn build_workspace_from_template(
             let r = crate::socket_client::request(
                 &socket,
                 "tab.create",
-                serde_json::json!({"workspace_id": ws_id}),
+                serde_json::json!({"workspace_id": ws_id, "cwd": cwd}),
             )
             .map_err(|e| e.to_string())?;
             (
@@ -953,7 +964,7 @@ pub fn build_workspace_from_template(
             let r = crate::socket_client::request(
                 &socket,
                 "pane.split",
-                serde_json::json!({"pane_id": current_pane, "direction": direction, "ratio": ratio}),
+                serde_json::json!({"pane_id": current_pane, "direction": direction, "ratio": ratio, "cwd": cwd}),
             )
             .map_err(|e| e.to_string())?;
             current_pane = r
@@ -1524,6 +1535,21 @@ tabs = [{ name = "shell", panes = ["zsh"] }]
         assert_eq!(t[0].tabs[0].ratio, 60);
         assert_eq!(t[1].name, "plain");
         assert!(t[1].default);
+        // Per-tab cwd is optional (None when unset).
+        assert!(t[0].tabs[0].cwd.is_none());
+    }
+
+    #[test]
+    fn parse_templates_toml_with_cwd() {
+        let toml = r#"
+[[template]]
+name = "dev"
+tabs = [{ name = "editor", panes = [""], cwd = "~/code" }]
+"#;
+        let t = parse_templates_toml(toml);
+        assert_eq!(t[0].tabs[0].cwd.as_deref(), Some("~/code"));
+        // Empty command = plain shell pane (no nested shell).
+        assert_eq!(t[0].tabs[0].panes, vec!["".to_string()]);
     }
 
     #[test]
