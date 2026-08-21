@@ -86,6 +86,7 @@ pub fn draw(
     flash_error: Option<&(String, String)>,
     name_prompt: Option<(&str, &str)>,
     template_picker: Option<(&[source::Template], usize)>,
+    templates_exist: bool,
 ) {
     let area = frame.area();
 
@@ -128,7 +129,14 @@ pub fn draw(
     // the dialog carries its own ⏎/esc hints, so the overall footer
     // would duplicate them.
     if name_prompt.is_none() && template_picker.is_none() {
-        draw_footer(frame, bands[4], search, cursor_kind, name_prompt);
+        draw_footer(
+            frame,
+            bands[4],
+            search,
+            cursor_kind,
+            name_prompt,
+            templates_exist,
+        );
     }
 
     // Name-prompt dialog overlay (spec §8.2 amended): a centered
@@ -511,6 +519,7 @@ fn draw_footer(
     search: Option<&SearchView>,
     cursor_kind: Option<Kind>,
     name_prompt: Option<(&str, &str)>,
+    templates_exist: bool,
 ) {
     // Name prompt active: confirm/cancel hints.
     let (enter_hint, esc_hint) = if name_prompt.is_some() {
@@ -521,7 +530,7 @@ fn draw_footer(
             None => (enter_action_label(cursor_kind, false), "close"),
         }
     };
-    let hints = vec![
+    let mut hints = vec![
         Span::styled(
             " ⏎ ",
             Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
@@ -538,6 +547,17 @@ fn draw_footer(
         ),
         Span::styled(esc_hint, Style::default().fg(SUBTEXT0)),
     ];
+    // ^t hint (spec §8.4): show only when templates exist AND the
+    // cursor is on a dir/zox (the kinds that support templates).
+    // Omitted when no templates/ dir — the key is unbound.
+    let is_dir = matches!(cursor_kind, Some(Kind::Dir) | Some(Kind::Zox));
+    if templates_exist && is_dir && name_prompt.is_none() {
+        hints.push(Span::styled(
+            "   ^t ",
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ));
+        hints.push(Span::styled("template", Style::default().fg(SUBTEXT0)));
+    }
     frame.render_widget(
         Paragraph::new(Line::from(hints).style(Style::default().bg(MANTLE))),
         area,

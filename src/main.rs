@@ -170,6 +170,8 @@ fn event_loop<B: ratatui::backend::Backend>(
     // only, group order. Stable for the whole popup (providers
     // don't refresh mid-invocation in Phase 4).
     let haystack = search::build_haystack(tree);
+    // Whether any templates exist (for the ^t footer hint, spec §8.4).
+    let templates_exist = !source::read_templates().is_empty();
     // Search view: None = browse mode, Some = search mode (query non-empty).
     let mut search_view: Option<search::SearchView> = None;
 
@@ -191,6 +193,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     template_picker
                         .as_ref()
                         .map(|p| (p.templates.as_slice(), p.cursor)),
+                    templates_exist,
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;

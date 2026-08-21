@@ -204,7 +204,7 @@ struct Node {
     chips: Vec&lt;Chip&gt;,             // 1–3 status pills, coloured by semantics
     body_label: &'static str,     // "PANE PREVIEW" | "DIRECTORY" | "AGENT TRANSCRIPT" | "PLUGIN" | "SUMMARY"
     body: Vec&lt;Line&gt;,              // monospace, pre-wrapped, clipped — never scrollable
-    action: String, alt: String,  // footer: default action name, alternate hint
+    action: String, alt: String,  // footer: default action name, alternate hint (OPTIONAL — the preview footer is not rendered; the main popup footer carries the action hints)
 }</pre>
   <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
     <thead><tr>
