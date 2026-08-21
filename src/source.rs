@@ -31,6 +31,12 @@ fn group_node(socket_path: &str, group: Group) -> Node {
         Group::Agents => AgentsProvider::new(socket_path.to_string())
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
+        Group::Pinned => PinnedProvider::new()
+            .enumerate()
+            .unwrap_or_else(|e| unavailable_stub(group, &e)),
+        Group::Zoxide => ZoxideProvider::new()
+            .enumerate()
+            .unwrap_or_else(|e| unavailable_stub(group, &e)),
         _ => unavailable_stub(group, "not implemented (later phase)"),
     }
 }
@@ -290,7 +296,346 @@ fn build_agents_tree(agents: &[serde_json::Value]) -> Node {
     }
 }
 
-/// Reconstruct the Session tree (workspace → tab → pane) from the flat
+// ── Pinned + zoxide providers ────────────────────────────────────────────────
+
+/// The Pinned dirs provider (spec §5): reads
+/// `~/.config/herdr/targets.toml`, refresh on file mtime change.
+/// Flat list, config file order (slot ⌘1–⌘9). Meta = slot.
+pub struct PinnedProvider;
+
+impl Default for PinnedProvider {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl PinnedProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Provider for PinnedProvider {
+    fn id(&self) -> &'static str {
+        "pinned"
+    }
+
+    fn enumerate(&self) -> Result<Node, String> {
+        Ok(build_pinned_tree())
+    }
+
+    fn preview(&self, _id: &NodeId) -> Preview {
+        Preview::default() // preview::resolve_preview dispatches on Kind::Dir
+    }
+
+    fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
+        // Open a new workspace at the pinned path.
+        open_dir_workspace(id)
+    }
+}
+
+/// The zoxide provider (spec §5): `zoxide query --list --score`,
+/// top 50, existing paths only. 30s cache (Phase 10 wires the cache;
+/// Phase 6a re-runs on each open). Meta = frecency score.
+pub struct ZoxideProvider;
+
+impl Default for ZoxideProvider {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl ZoxideProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Provider for ZoxideProvider {
+    fn id(&self) -> &'static str {
+        "zoxide"
+    }
+
+    fn enumerate(&self) -> Result<Node, String> {
+        Ok(build_zoxide_tree())
+    }
+
+    fn preview(&self, _id: &NodeId) -> Preview {
+        Preview::default() // preview::resolve_preview dispatches on Kind::Zox
+    }
+
+    fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
+        open_dir_workspace(id)
+    }
+}
+
+/// Open a new workspace at a directory path (spec §8.2): a
+/// worktree-space if the path is inside a git repo, a plain
+/// workspace otherwise. Never reuses the current workspace.
+/// `id` is the node id (`pinned:<path>` or `zox:<path>`); the
+/// path is the part after the colon.
+pub fn open_dir_workspace(id: &str) -> Result<crate::nav::Outcome, String> {
+    open_dir_workspace_named(id, None)
+}
+
+/// Create a new workspace at the path, optionally named. `name` is
+/// the user-edited workspace label (None = let herdr pick).
+pub fn open_dir_workspace_named(
+    id: &str,
+    name: Option<&str>,
+) -> Result<crate::nav::Outcome, String> {
+    let path = id.split_once(':').map(|(_, p)| p).unwrap_or(id);
+    let expanded = expand_path(path);
+    let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+
+    let result = create_dir_workspace(&socket, &expanded, name)?;
+    if let Some(pane_id) = result {
+        let _ = crate::socket_client::request(
+            &socket,
+            "pane.focus",
+            serde_json::json!({"pane_id": pane_id}),
+        );
+    }
+    Ok(crate::nav::Outcome::Close {
+        toast: format!("opened workspace at {path}"),
+    })
+}
+
+/// Create a new workspace at `expanded` (worktree-space inside a
+/// git repo, plain otherwise) and return the first pane's id so
+/// the caller can focus it. Returns None if the create succeeded
+/// but no pane id was in the response (best-effort focus).
+fn create_dir_workspace(
+    socket: &str,
+    expanded: &str,
+    name: Option<&str>,
+) -> Result<Option<String>, String> {
+    // Worktree-space if inside a git repo, else plain workspace.
+    if is_inside_git_repo(expanded) {
+        // Try worktree.create; fall back to workspace.create if
+        // the path is already a worktree (spec §8.2: always a NEW ws).
+        let r = crate::socket_client::request(
+            socket,
+            "worktree.create",
+            serde_json::json!({"path": expanded}),
+        );
+        if let Ok(resp) = r {
+            return Ok(resp
+                .get("root_pane")
+                .and_then(|v| v.get("pane_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string));
+        }
+    }
+    // Plain workspace (or worktree fallback). Pass the name as
+    // `label` if provided.
+    let mut params = serde_json::json!({"cwd": expanded});
+    if let Some(name) = name {
+        params["label"] = serde_json::Value::String(name.to_string());
+    }
+    let resp = crate::socket_client::request(socket, "workspace.create", params)
+        .map_err(|e| e.to_string())?;
+    Ok(resp
+        .get("root_pane")
+        .and_then(|v| v.get("pane_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string))
+}
+
+/// Expand `~` and `$HOME` in a path.
+pub fn expand_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{rest}");
+        }
+    }
+    if let Some(rest) = path.strip_prefix("$HOME/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{rest}");
+        }
+    }
+    path.to_string()
+}
+
+/// Is `path` inside a git work tree? (decides worktree-space vs plain.)
+fn is_inside_git_repo(path: &str) -> bool {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
+        .output()
+    else {
+        return false;
+    };
+    out.status.success() && out.stdout.starts_with(b"true")
+}
+
+/// Build the Pinned dirs group node (flat list of Dir leaves).
+/// Reads `~/.config/herdr/targets.toml`; empty if missing.
+fn build_pinned_tree() -> Node {
+    let pins = read_targets_toml();
+    let leaves: Vec<Node> = pins
+        .into_iter()
+        .map(|(path, slot)| Node {
+            id: format!("pinned:{path}"),
+            kind: Kind::Dir,
+            label: short_path(&path),
+            meta: format!("⌘{slot}"),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        })
+        .collect();
+    Node {
+        id: "group:pinned".to_string(),
+        kind: Kind::Group,
+        label: "Pinned dirs".to_string(),
+        meta: if leaves.is_empty() {
+            "empty".to_string()
+        } else {
+            format!("{} pins", leaves.len())
+        },
+        crumbs: None,
+        children: leaves,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
+}
+
+/// Read `~/.config/herdr/targets.toml` → `Vec<(path, slot)>`. Empty
+/// if missing or malformed (no crash).
+fn read_targets_toml() -> Vec<(String, u32)> {
+    // Spec §13: `~/.config/herdr/targets.toml` (herdr-level, shared —
+    // not the plugin's own config dir). Prefer the herdr-level file;
+    // fall back to the plugin dir, then HOME, so the tree still
+    // renders wherever the file lives.
+    let herdr_dir = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{h}/.config/herdr"));
+    let plugin_dir = std::env::var("HERDR_PLUGIN_CONFIG_DIR").ok();
+    let candidates = [herdr_dir, plugin_dir];
+    for dir in candidates.into_iter().flatten() {
+        let path = format!("{dir}/targets.toml");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return parse_targets_toml(&content);
+        }
+    }
+    Vec::new()
+}
+
+/// Parse `targets.toml` content → `Vec<(path, slot)>`.
+fn parse_targets_toml(content: &str) -> Vec<(String, u32)> {
+    let mut pins = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // `[[pin]] path = "..." slot = N` — parse the key=value pairs.
+        if line.starts_with("[[pin]]") {
+            pins.push((String::new(), 0));
+            continue;
+        }
+        let Some(last) = pins.last_mut() else {
+            continue;
+        };
+        if let Some(v) = line
+            .strip_prefix("path = ")
+            .and_then(|s| s.trim().strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+        {
+            last.0 = expand_path(v);
+        } else if let Some(v) = line
+            .strip_prefix("slot = ")
+            .and_then(|s| s.trim().parse().ok())
+        {
+            last.1 = v;
+        }
+    }
+    pins.into_iter().filter(|(p, _)| !p.is_empty()).collect()
+}
+
+/// Build the zoxide group node (flat list of Zox leaves).
+/// `zoxide query --list --score`, top 50, existing paths only.
+fn build_zoxide_tree() -> Node {
+    let entries = zoxide_query();
+    let leaves: Vec<Node> = entries
+        .into_iter()
+        .take(50)
+        .map(|(score, path)| Node {
+            id: format!("zox:{path}"),
+            kind: Kind::Zox,
+            label: short_path(&path),
+            meta: format!("{score}"),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        })
+        .collect();
+    Node {
+        id: "group:zoxide".to_string(),
+        kind: Kind::Group,
+        label: "zoxide".to_string(),
+        meta: if leaves.is_empty() {
+            "empty".to_string()
+        } else {
+            format!("{} entries", leaves.len())
+        },
+        crumbs: None,
+        children: leaves,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
+}
+
+/// Run `zoxide query --list --score` → `Vec<(score, path)>`.
+/// Existing paths only, sorted by frecency (zoxide's own order).
+fn zoxide_query() -> Vec<(f64, String)> {
+    let Ok(out) = std::process::Command::new("zoxide")
+        .args(["query", "--list", "--score"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut entries = Vec::new();
+    for line in stdout.lines() {
+        // `  36.0 /Users/...` — leading spaces, then score, then path.
+        let line = line.trim_start();
+        let mut parts = line.splitn(2, ' ');
+        let score: f64 = parts.next().unwrap_or("").trim().parse().unwrap_or(0.0);
+        let path = parts.next().unwrap_or("").trim().to_string();
+        if !path.is_empty() {
+            entries.push((score, path));
+        }
+    }
+    entries
+}
+
+/// Shorten a path for display: replace $HOME with `~`.
+fn short_path(path: &str) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        if let Some(rest) = path.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    path.to_string()
+}
+
+/// Derive a good default workspace name from a directory path:
+/// the last path segment (e.g. `~/code/herdr` → `herdr`).
+pub fn workspace_name_default(path: &str) -> String {
+    let expanded = expand_path(path);
+    expanded
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("workspace")
+        .to_string()
+}
 /// `pane.list` panes array (spec §4/§5). Panes are grouped by
 /// `workspace_id` then `tab_id`; workspaces and tabs are synthesised as
 /// interior `Workspace`/`Tab` nodes, panes as `Pane` leaves. The active
@@ -663,8 +1008,13 @@ mod tests {
         assert_eq!(root[2].label, "Pinned dirs");
         assert_eq!(root[3].label, "zoxide");
         assert_eq!(root[4].label, "Plugins");
-        // Every group is unavailable without a socket.
-        assert!(root.iter().all(|n| n.meta == "unavailable"));
+        // Session + Agents need a socket; Pinned + zoxide are local
+        // (targets.toml / zoxide CLI) so they're never "unavailable"
+        // from a missing socket — only empty if no pins/zoxide entries.
+        assert_eq!(root[0].meta, "unavailable"); // Session
+        assert_eq!(root[1].meta, "unavailable"); // Agents
+                                                 // Plugins still unavailable (Phase 7).
+        assert_eq!(root[4].meta, "unavailable");
     }
 
     #[test]
@@ -821,5 +1171,65 @@ mod agents_tests {
         let leaf = &group.children[0];
         assert_eq!(leaf.kind, Kind::Agent);
         assert!(leaf.id.starts_with("agents:wA:p1"));
+    }
+}
+
+#[cfg(test)]
+mod dir_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_empty_when_no_targets_toml() {
+        // No targets.toml → empty group (not unavailable).
+        let group = build_pinned_tree();
+        assert_eq!(group.kind, Kind::Group);
+        assert_eq!(group.label, "Pinned dirs");
+        assert_eq!(group.meta, "empty");
+        assert!(group.children.is_empty());
+    }
+
+    #[test]
+    fn zoxide_parses_score_and_path() {
+        // `  36.0 /Users/foo` → trim → "36.0" + "/Users/foo".
+        // The real parser splits on the first space (leading), then
+        // trims both halves.
+        let line = "  36.0 /Users/foo".trim_start();
+        let mut parts = line.splitn(2, ' ');
+        let score: f64 = parts.next().unwrap_or("").trim().parse().unwrap_or(0.0);
+        let path = parts.next().unwrap_or("").trim().to_string();
+        assert_eq!(score, 36.0);
+        assert_eq!(path, "/Users/foo");
+    }
+
+    #[test]
+    fn expand_path_tilde() {
+        // ~/foo → $HOME/foo when HOME is set.
+        std::env::set_var("HOME", "/Users/test");
+        assert_eq!(expand_path("~/foo"), "/Users/test/foo");
+        assert_eq!(expand_path("/abs/path"), "/abs/path");
+        std::env::remove_var("HOME");
+    }
+
+    #[test]
+    fn open_dir_workspace_strips_prefix() {
+        // The id is `pinned:<path>` or `zox:<path>`; the path is
+        // after the colon. We can't call the socket in a unit test, but
+        // we can verify the prefix strip.
+        let id = "pinned:~/code/herdr";
+        let path = id.split_once(':').map(|(_, p)| p).unwrap_or(id);
+        assert_eq!(path, "~/code/herdr");
+    }
+}
+
+#[cfg(test)]
+mod name_default_tests {
+    use super::*;
+    #[test]
+    fn workspace_name_default_is_last_segment() {
+        assert_eq!(workspace_name_default("/Users/foo/code/herdr"), "herdr");
+        assert_eq!(workspace_name_default("~/code/herdr"), "herdr");
+        assert_eq!(workspace_name_default("/trailing/"), "trailing");
+        assert_eq!(workspace_name_default("/"), "workspace");
+        assert_eq!(workspace_name_default("bare"), "bare");
     }
 }

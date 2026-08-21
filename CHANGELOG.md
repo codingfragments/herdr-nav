@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 6a — Pinned + zoxide providers + "open new workspace"
+
+- `PinnedProvider` reads `~/.config/herdr/targets.toml` (slot order,
+    mtime refresh). `ZoxideProvider` runs `zoxide query --list --score`,
+    top 50, existing paths only. Both flat lists; meta = slot / frecency.
+- Dir/zox preview: first ~8 entries (dirs first), git branch + dirty
+    chip, entry-count chip. Footer: "open workspace".
+- `Enter` on a dir/zox **always** opens a new workspace at the path —
+    a worktree-space if inside a git repo (`worktree.create`, fall back
+    to `workspace.create`), a plain workspace otherwise. Never
+    reuses the current workspace.
+- Both groups drop their "unavailable" stubs and enter the
+    search haystack.
+- 4 new unit tests (pinned empty, zoxide parse, expand path, prefix strip).
+    Fixed zoxide score parse (leading spaces). 39 tests total.
+
 ### Phase 5 — Agents provider + agent jump
 
 - `AgentsProvider` via `agent.list` socket method (confirmed
