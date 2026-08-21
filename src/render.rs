@@ -122,7 +122,12 @@ pub fn draw(
         flash_error,
     );
     draw_rule(frame, bands[3]);
-    draw_footer(frame, bands[4], search, cursor_kind, name_prompt);
+    // When the name-prompt dialog is active, suppress the footer —
+    // the dialog carries its own ⏎/esc hints, so the overall footer
+    // would duplicate them.
+    if name_prompt.is_none() {
+        draw_footer(frame, bands[4], search, cursor_kind, name_prompt);
+    }
 
     // Name-prompt dialog overlay (spec §8.2 amended): a centered
     // bordered dialog on top of everything, asking for the workspace
@@ -551,14 +556,13 @@ fn enter_action_label(kind: Option<Kind>, is_search: bool) -> &'static str {
 /// Centered name-prompt dialog (spec §8.2 amended). A bordered
 /// dialog on top of the popup, asking for the new workspace's
 /// name. Prefilled with the default; Enter confirms, Esc cancels.
-fn draw_name_prompt(frame: &mut Frame, area: Rect, label: &str, name: &str) {
-    // Center a ~40-wide, 3-row dialog. Don't clear the whole
-    // popup — render the dialog on top of the bands so the popup
-    // stays visible behind it; the dialog's solid mantle bg makes
-    // it readable.
-    //
-    let w = 40u16;
-    let h = 3u16;
+fn draw_name_prompt(frame: &mut Frame, area: Rect, _label: &str, name: &str) {
+    // Center a ~50-wide, 5-row dialog: title border, label, name,
+    // hints, bottom border. Don't clear the whole popup — render
+    // the dialog on top of the bands so the popup stays visible
+    // behind it; the dialog's solid mantle bg makes it readable.
+    let w = 50u16;
+    let h = 5u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
@@ -578,18 +582,22 @@ fn draw_name_prompt(frame: &mut Frame, area: Rect, label: &str, name: &str) {
     Clear.render(dialog, frame.buffer_mut());
     block.render(dialog, frame.buffer_mut());
 
-    // Row 0: the prompt label + editable name + caret.
-    let line = Line::from(vec![
+    // Row 0: explanatory label.
+    let label_line = Line::styled(" Name the new workspace:", Style::default().fg(SUBTEXT0))
+        .style(Style::default().bg(MANTLE));
+
+    // Row 1: the editable name + caret.
+    let name_line = Line::from(vec![
         Span::styled(
-            format!(" {label}: "),
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            " ❯ ",
+            Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
         ),
         Span::raw(name.to_string()),
         Span::styled("▮", Style::default().fg(MAUVE)),
     ])
     .style(Style::default().bg(MANTLE));
 
-    // Row 1: hint.
+    // Row 2: hints inside the dialog.
     let hint = Line::from(vec![
         Span::styled(
             " ⏎ ",
@@ -606,8 +614,13 @@ fn draw_name_prompt(frame: &mut Frame, area: Rect, label: &str, name: &str) {
 
     let body = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
-    frame.render_widget(Paragraph::new(line), body[0]);
-    frame.render_widget(Paragraph::new(hint), body[1]);
+    frame.render_widget(Paragraph::new(label_line), body[0]);
+    frame.render_widget(Paragraph::new(name_line), body[1]);
+    frame.render_widget(Paragraph::new(hint), body[2]);
 }
