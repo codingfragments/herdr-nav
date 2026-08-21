@@ -500,6 +500,15 @@ host toast. The product's core verb.
   Enter, do not close — flash the row red, refresh, keep the query.
 - Workspace/tab `Enter` (switch to it, keep active pane) also wired here
   since it's the same invoke path.
+- **Enter-key conflict (noted 2026-08-21):** spec §8 says `Enter` on a
+  *branch* in browse mode toggles it, and on a *leaf* runs the default
+  action. Phase 1/2 currently toggles on branches and is inert on
+  leaves. Once Enter becomes the jump action on leaves (this phase),
+  revisit whether Enter-on-branch-toggle is still wanted or whether it
+  conflicts with the "Enter = main action" mental model. If it
+  conflicts, branches expand/collapse via `→`/`←` only, and Enter is
+  reserved for the action on every row. Decide during this phase's
+  spike; update spec §8 if needed.
 - **Exit criteria:** Enter on a pane lands you in it and toasts; Enter on
   a workspace/tab switches to it. Dead-target case flashes + stays open.
 
