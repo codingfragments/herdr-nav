@@ -120,12 +120,46 @@ pub fn draw(
 
     frame.render_widget(Paragraph::new(header), body_area[0]);
     // Body: transparent so the terminal theme shows through; stale → dim.
+    // The pane preview is bottom-anchored (last scrollback line = last
+    // preview line) and lines are hard-truncated to the pane width — no
+    // wrapping, wide lines show their first N chars (spec §7.4: clipped,
+    // never scrollable). Group/workspace/tab previews are short, so the
+    // same clip is a no-op for them.
     let body_style = if is_stale {
         Style::default().add_modifier(Modifier::DIM)
     } else {
         Style::default()
     };
-    frame.render_widget(Paragraph::new(body).style(body_style), body_area[1]);
+    let clipped = clip_body(&body, body_area[1]);
+    frame.render_widget(Paragraph::new(clipped).style(body_style), body_area[1]);
+}
+
+/// Clip the preview body to `area`: truncate each line to `area.width`
+/// graphemes (no wrap — wide lines show their first N chars), and keep
+/// only the last `area.height` lines (bottom-anchored: the last
+/// scrollback line is the last preview line). Spec §7.4: read-only,
+/// clipped, never scrollable.
+fn clip_body(body: &[Line<'static>], area: Rect) -> Vec<Line<'static>> {
+    let w = area.width as usize;
+    let h = area.height as usize;
+    if h == 0 {
+        return Vec::new();
+    }
+    // Bottom-anchor: take the last `h` lines.
+    let start = body.len().saturating_sub(h);
+    let out: Vec<Line<'static>> = body[start..]
+        .iter()
+        .map(|line| {
+            // Truncate spans to `w` cells. ratatui Paragraph doesn't
+            // wrap when a line's total width ≤ the area, so we cap each
+            // line's span content to fit. A simple, correct-enough clip:
+            // rebuild the line from its plain text, truncated to `w`.
+            let plain: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let truncated: String = plain.chars().take(w).collect();
+            Line::raw(truncated).style(line.style)
+        })
+        .collect();
+    out
 }
 
 /// Has `last_change` aged past the debounce window? While it hasn't,
@@ -465,5 +499,28 @@ mod tests {
         // Non-ANSI text → plain lines, one per source line.
         let lines = ansi_to_lines("hello\nworld");
         assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn clip_body_bottom_anchors_and_truncates() {
+        use ratatui::layout::Rect;
+        // 5 lines, area fits 3 → keep last 3 (bottom-anchored).
+        let body: Vec<Line<'static>> = (0..5).map(|i| Line::raw(format!("line {i}"))).collect();
+        let area = Rect::new(0, 0, 10, 3);
+        let clipped = clip_body(&body, area);
+        assert_eq!(clipped.len(), 3);
+        assert_eq!(clipped[0].to_string(), "line 2");
+        assert_eq!(clipped[2].to_string(), "line 4");
+    }
+
+    #[test]
+    fn clip_body_truncates_wide_lines() {
+        use ratatui::layout::Rect;
+        // A 30-char line, area width 10 → first 10 chars only.
+        let body: Vec<Line<'static>> = vec![Line::raw("0123456789abcdefghij")];
+        let area = Rect::new(0, 0, 10, 1);
+        let clipped = clip_body(&body, area);
+        assert_eq!(clipped.len(), 1);
+        assert_eq!(clipped[0].to_string(), "0123456789");
     }
 }
