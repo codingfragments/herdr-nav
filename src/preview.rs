@@ -149,17 +149,29 @@ fn clip_body(body: &[Line<'static>], area: Rect) -> Vec<Line<'static>> {
     let start = body.len().saturating_sub(h);
     let out: Vec<Line<'static>> = body[start..]
         .iter()
-        .map(|line| {
-            // Truncate spans to `w` cells. ratatui Paragraph doesn't
-            // wrap when a line's total width ≤ the area, so we cap each
-            // line's span content to fit. A simple, correct-enough clip:
-            // rebuild the line from its plain text, truncated to `w`.
-            let plain: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            let truncated: String = plain.chars().take(w).collect();
-            Line::raw(truncated).style(line.style)
-        })
+        .map(|line| truncate_line(line, w))
         .collect();
     out
+}
+
+/// Truncate a line to `w` cells, preserving span styles (so ANSI
+/// colour survives the clip). Walks the spans, taking chars until the
+/// width budget is spent; each kept span keeps its style.
+fn truncate_line(line: &Line<'static>, w: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut budget = w;
+    for span in &line.spans {
+        if budget == 0 {
+            break;
+        }
+        let content: String = span.content.chars().take(budget).collect();
+        let taken = content.chars().count();
+        budget = budget.saturating_sub(taken);
+        if taken > 0 {
+            spans.push(Span::styled(content, span.style));
+        }
+    }
+    Line::from(spans).style(line.style)
 }
 
 /// Has `last_change` aged past the debounce window? While it hasn't,
@@ -522,5 +534,21 @@ mod tests {
         let clipped = clip_body(&body, area);
         assert_eq!(clipped.len(), 1);
         assert_eq!(clipped[0].to_string(), "0123456789");
+    }
+
+    #[test]
+    fn clip_body_preserves_span_style() {
+        use ratatui::layout::Rect;
+        use ratatui::style::{Color, Modifier, Style};
+        // A styled span (red bold) must survive the clip with its style.
+        let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+        let body: Vec<Line<'static>> =
+            vec![Line::from(vec![Span::styled("0123456789abcdefghij", red)])];
+        let area = Rect::new(0, 0, 10, 1);
+        let clipped = clip_body(&body, area);
+        assert_eq!(clipped[0].to_string(), "0123456789");
+        // The kept span retains its style.
+        assert_eq!(clipped[0].spans.len(), 1);
+        assert_eq!(clipped[0].spans[0].style, red);
     }
 }
