@@ -38,10 +38,16 @@ terminal. Four horizontal bands:
 
 | Band | Height | Content |
 | --- | --- | --- |
-| Title bar | 1 row | `herdr switch` left; mode badge + counts right |
 | Search bar | 1 row | `❯` prompt, query, block caret, placeholder |
 | Body | flex | list 44% · vertical rule · preview 56% |
 | Footer | 1 row | mode-aware global keymap hints |
+
+No title bar — the Herdr popup window itself renders the border and
+the pane title (`herdr switch` from `herdr-plugin.toml`), so a
+title bar inside the popup would duplicate it. (Spec §2 amended
+2026-08-21; the mode badge + counts the original spec asked for are
+also removed — both are obvious from the search bar and the list
+status strip.)
 
 Target size 80% of the host terminal, clamped to 100×34 cells. Below 60
 cols: drop the preview pane (toggle key). Below 20 rows: footer collapses
@@ -459,7 +465,7 @@ release/CI-CD — in that order, deliberately last.
 ### Phase 1 — Popup shell + Session tree browse
 **Aspect:** popup geometry + tree navigation with one real provider.
 The thinnest vertical slice: proves the whole spine end-to-end.
-- Four bands (title/search/body/footer) at 80%×80%, clamped 100×34; list
+- Three bands (search/body/footer) at 80%×80%, clamped 100×34; list
   status strip (scope + position).
 - `Node`/`Kind`/`Group`/`Provider` model; `SessionProvider` via herdr
   daemon IPC (workspace/tab/pane graph). Other four groups render as

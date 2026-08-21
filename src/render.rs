@@ -38,7 +38,6 @@ const TEXT: Color = Color::Rgb(0xca, 0xd3, 0xf5);
 const SUBTEXT0: Color = Color::Rgb(0xa5, 0xad, 0xcb);
 const SURFACE2: Color = Color::Rgb(0x5b, 0x60, 0x78);
 const MAUVE: Color = Color::Rgb(0xc6, 0xa0, 0xf6);
-const SAPPHIRE: Color = Color::Rgb(0x7d, 0xc4, 0xe4);
 const RED: Color = Color::Rgb(0xed, 0x87, 0x96);
 const PEACH: Color = Color::Rgb(0xf5, 0xa9, 0x7f);
 
@@ -75,17 +74,17 @@ fn kind_color(kind: Kind) -> Color {
 pub fn draw(frame: &mut Frame, tree: &Tree) {
     let area = frame.area();
 
-    // No outer border — the Herdr popup window itself renders one
-    // (confirmed in the sister plugins: herdr-flash draws no outer
-    // border around the full area). Bands render directly into `area`.
+    // No outer border and no title bar — the Herdr popup window
+    // itself renders both (its own border + the pane title "herdr
+    // switch" from herdr-plugin.toml), confirmed in the sister plugins.
+    // So the popup starts at the search bar.
     //
-    // title / search / rule / body / rule / footer. The rules are
-    // 1-row `Block::default().borders(Borders::TOP)` bands — a
-    // thin `─` line in surface2, not a bulky filled band.
+    // search / rule / body / rule / footer. The rules are thin
+    // `Block::default().borders(Borders::TOP)` bands — a `─` line
+    // in surface2, not a bulky filled band.
     let bands = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // title bar
             Constraint::Length(1), // search bar
             Constraint::Length(1), // ─ rule
             Constraint::Min(1),    // body
@@ -94,12 +93,11 @@ pub fn draw(frame: &mut Frame, tree: &Tree) {
         ])
         .split(area);
 
-    draw_title_bar(frame, bands[0], tree);
-    draw_search_bar(frame, bands[1]);
-    draw_rule(frame, bands[2]);
-    draw_body(frame, bands[3], tree);
-    draw_rule(frame, bands[4]);
-    draw_footer(frame, bands[5]);
+    draw_search_bar(frame, bands[0]);
+    draw_rule(frame, bands[1]);
+    draw_body(frame, bands[2], tree);
+    draw_rule(frame, bands[3]);
+    draw_footer(frame, bands[4]);
 }
 
 /// A thin full-width surface2 horizontal rule via a ratatui top
@@ -112,24 +110,6 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
             .border_style(Style::default().fg(SURFACE2)),
         area,
     );
-}
-
-fn draw_title_bar(frame: &mut Frame, area: Rect, tree: &Tree) {
-    let rows = tree.visible_rows();
-    let badge = Span::styled(
-        " BROWSE ",
-        Style::default()
-            .bg(SAPPHIRE)
-            .fg(MANTLE)
-            .add_modifier(Modifier::BOLD),
-    );
-    let counts = Span::styled(format!(" {} ", rows.len()), Style::default().fg(SUBTEXT0));
-    let title = Span::styled(
-        " herdr switch ",
-        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
-    );
-    let line = Line::from(vec![title, badge, counts]).style(Style::default().bg(MANTLE));
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_search_bar(frame: &mut Frame, area: Rect) {
