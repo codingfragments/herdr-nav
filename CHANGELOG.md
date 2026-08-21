@@ -7,6 +7,29 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 1 — Popup shell + Session tree browse
+
+- Four bands (title/search/body/footer) at 80%×80%, clamped to 100×34;
+    list status strip (scope + position). Body split list 44% / preview
+    56%; preview dropped below 60 cols (spec §2).
+- `Node`/`Kind`/`Group`/`Provider` model (spec §4/§5); `Tree` state
+    with visible-row flattening, cursor (wraps), expand/collapse/step,
+    toggle, Session pre-expanded to its active workspace + tab.
+- `SessionProvider` via herdr daemon IPC: reconstructs the
+    workspace → tab → pane tree from the flat `pane.list` response
+    (grouping on `workspace_id`/`tab_id`), active workspace/tab first
+    (from `HERDR_PLUGIN_CONTEXT_JSON`). Other four groups render as
+    red "unavailable" stubs (spec §11).
+- Browse only: tree render with indent + twisty + kind glyph, `↑↓`/`^n`/`^p`
+    cursor, `→`/`Space`/`Tab` expand-or-step, `←` collapse-or-parent,
+    `Enter` toggles branches (inert on leaves), `Esc` closes. Query bar
+    empty; printable chars inert (search mode is Phase 4). Preview =
+    placeholder.
+- 14 unit tests (tree flattening, cursor wrap, expand/step, collapse/
+    parent, toggle, session default expansion, session-tree
+    reconstruction, active ordering, degrade-on-missing-fields,
+    pane-label fallback, unavailable stub, five-groups-in-spec-order).
+
 ### Scaffold
 
 - Initial repo structure: `Cargo.toml`, `herdr-plugin.toml`, `justfile`,

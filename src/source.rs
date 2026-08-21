@@ -4,68 +4,415 @@
 //! subtree and resolves previews for its own nodes. Providers are cheap
 //! to enumerate and lazy to preview.
 //!
-//! **Status: scaffold only.** The real providers land one per phase in
-//! PLANNING.md §17 (Session in Phase 1, Agents in Phase 5, Pinned+zoxide
-//! in Phase 6a, Plugins in Phase 7). This module currently exposes only
-//! the dispatch helper and stub providers that return empty subtrees.
-//!
-//! Data sources (spec §5):
-//! - session: herdr daemon IPC — workspace/tab/pane graph, pane pids,
-//!   cwd, last command, scrollback tail. Refresh on open + on daemon event.
-//! - agents: agent-detect plugin (agent.start/agent.stop hooks), else a
-//!   process-tree heuristic. Refresh on open + on hook fire.
-//! - pinned: `~/.config/herdr/targets.toml`. Refresh on file mtime change.
-//! - zoxide: `zoxide query --list --score`, top 50, existing paths only.
-//!   Refresh on open (cache 30s).
-//! - plugins: plugin registry — name, version, enabled, load error,
-//!   declared actions. Refresh on open.
+//! **Phase 1:** only `SessionProvider` is real (herdr daemon IPC via
+//! `pane.list`); the other four groups render as red "unavailable"
+//! stubs (spec §5/§11). Their providers land in later phases
+//! (Agents → 5, Pinned+zoxide → 6a, Plugins → 7).
 
-use crate::nav::{Group, Node, Provider};
+use crate::nav::{Group, Kind, Node, NodeId, Preview, Provider};
 
 /// Build the five group subtrees in spec §4 fixed order, using the
 /// registered providers. A provider that fails leaves its group row in
 /// place with a red "unavailable" meta and an error preview (spec §5/§11).
 pub fn build_tree(socket_path: &str) -> Vec<Node> {
-    let _ = socket_path;
-    Group::ORDER.iter().map(|&g| stub_group(g)).collect()
+    Group::ORDER
+        .iter()
+        .map(|&g| group_node(socket_path, g))
+        .collect()
 }
 
-/// Scaffold stub: a group node with no children. Replaced per-phase by
-/// the real provider's `enumerate()` once that provider lands.
-fn stub_group(group: Group) -> Node {
+/// Produce one root group node. For Session, run the real provider; for
+/// every other group, render an "unavailable" stub until its phase lands.
+fn group_node(socket_path: &str, group: Group) -> Node {
+    match group {
+        Group::Session => SessionProvider::new(socket_path.to_string())
+            .enumerate()
+            .unwrap_or_else(|e| unavailable_stub(group, &e)),
+        _ => unavailable_stub(group, "not implemented (later phase)"),
+    }
+}
+
+/// A group row whose provider failed (spec §11): the row stays, meta is
+/// red "unavailable", and the preview shows the error text.
+fn unavailable_stub(group: Group, reason: &str) -> Node {
     Node {
         id: format!("group:{}", group.provider_id()),
-        kind: crate::nav::Kind::Group,
-        label: group.provider_id().to_string(),
-        meta: String::new(),
+        kind: Kind::Group,
+        label: group_label(group),
+        meta: "unavailable".to_string(),
         crumbs: None,
         children: Vec::new(),
-        preview: crate::nav::Preview::default(),
+        preview: Preview {
+            icon: group_glyph(Group::Session),
+            title: group_label(group),
+            subtitle: reason.to_string(),
+            chips: Vec::new(),
+            body_label: "SUMMARY",
+            body: vec![format!("provider unavailable: {reason}")],
+            action: String::new(),
+            alt: String::new(),
+        },
         actions: crate::nav::Actions::default(),
     }
 }
 
-// Stub providers — replaced by real implementations in their phases.
-// Kept here so the module compiles and the dispatch shape is visible.
+/// Human-readable group label (spec §4).
+fn group_label(group: Group) -> String {
+    match group {
+        Group::Session => "Session",
+        Group::Agents => "Agents",
+        Group::Pinned => "Pinned dirs",
+        Group::Zoxide => "zoxide",
+        Group::Plugins => "Plugins",
+    }
+    .to_string()
+}
 
-pub struct SessionProvider;
+/// Kind glyph for a group row (spec §9). Group glyph is `❯`.
+fn group_glyph(_: Group) -> char {
+    '❯'
+}
+
+// ── Session provider ─────────────────────────────────────────────────────────
+
+/// The Session provider (spec §5): herdr daemon IPC — the
+/// workspace/tab/pane graph. Phase 1 reconstructs the tree from the flat
+/// `pane.list` response (the only confirmed session-graph method; see
+/// PLANNING.md §5). Panes carry `workspace_id`/`tab_id`, so the
+/// workspace → tab → pane tree is derived by grouping.
+pub struct SessionProvider {
+    socket_path: String,
+}
+
+impl SessionProvider {
+    pub fn new(socket_path: String) -> Self {
+        Self { socket_path }
+    }
+}
+
 impl Provider for SessionProvider {
     fn id(&self) -> &'static str {
         "session"
     }
+
     fn enumerate(&self) -> Result<Node, String> {
-        // TODO Phase 1: herdr daemon IPC — workspace/tab/pane graph.
+        let result =
+            crate::socket_client::request(&self.socket_path, "pane.list", serde_json::json!({}))
+                .map_err(|e| format!("pane.list failed: {e}"))?;
+
+        let panes = result
+            .get("panes")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let (active_workspace, active_tab) = active_ids_from_env();
+        Ok(build_session_tree(&panes, &active_workspace, &active_tab))
+    }
+
+    fn preview(&self, _id: &NodeId) -> Preview {
+        // Phase 2: per-kind preview (pane scrollback, workspace/tab inventory).
+        Preview::default()
+    }
+
+    fn invoke(&self, _id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
+        // Phase 3: jump to pane (switch workspace + tab + focus pane).
         Err("not implemented".to_string())
     }
-    fn preview(&self, _id: &crate::nav::NodeId) -> crate::nav::Preview {
-        crate::nav::Preview::default()
+}
+
+/// Reconstruct the Session tree (workspace → tab → pane) from the flat
+/// `pane.list` panes array (spec §4/§5). Panes are grouped by
+/// `workspace_id` then `tab_id`; workspaces and tabs are synthesised as
+/// interior `Workspace`/`Tab` nodes, panes as `Pane` leaves. The active
+/// workspace/tab (from the launch context) is marked `meta = "active"` so
+/// `Tree::new` pre-expands to it.
+///
+/// Defensive: missing `workspace_id`/`tab_id` fields degrade to a flat
+/// list under a single implicit workspace, so the tree never crashes on a
+/// partial daemon response.
+fn build_session_tree(
+    panes: &[serde_json::Value],
+    active_workspace: &str,
+    active_tab: &str,
+) -> Node {
+    let mut workspaces: Vec<(String, String, Vec<PaneRow>)> = Vec::new();
+    for pane in panes {
+        let Some(pane_id) = pane_str(pane, "pane_id") else {
+            continue;
+        };
+        let label = pane_label(pane, &pane_id);
+        let ws_id = pane_str(pane, "workspace_id").unwrap_or_default();
+        let tab_id = pane_str(pane, "tab_id").unwrap_or_default();
+        let ws_name = pane_str(pane, "workspace_name")
+            .or_else(|| pane_str(pane, "workspace_title"))
+            .unwrap_or_else(|| ws_id.clone());
+        let tab_name = pane_str(pane, "tab_name")
+            .or_else(|| pane_str(pane, "tab_title"))
+            .unwrap_or_else(|| tab_id.clone());
+
+        let entry = workspaces
+            .iter_mut()
+            .find(|(id, _, _)| id == &ws_id)
+            .map(|(_, _, rows)| rows);
+        match entry {
+            Some(rows) => rows.push(PaneRow {
+                pane_id,
+                label,
+                tab_id,
+                tab_name,
+            }),
+            None => workspaces.push((
+                ws_id,
+                ws_name,
+                vec![PaneRow {
+                    pane_id,
+                    label,
+                    tab_id,
+                    tab_name,
+                }],
+            )),
+        }
     }
-    fn invoke(
-        &self,
-        _id: &crate::nav::NodeId,
-        _act: crate::nav::Act,
-    ) -> Result<crate::nav::Outcome, String> {
-        // TODO Phase 3: jump to pane (switch workspace + tab + focus pane).
-        Err("not implemented".to_string())
+
+    // Active workspace first, then the rest in encounter order.
+    workspaces.sort_by_key(|(id, _, _)| id.as_str() != active_workspace);
+
+    let ws_nodes: Vec<Node> = workspaces
+        .into_iter()
+        .map(|(ws_id, ws_name, panes)| {
+            workspace_node(&ws_id, &ws_name, &panes, active_workspace, active_tab)
+        })
+        .collect();
+
+    Node {
+        id: "group:session".to_string(),
+        kind: Kind::Group,
+        label: "Session".to_string(),
+        meta: format!("{} panes", panes.len()),
+        crumbs: None,
+        children: ws_nodes,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
+}
+
+/// One pane row extracted from `pane.list`, grouped for tree building.
+struct PaneRow {
+    pane_id: String,
+    label: String,
+    tab_id: String,
+    tab_name: String,
+}
+
+/// Build a `Workspace` node with `Tab` children, panes grouped by tab.
+/// Active tab first within the workspace. The workspace is marked active
+/// when `ws_id == active_workspace`.
+fn workspace_node(
+    ws_id: &str,
+    ws_name: &str,
+    panes: &[PaneRow],
+    active_workspace: &str,
+    active_tab: &str,
+) -> Node {
+    // Group panes by tab_id.
+    let mut tabs: Vec<(String, String, Vec<&PaneRow>)> = Vec::new();
+    for p in panes {
+        let entry = tabs
+            .iter_mut()
+            .find(|(id, _, _)| id == &p.tab_id)
+            .map(|(_, _, rows)| rows);
+        match entry {
+            Some(rows) => rows.push(p),
+            None => tabs.push((p.tab_id.clone(), p.tab_name.clone(), vec![p])),
+        }
+    }
+    tabs.sort_by_key(|(id, _, _)| id.as_str() != active_tab);
+
+    let tab_nodes: Vec<Node> = tabs
+        .into_iter()
+        .map(|(tab_id, tab_name, rows)| tab_node(&tab_id, &tab_name, &rows, active_tab))
+        .collect();
+
+    Node {
+        id: format!("session:ws:{ws_id}"),
+        kind: Kind::Workspace,
+        label: ws_name.to_string(),
+        meta: if ws_id == active_workspace {
+            "active".to_string()
+        } else {
+            String::new()
+        },
+        crumbs: None,
+        children: tab_nodes,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
+}
+
+/// Build a `Tab` node with `Pane` leaves. Marked active when
+/// `tab_id == active_tab`.
+fn tab_node(tab_id: &str, tab_name: &str, panes: &[&PaneRow], active_tab: &str) -> Node {
+    let pane_nodes: Vec<Node> = panes
+        .iter()
+        .map(|p| pane_leaf(&p.pane_id, &p.label))
+        .collect();
+    Node {
+        id: format!("session:tab:{tab_id}"),
+        kind: Kind::Tab,
+        label: tab_name.to_string(),
+        meta: if tab_id == active_tab {
+            "active".to_string()
+        } else {
+            String::new()
+        },
+        crumbs: None,
+        children: pane_nodes,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
+}
+
+/// Build a `Pane` leaf.
+fn pane_leaf(pane_id: &str, label: &str) -> Node {
+    Node {
+        id: format!("session:pane:{pane_id}"),
+        kind: Kind::Pane,
+        label: label.to_string(),
+        meta: String::new(),
+        crumbs: None,
+        children: Vec::new(),
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
+}
+
+/// Read the active workspace/tab ids from `HERDR_PLUGIN_CONTEXT_JSON`
+/// (set by Herdr for a real plugin-pane invocation). Falls back to empty
+/// strings (no active marker) when unavailable.
+fn active_ids_from_env() -> (String, String) {
+    if let Ok(json) = std::env::var("HERDR_PLUGIN_CONTEXT_JSON") {
+        if let Ok(ctx) = serde_json::from_str::<serde_json::Value>(&json) {
+            let ws = ctx
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let tab = ctx
+                .get("tab_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            return (ws, tab);
+        }
+    }
+    (String::new(), String::new())
+}
+
+/// Extract a string field from a pane object.
+fn pane_str(pane: &serde_json::Value, key: &str) -> Option<String> {
+    pane.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+/// A pane's display label (spec §4.1): `label` → `terminal_title_stripped`
+/// → `pane {id}`. Mirrors herdr-zextract's `pane_title`.
+fn pane_label(pane: &serde_json::Value, pane_id: &str) -> String {
+    pane_str(pane, "label")
+        .filter(|s| !s.is_empty())
+        .or_else(|| pane_str(pane, "terminal_title_stripped").filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| format!("pane {pane_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
+        serde_json::json!({
+            "pane_id": id,
+            "tab_id": tab,
+            "workspace_id": ws,
+            "label": label,
+        })
+    }
+
+    #[test]
+    fn builds_workspace_tab_pane_tree() {
+        let panes = vec![
+            pane("p1", "t1", "w1", "nvim"),
+            pane("p2", "t1", "w1", "cargo"),
+            pane("p3", "t2", "w1", "zsh"),
+            pane("p4", "t1", "w2", "editor"),
+        ];
+        let session = build_session_tree(&panes, "", "");
+        assert_eq!(session.kind, Kind::Group);
+        assert_eq!(session.label, "Session");
+        // Two workspaces.
+        assert_eq!(session.children.len(), 2);
+        let w1 = &session.children[0];
+        assert_eq!(w1.kind, Kind::Workspace);
+        // w1 has two tabs.
+        assert_eq!(w1.children.len(), 2);
+        let t1 = &w1.children[0];
+        assert_eq!(t1.kind, Kind::Tab);
+        // t1 has two panes.
+        assert_eq!(t1.children.len(), 2);
+        assert_eq!(t1.children[0].kind, Kind::Pane);
+        assert_eq!(t1.children[0].label, "nvim");
+    }
+
+    #[test]
+    fn active_workspace_first() {
+        let panes = vec![pane("p1", "t1", "w1", "a"), pane("p2", "t1", "w2", "b")];
+        let session = build_session_tree(&panes, "w2", "t1");
+        // w2 (active) first.
+        assert_eq!(session.children[0].id, "session:ws:w2");
+        assert_eq!(session.children[0].meta, "active");
+    }
+
+    #[test]
+    fn missing_workspace_id_degrades_to_flat() {
+        // No workspace_id → all panes under one implicit workspace ("").
+        let panes = vec![
+            serde_json::json!({"pane_id": "p1", "tab_id": "t1", "label": "nvim"}),
+            serde_json::json!({"pane_id": "p2", "tab_id": "t1", "label": "sh"}),
+        ];
+        let session = build_session_tree(&panes, "", "");
+        assert_eq!(session.children.len(), 1); // one implicit workspace
+        assert_eq!(session.children[0].children.len(), 1); // one tab
+        assert_eq!(session.children[0].children[0].children.len(), 2); // 2 panes
+    }
+
+    #[test]
+    fn pane_label_falls_back_to_id() {
+        let p = serde_json::json!({"pane_id": "w1:p1"});
+        assert_eq!(pane_label(&p, "w1:p1"), "pane w1:p1");
+        let p = serde_json::json!({"pane_id": "p1", "terminal_title_stripped": "nvim"});
+        assert_eq!(pane_label(&p, "p1"), "nvim");
+    }
+
+    #[test]
+    fn unavailable_stub_marks_meta_red() {
+        let n = unavailable_stub(Group::Agents, "nope");
+        assert_eq!(n.meta, "unavailable");
+        assert_eq!(n.preview.body_label, "SUMMARY");
+        assert!(n.preview.body[0].contains("nope"));
+    }
+
+    #[test]
+    fn build_tree_five_groups_in_spec_order() {
+        // No socket → every provider fails → 5 unavailable stubs, but
+        // the root structure (5 groups, spec §4 order, Session first) is
+        // intact. This is the dev/no-Herdr path.
+        let root = build_tree("");
+        assert_eq!(root.len(), 5);
+        assert_eq!(root[0].kind, Kind::Group);
+        assert_eq!(root[0].label, "Session");
+        assert_eq!(root[1].label, "Agents");
+        assert_eq!(root[2].label, "Pinned dirs");
+        assert_eq!(root[3].label, "zoxide");
+        assert_eq!(root[4].label, "Plugins");
+        // Every group is unavailable without a socket.
+        assert!(root.iter().all(|n| n.meta == "unavailable"));
     }
 }
