@@ -85,6 +85,17 @@ pub fn draw(
 ) {
     let area = frame.area();
 
+    // The cursor node's kind, for the dynamic footer (spec §8: the Enter
+    // hint names the action Enter will perform). In browse, the tree
+    // cursor row; in search, the search cursor leaf.
+    let cursor_kind = match search {
+        Some(v) => v.cursor_leaf(haystack).map(|l| l.kind),
+        None => tree
+            .cursor_row()
+            .and_then(|r| tree.node_at(&r.path))
+            .map(|n| n.kind),
+    };
+
     let bands = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -109,7 +120,7 @@ pub fn draw(
         flash_error,
     );
     draw_rule(frame, bands[3]);
-    draw_footer(frame, bands[4], search);
+    draw_footer(frame, bands[4], search, cursor_kind);
 }
 
 /// A thin full-width surface2 horizontal rule via a ratatui top
@@ -470,12 +481,18 @@ fn draw_row(
     Line::from(spans).style(line_style)
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, search: Option<&SearchView>) {
-    // Mode-aware hints (spec §8). Browse: ⏎ open/expand, esc close.
-    // Search: ⏎ run default action, esc clear.
+fn draw_footer(
+    frame: &mut Frame,
+    area: Rect,
+    search: Option<&SearchView>,
+    cursor_kind: Option<Kind>,
+) {
+    // Mode- and cursor-aware hints (spec §8). The Enter hint names
+    // the action Enter will perform on the selected element — dynamic,
+    // not a static "open/expand".
     let (enter_hint, esc_hint) = match search {
-        Some(_) => ("run default action", "clear"),
-        None => ("open/expand", "close"),
+        Some(_) => (enter_action_label(cursor_kind, true), "clear"),
+        None => (enter_action_label(cursor_kind, false), "close"),
     };
     let hints = vec![
         Span::styled(
@@ -498,4 +515,21 @@ fn draw_footer(frame: &mut Frame, area: Rect, search: Option<&SearchView>) {
         Paragraph::new(Line::from(hints).style(Style::default().bg(MANTLE))),
         area,
     );
+}
+
+/// The Enter action label for a kind (spec §8.2). In browse, branches
+/// expand/step; leaves run their default action. In search, every
+/// row is a leaf so it's always the default action.
+fn enter_action_label(kind: Option<Kind>, is_search: bool) -> &'static str {
+    match kind {
+        Some(Kind::Pane) => "jump to pane",
+        Some(Kind::Agent) => "jump to agent",
+        Some(Kind::Dir) | Some(Kind::Zox) => "open workspace",
+        Some(Kind::Plugin) => "open actions",
+        // Branches (group/workspace/tab) in browse → expand/step.
+        // In search there are no branches, so None falls through to
+        // the generic leaf action.
+        _ if !is_search => "expand",
+        _ => "run action",
+    }
 }
