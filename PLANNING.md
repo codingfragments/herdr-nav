@@ -435,7 +435,7 @@ herdr-nav/
 │   ├── search.rs            # haystack build + subsequence match + score (§6)  [Phase 4]
 │   ├── preview.rs           # per-kind preview rendering (§7)                 [Phase 2+]
 │   └── render.rs            # bands, list rows, preview, footer, help (§2/§10)
-├── doc/{config-reference,env-vars,keybinding,navigation,query-filters,use-cases}.md
+├── doc/{config-reference,env-vars,keybinding,navigation,query-filters,templates,use-cases}.md
 ├── spec/                        # normative spec + prototype (frozen, see spec/README.md)
 └── tests/                   # fixtures + integration, per phase
 ```
