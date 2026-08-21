@@ -377,34 +377,58 @@ impl Provider for ZoxideProvider {
 fn open_dir_workspace(id: &str) -> Result<crate::nav::Outcome, String> {
     let path = id.split_once(':').map(|(_, p)| p).unwrap_or(id);
     let expanded = expand_path(path);
-    // Worktree-space if inside a git repo, else plain workspace.
-    if is_inside_git_repo(&expanded) {
-        // Try worktree.create; fall back to workspace.create if
-        // the path is already a worktree (spec §8.2: always a NEW ws).
-        let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
-        let r = crate::socket_client::request(
-            &socket,
-            "worktree.create",
-            serde_json::json!({"path": expanded}),
-        );
-        if r.is_err() {
-            let _ = crate::socket_client::request(
-                &socket,
-                "workspace.create",
-                serde_json::json!({"cwd": expanded}),
-            );
-        }
-    } else {
-        let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+    let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+
+    // Create the workspace, then focus its first pane so the user
+    // lands in it (spec §8.2: Enter opens a new workspace AND enters
+    // it — not just creates it and leaves you in the old one).
+    let result = create_dir_workspace(&socket, &expanded)?;
+    if let Some(pane_id) = result {
         let _ = crate::socket_client::request(
             &socket,
-            "workspace.create",
-            serde_json::json!({"cwd": expanded}),
+            "pane.focus",
+            serde_json::json!({"pane_id": pane_id}),
         );
     }
     Ok(crate::nav::Outcome::Close {
         toast: format!("opened workspace at {path}"),
     })
+}
+
+/// Create a new workspace at `expanded` (worktree-space inside a
+/// git repo, plain otherwise) and return the first pane's id so
+/// the caller can focus it. Returns None if the create succeeded
+/// but no pane id was in the response (best-effort focus).
+fn create_dir_workspace(socket: &str, expanded: &str) -> Result<Option<String>, String> {
+    // Worktree-space if inside a git repo, else plain workspace.
+    if is_inside_git_repo(expanded) {
+        // Try worktree.create; fall back to workspace.create if
+        // the path is already a worktree (spec §8.2: always a NEW ws).
+        let r = crate::socket_client::request(
+            socket,
+            "worktree.create",
+            serde_json::json!({"path": expanded}),
+        );
+        if let Ok(resp) = r {
+            return Ok(resp
+                .get("root_pane")
+                .and_then(|v| v.get("pane_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string));
+        }
+    }
+    // Plain workspace (or worktree fallback).
+    let resp = crate::socket_client::request(
+        socket,
+        "workspace.create",
+        serde_json::json!({"cwd": expanded}),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(resp
+        .get("root_pane")
+        .and_then(|v| v.get("pane_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string))
 }
 
 /// Expand `~` and `$HOME` in a path.
