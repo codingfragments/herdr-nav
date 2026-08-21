@@ -552,11 +552,11 @@ fn enter_action_label(kind: Option<Kind>, is_search: bool) -> &'static str {
 /// dialog on top of the popup, asking for the new workspace's
 /// name. Prefilled with the default; Enter confirms, Esc cancels.
 fn draw_name_prompt(frame: &mut Frame, area: Rect, label: &str, name: &str) {
-    // Wipe the whole popup so the dialog renders on a clean slate
-    // (no bleed-through from the bands below).
-    Clear.render(area, frame.buffer_mut());
-
-    // Center a ~40-wide, 3-row dialog.
+    // Center a ~40-wide, 3-row dialog. Don't clear the whole
+    // popup — render the dialog on top of the bands so the popup
+    // stays visible behind it; the dialog's solid mantle bg makes
+    // it readable.
+    //
     let w = 40u16;
     let h = 3u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
@@ -572,6 +572,10 @@ fn draw_name_prompt(frame: &mut Frame, area: Rect, label: &str, name: &str) {
         ))
         .style(Style::default().bg(MANTLE));
     let inner = block.inner(dialog);
+    // Clear only the dialog rect (so the bands behind the dialog
+    // don't bleed through the dialog's content), not the whole
+    // popup — the popup stays visible around the dialog.
+    Clear.render(dialog, frame.buffer_mut());
     block.render(dialog, frame.buffer_mut());
 
     // Row 0: the prompt label + editable name + caret.
