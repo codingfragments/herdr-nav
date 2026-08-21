@@ -1,0 +1,35 @@
+id = "herdr-nav"
+name = "herdr-nav"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+# The switcher is a single popup: one keystroke opens it, you aim, Enter
+# moves you, it closes (spec §1). There is one interactive pane and one
+# launcher action — in-popup navigation (browse tree / search flat) handles
+# the five target groups, so there are no per-group launcher actions.
+# Bind a key to the action id via a `[[keys.command]]` entry with
+# `type = "plugin_action"` in your own ~/.config/herdr/config.toml — see
+# doc/keybinding.md. Herdr owns all keybindings; the plugin never binds
+# its own keys.
+#
+# Placement is popup (centered, sizable) at 80%x80%, clamped to 100x34
+# cells (spec §2). Herdr's overlay covers the whole workspace, not just
+# the active pane's rect; popup leaves the surrounding workspace dimmed
+# behind the switcher.
+
+[[panes]]
+id = "switcher"
+title = "herdr switch"
+command = ["./target/release/herdr-nav"]
+placement = "popup"
+width = "80%"
+height = "80%"
+
+[[actions]]
+id = "nav-open"
+title = "nav: switcher"
+command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-nav", "--entrypoint", "switcher", "--placement", "popup"]

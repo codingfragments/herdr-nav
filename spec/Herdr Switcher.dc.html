@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin:0; padding:0; background:#181926; }
+  @keyframes caret { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  @keyframes toastin { from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:translateY(0)} }
+  a { color:#8aadf4; text-decoration:none; }
+  a:hover { color:#b7bdf8; }
+  *:focus { outline:none; }
+</style>
+</helmet>
+<div ref="{{ wrapRef }}" tabindex="0" onKeyDown="{{ onKey }}" style="min-height:100vh;background:#181926;font-family:'JetBrains Mono',ui-monospace,monospace;display:flex;align-items:center;justify-content:center;padding:40px 24px;position:relative;overflow:hidden">
+
+  <div style="position:absolute;inset:0;padding:28px 34px;color:#494d64;font-size:13px;line-height:1.75;user-select:none">
+    <div>herdr@macchiato ~/code/herdr $ cargo run --bin herdr -- switch</div>
+    <div>  Compiling herdr-tui v0.4.1 (/Users/dd/code/herdr/crates/tui)</div>
+    <div>    Finished dev [unoptimized + debuginfo] target(s) in 3.42s</div>
+    <div>     Running `target/debug/herdr switch`</div>
+    <div>[info] session daemon attached · 2 workspaces · 5 panes</div>
+    <div>[info] agent detector: 3 agent panes matched (hooks: 2, heuristic: 1)</div>
+    <div>[info] zoxide db: 128 entries · pins: 4 · plugins: 5 enabled</div>
+  </div>
+
+  <div style="position:relative;width:1180px;max-width:100%;border:1px solid #494d64;border-radius:8px;background:#24273a;box-shadow:0 30px 80px rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column">
+
+    <div style="display:flex;align-items:center;gap:10px;height:34px;padding:0 12px;background:#1e2030;border-bottom:1px solid #363a4f;font-size:12px;color:#8087a2">
+      <span style="color:#8aadf4;font-weight:700">herdr</span>
+      <span style="color:#5b6078">switch</span>
+      <span style="flex:1"></span>
+      <span style="{{ modeBadgeStyle }}">{{ modeLabel }}</span>
+      <span style="color:#5b6078">·</span>
+      <span>{{ countLabel }}</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#24273a;border-bottom:1px solid #363a4f">
+      <span style="color:#c6a0f6;font-size:15px;font-weight:700">❯</span>
+      <div style="flex:1;display:flex;align-items:baseline;font-size:15px;color:#cad3f5;min-width:0">
+        <span style="white-space:pre">{{ query }}</span>
+        <span style="{{ caretStyle }}"></span>
+        <span style="{{ placeholderStyle }}">{{ placeholder }}</span>
+      </div>
+      <span style="font-size:11px;color:#6e738d;border:1px solid #363a4f;border-radius:4px;padding:2px 6px">^k</span>
+    </div>
+
+    <div style="display:flex;align-items:stretch;height:486px">
+
+      <div style="width:44%;border-right:1px solid #363a4f;padding:8px 0;overflow:hidden;display:flex;flex-direction:column;background:#24273a">
+        <div style="flex:1;overflow:hidden">
+          <sc-for list="{{ rows }}" as="row" hint-placeholder-count="11">
+            <div onClick="{{ row.onClick }}" style="{{ row.rowStyle }}">
+              <span style="{{ row.twistyStyle }}">{{ row.twisty }}</span>
+              <span style="{{ row.iconStyle }}">{{ row.icon }}</span>
+              <span style="display:flex;align-items:baseline;min-width:0;flex:1;white-space:nowrap;overflow:hidden">
+                <sc-for list="{{ row.segs }}" as="seg" hint-placeholder-count="2">
+                  <span style="{{ seg.style }}">{{ seg.t }}</span>
+                </sc-for>
+              </span>
+              <span style="{{ row.metaStyle }}">{{ row.meta }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:6px 14px 0;border-top:1px solid #363a4f;margin-top:6px;font-size:11px;color:#5b6078;display:flex;gap:10px">
+          <span>{{ scopeLabel }}</span>
+          <span style="flex:1"></span>
+          <span>{{ positionLabel }}</span>
+        </div>
+      </div>
+
+      <div style="flex:1;display:flex;flex-direction:column;background:#1e2030;min-width:0">
+        <div style="padding:14px 18px 10px;border-bottom:1px solid #363a4f">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="{{ pvIconStyle }}">{{ pvIcon }}</span>
+            <span style="font-size:15px;font-weight:700;color:#cad3f5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pvTitle }}</span>
+          </div>
+          <div style="font-size:12px;color:#8087a2;margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pvSub }}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <sc-for list="{{ pvChips }}" as="chip" hint-placeholder-count="3">
+              <span style="{{ chip.style }}">{{ chip.t }}</span>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;padding:12px 18px;overflow:hidden;font-size:12.5px;line-height:1.85">
+          <div style="font-size:10.5px;letter-spacing:.12em;color:#5b6078;margin-bottom:8px">{{ pvPaneLabel }}</div>
+          <sc-for list="{{ pvLines }}" as="line" hint-placeholder-count="10">
+            <div style="{{ line.style }}">{{ line.t }}</div>
+          </sc-for>
+        </div>
+        <div style="padding:10px 18px;border-top:1px solid #363a4f;display:flex;align-items:center;gap:10px;font-size:12px;background:#1e2030">
+          <span style="color:#5b6078">⏎</span>
+          <span style="color:#a6da95;font-weight:500">{{ pvAction }}</span>
+          <span style="flex:1"></span>
+          <span style="color:#5b6078;font-size:11px">{{ pvAltAction }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 14px;background:#1e2030;border-top:1px solid #363a4f;font-size:11px;color:#6e738d">
+      <sc-for list="{{ keys }}" as="k" hint-placeholder-count="7">
+        <span style="display:flex;align-items:center;gap:5px">
+          <span style="color:#b8c0e0;background:#363a4f;border-radius:3px;padding:1px 5px">{{ k.key }}</span>
+          <span>{{ k.label }}</span>
+        </span>
+      </sc-for>
+    </div>
+
+    <div style="{{ toastStyle }}">{{ toast }}</div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1260,&quot;height&quot;:760}}">
+class Component extends DCLogic {
+  P = { base:'#24273a', mantle:'#1e2030', crust:'#181926', s0:'#363a4f', s1:'#494d64', s2:'#5b6078',
+    text:'#cad3f5', sub1:'#b8c0e0', sub0:'#a5adcb', ov0:'#6e738d', ov1:'#8087a2', ov2:'#939ab7',
+    blue:'#8aadf4', lav:'#b7bdf8', sap:'#7dc4e4', sky:'#91d7e3', teal:'#8bd5ca', green:'#a6da95',
+    yellow:'#eed49f', peach:'#f5a97f', maroon:'#ee99a0', red:'#ed8796', mauve:'#c6a0f6', pink:'#f5bde6' };
+
+  KIND = {
+    group:{ icon:'❯', color:'#c6a0f6' }, workspace:{ icon:'◫', color:'#b7bdf8' },
+    tab:{ icon:'▤', color:'#91d7e3' }, pane:{ icon:'▪', color:'#8aadf4' },
+    dir:{ icon:'/', color:'#eed49f' }, zox:{ icon:'/', color:'#8bd5ca' },
+    plugin:{ icon:'⬢', color:'#f5bde6' }, agent:{ icon:'◆', color:'#a6da95' } };
+
+  state = { q:'', cur:0, exp:{ session:true, 'ws:herdr':true, 'tab:editor':true }, toast:null };
+  wrapRef = React.createRef();
+  componentDidMount(){ if (this.wrapRef.current) this.wrapRef.current.focus(); window.__sw = this; }
+  componentWillUnmount(){ clearTimeout(this._t); }
+
+  pv(title, sub, chips, lines, action, alt, paneLabel){
+    return { title, sub, chips, lines, action, alt, paneLabel };
+  }
+
+  data(){
+    if (this._data) return this._data;
+    const P = this.P, dim = P.ov0, ok = P.green, warn = P.yellow;
+    const L = (t,c) => ({ t, c: c || P.sub0 });
+    const tree = [
+      { id:'session', kind:'group', label:'Session', meta:'workspace / tab / pane',
+        pv:this.pv('Current session', 'herdr daemon · attached 41m ago',
+          [{t:'2 workspaces',c:P.lav},{t:'4 tabs',c:P.sky},{t:'7 panes',c:P.blue}],
+          [L('▸ herdr-dev   2 tabs · 4 panes · active'),L('▸ notes       1 tab  · 1 pane'),L('▸ infra       1 tab  · 2 panes'),L(''),L('Drill down to jump straight to a pane.',dim)],
+          'expand group','⇥ toggle','SUMMARY'),
+        children:[
+          { id:'ws:herdr', kind:'workspace', label:'herdr-dev', meta:'active',
+            pv:this.pv('herdr-dev','workspace · 2 tabs · 4 panes',[{t:'active',c:ok},{t:'layout: golden',c:P.mauve}],
+              [L('tab 1  editor   2 panes'),L('tab 2  logs     1 pane'),L('tab 3  scratch  1 pane')],'switch to workspace','^p pin','LAYOUT'),
+            children:[
+              { id:'tab:editor', kind:'tab', label:'editor', meta:'2 panes',
+                pv:this.pv('editor','herdr-dev › tab 1',[{t:'split: v 60/40',c:P.sky}],
+                  [L('┌──────────────┬──────────┐',P.s2),L('│ nvim         │ cargo    │',P.s2),L('│ src/switcher │ watch    │',P.s2),L('└──────────────┴──────────┘',P.s2)],'switch to tab','⇥ toggle','LAYOUT'),
+                children:[
+                  { id:'p1', kind:'pane', label:'nvim src/switcher.rs', crumbs:'herdr-dev › editor', meta:'%1',
+                    pv:this.pv('nvim src/switcher.rs','herdr-dev › editor › pane %1 · zsh → nvim',
+                      [{t:'focused',c:ok},{t:'pid 48213',c:P.ov1},{t:'0.4% cpu',c:P.ov1}],
+                      [L('  38   fn flatten(&self, q: &str) -> Vec<Row> {'),L('  39       let mut out = Vec::new();'),L('  40       for group in &self.groups {',P.text),L('  41           if q.is_empty() {'),L('  42               out.push(group.row());'),L('  43           }'),L('  44       }'),L('  45   }'),L(''),L('~/code/herdr/crates/tui/src/switcher.rs  40:9',dim)],
+                      'jump to pane','^d kill pane','PANE PREVIEW') },
+                  { id:'p2', kind:'pane', label:'cargo watch -x test', crumbs:'herdr-dev › editor', meta:'%2',
+                    pv:this.pv('cargo watch -x test','herdr-dev › editor › pane %2',
+                      [{t:'running',c:warn},{t:'pid 48260',c:P.ov1},{t:'12% cpu',c:P.ov1}],
+                      [L('[Running: cargo test]',P.teal),L('test switcher::fuzzy_matches_crumbs ... ok',ok),L('test switcher::flat_mode_leaves_only ... ok',ok),L('test preview::renders_pane_scrollback ... FAILED',P.red),L(''),L('failures: 1  passed: 27',P.red),L('[Finished running. Exit status: 101]',dim)],
+                      'jump to pane','^r restart','PANE PREVIEW') } ] },
+              { id:'tab:logs', kind:'tab', label:'logs', meta:'1 pane',
+                pv:this.pv('logs','herdr-dev › tab 2',[{t:'single pane',c:P.sky}],[L('journalctl -fu herdr')],'switch to tab','⇥ toggle','LAYOUT'),
+                children:[ { id:'p3', kind:'pane', label:'journalctl -fu herdr', crumbs:'herdr-dev › logs', meta:'%3',
+                  pv:this.pv('journalctl -fu herdr','herdr-dev › logs › pane %3',[{t:'streaming',c:P.sap}],
+                    [L('12:04:11 herdr[9012]: pane %2 exited (101)'),L('12:04:12 herdr[9012]: agent hook fired: claude-code'),L('12:04:19 herdr[9012]: zoxide sync 128 entries'),L('12:05:02 herdr[9012]: switcher opened (mode=browse)',P.text)],
+                    'jump to pane','^d kill pane','PANE PREVIEW') } ] } ] },
+          { id:'ws:notes', kind:'workspace', label:'notes', meta:'1 tab',
+            pv:this.pv('notes','workspace · 1 tab · 1 pane',[{t:'detached',c:P.ov1}],[L('tab 1  shell   1 pane')],'switch to workspace','^p pin','LAYOUT'),
+            children:[ { id:'tab:shell', kind:'tab', label:'shell', meta:'1 pane',
+              pv:this.pv('shell','notes › tab 1',[{t:'single pane',c:P.sky}],[L('zsh ~/notes')],'switch to tab','⇥ toggle','LAYOUT'),
+              children:[ { id:'p4', kind:'pane', label:'zsh ~/notes', crumbs:'notes › shell', meta:'%4',
+                pv:this.pv('zsh ~/notes','notes › shell › pane %4',[{t:'idle 22m',c:P.ov1}],
+                  [L('~/notes $ ls'),L('daily.md  herdr-rfc.md  reading.md'),L('~/notes $ ')],'jump to pane','^d kill pane','PANE PREVIEW') } ] } ] } ] },
+
+      { id:'pinned', kind:'group', label:'Pinned dirs', meta:'flat · 4',
+        pv:this.pv('Pinned directories','from ~/.config/herdr/targets.toml',[{t:'4 pinned',c:P.yellow}],
+          [L('Explicitly configured jump targets. Always ranked'),L('above zoxide results in search mode.',dim)],'expand group','⇥ toggle','SUMMARY'),
+        children:[
+          { id:'d1', kind:'dir', label:'~/code/herdr', crumbs:'pinned', meta:'⌘1',
+            pv:this.pv('~/code/herdr','pinned · rust workspace',[{t:'git: main ↑2',c:ok},{t:'14 entries',c:P.ov1}],
+              [L('drwxr-xr-x  crates/'),L('drwxr-xr-x  docs/'),L('-rw-r--r--  Cargo.toml'),L('-rw-r--r--  README.md'),L(''),L('last opened 4m ago · 1284 hits',dim)],'open worktree-space','^t open with template','DIRECTORY') },
+          { id:'d2', kind:'dir', label:'~/work/infra', crumbs:'pinned', meta:'⌘2',
+            pv:this.pv('~/work/infra','pinned · terraform',[{t:'git: prod ✓',c:ok},{t:'31 entries',c:P.ov1}],
+              [L('drwxr-xr-x  modules/'),L('drwxr-xr-x  envs/'),L('-rw-r--r--  main.tf')],'open worktree-space','^t open with template','DIRECTORY') },
+          { id:'d3', kind:'dir', label:'~/dotfiles/nvim', crumbs:'pinned', meta:'⌘3',
+            pv:this.pv('~/dotfiles/nvim','pinned · lua config',[{t:'git: main ✓',c:ok}],[L('drwxr-xr-x  lua/'),L('-rw-r--r--  init.lua')],'open worktree-space','^t open with template','DIRECTORY') },
+          { id:'d4', kind:'dir', label:'/srv/logs', crumbs:'pinned', meta:'⌘4',
+            pv:this.pv('/srv/logs','pinned · remote mount',[{t:'sshfs',c:P.peach}],[L('-rw-r-----  herdr.log'),L('-rw-r-----  nginx.log')],'open in new workspace','^t open with template','DIRECTORY') } ] },
+
+      { id:'zoxide', kind:'group', label:'zoxide', meta:'flat · by frecency',
+        pv:this.pv('zoxide','128 entries · sorted by frecency',[{t:'db synced 19s ago',c:P.teal}],
+          [L('~/code/herdr                1284'),L('~/code/herdr/crates/tui      902'),L('~/dotfiles                   644'),L('~/work/datadog/agent         410')],'expand group','⇥ toggle','SUMMARY'),
+        children:[
+          { id:'z1', kind:'zox', label:'~/code/herdr/crates/tui', crumbs:'zoxide', meta:'902',
+            pv:this.pv('~/code/herdr/crates/tui','zoxide · score 902',[{t:'git: main ↑2',c:ok},{t:'9 entries',c:P.ov1}],
+              [L('drwxr-xr-x  src/'),L('-rw-r--r--  Cargo.toml'),L('-rw-r--r--  theme.macchiato.toml'),L(''),L('last visit 11m ago',dim)],'open worktree-space','^t open with template','DIRECTORY') },
+          { id:'z2', kind:'zox', label:'~/dotfiles', crumbs:'zoxide', meta:'644',
+            pv:this.pv('~/dotfiles','zoxide · score 644',[{t:'git: main ✓',c:ok}],[L('drwxr-xr-x  nvim/'),L('drwxr-xr-x  zsh/'),L('-rw-r--r--  install.sh')],'open worktree-space','^t open with template','DIRECTORY') },
+          { id:'z3', kind:'zox', label:'~/work/datadog/agent', crumbs:'zoxide', meta:'410',
+            pv:this.pv('~/work/datadog/agent','zoxide · score 410',[{t:'git: feat/otel ↑7',c:warn},{t:'48 entries',c:P.ov1}],
+              [L('drwxr-xr-x  cmd/'),L('drwxr-xr-x  pkg/'),L('-rw-r--r--  go.mod')],'open worktree-space','^t open with template','DIRECTORY') },
+          { id:'z4', kind:'zox', label:'/tmp/scratch-herdr', crumbs:'zoxide', meta:'88',
+            pv:this.pv('/tmp/scratch-herdr','zoxide · score 88',[{t:'ephemeral',c:P.ov1}],[L('-rw-r--r--  bench.txt')],'open in new workspace','^t open with template','DIRECTORY') } ] },
+
+      { id:'plugins', kind:'group', label:'Plugins', meta:'flat · 5',
+        pv:this.pv('Plugins','~/.config/herdr/plugins.d',[{t:'5 loaded',c:P.pink},{t:'1 error',c:P.red}],
+          [L('agent-detect     v0.3.0  ok',ok),L('session-persist  v1.1.2  ok',ok),L('git-status       v0.9.0  ok',ok),L('theme-macchiato  v1.0.0  ok',ok),L('layout-golden    v0.2.1  error',P.red)],'expand group','⇥ toggle','SUMMARY'),
+        children:[
+          { id:'pl1', kind:'plugin', label:'agent-detect', crumbs:'plugins', meta:'v0.3.0',
+            pv:this.pv('agent-detect','plugin · hooks + heuristics',[{t:'enabled',c:ok},{t:'2 hooks',c:P.ov1}],
+              [L('Tags panes as agent panes via pre/post hooks,'),L('falls back to process-tree heuristics.'),L(''),L('hooks   agent.start, agent.stop',P.text),L('matched 3 panes',P.text)],'open action picker','⏎ default preselected','PLUGIN') },
+          { id:'pl2', kind:'plugin', label:'session-persist', crumbs:'plugins', meta:'v1.1.2',
+            pv:this.pv('session-persist','plugin · restore on boot',[{t:'enabled',c:ok}],[L('Snapshots workspace/tab/pane layout every 60s.'),L('last snapshot 38s ago',dim)],'open action picker','⏎ default preselected','PLUGIN') },
+          { id:'pl3', kind:'plugin', label:'git-status', crumbs:'plugins', meta:'v0.9.0',
+            pv:this.pv('git-status','plugin · directory decorations',[{t:'enabled',c:ok}],[L('Adds branch + dirty state to dir previews.')],'open action picker','⏎ default preselected','PLUGIN') },
+          { id:'pl4', kind:'plugin', label:'theme-macchiato', crumbs:'plugins', meta:'v1.0.0',
+            pv:this.pv('theme-macchiato','plugin · catppuccin macchiato',[{t:'enabled',c:ok}],[L('base #24273a  text #cad3f5'),L('mauve #c6a0f6  blue #8aadf4  green #a6da95')],'open action picker','⏎ default preselected','PLUGIN') },
+          { id:'pl5', kind:'plugin', label:'layout-golden', crumbs:'plugins', meta:'v0.2.1',
+            pv:this.pv('layout-golden','plugin · split ratios',[{t:'error',c:P.red}],[L('error: unknown key `ratio.phi` at line 4',P.red),L('~/.config/herdr/plugins.d/layout-golden.toml',dim)],'view error','⏎ opens action picker','PLUGIN') } ] },
+
+      { id:'agents', kind:'group', label:'Agents', meta:'flat · 3 detected',
+        pv:this.pv('Agent panes','detected by agent-detect (hooks: 2, heuristic: 1)',[{t:'1 working',c:warn},{t:'1 waiting',c:P.red},{t:'1 idle',c:P.ov1}],
+          [L('claude-code  herdr-dev › editor › %2   working'),L('claude-code  infra › review › %6      waiting'),L('codex        notes › shell › %4         idle')],'expand group','⇥ toggle','SUMMARY'),
+        children:[
+          { id:'a1', kind:'agent', label:'claude-code · switcher tests', crumbs:'agents', meta:'working',
+            pv:this.pv('claude-code','herdr-dev › editor › pane %2 · detected via hook',[{t:'working 2m14s',c:warn},{t:'42k tokens',c:P.ov1}],
+              [L('› fixing preview::renders_pane_scrollback',P.text),L('  editing crates/tui/src/preview.rs'),L('  running cargo test -p herdr-tui'),L('  27 passed · 1 failed',P.yellow),L(''),L('waiting on: test run',dim)],'jump to agent pane','^c interrupt','AGENT TRANSCRIPT') },
+          { id:'a2', kind:'agent', label:'claude-code · infra review', crumbs:'agents', meta:'waiting',
+            pv:this.pv('claude-code','infra › review › pane %6 · detected via hook',[{t:'needs input',c:P.red},{t:'idle 40s',c:P.ov1}],
+              [L('› Apply the terraform plan to prod?',P.text),L('  [y] yes  [n] no  [d] show diff',P.yellow),L(''),L('blocked — requires confirmation',P.red)],'jump to agent pane','^c interrupt','AGENT TRANSCRIPT') },
+          { id:'a3', kind:'agent', label:'codex · notes cleanup', crumbs:'agents', meta:'idle',
+            pv:this.pv('codex','notes › shell › pane %4 · heuristic match',[{t:'idle 22m',c:P.ov1}],
+              [L('› done: reorganised reading.md'),L('  3 files changed'),L(''),L('no active task',dim)],'jump to agent pane','^x detach','AGENT TRANSCRIPT') } ] } ];
+    const ai = tree.findIndex(g => g.id === 'agents');
+    if (ai > 1) tree.splice(1, 0, tree.splice(ai, 1)[0]);
+    this._data = tree; return tree;
+  }
+
+  leaves(){
+    if (this._leaves) return this._leaves;
+    const out = [];
+    const walk = n => { if (n.children) n.children.forEach(walk); else out.push(n); };
+    this.data().forEach(walk);
+    this._leaves = out; return out;
+  }
+
+  fuzzy(q, s){
+    const ls = s.toLowerCase(), lq = q.toLowerCase();
+    let i = 0, hits = [], score = 0, prev = -2;
+    for (const ch of lq) {
+      const idx = ls.indexOf(ch, i);
+      if (idx < 0) return null;
+      hits.push(idx);
+      score += idx === prev + 1 ? 8 : 0;
+      score -= (idx - i) * 0.4;
+      prev = idx; i = idx + 1;
+    }
+    return { hits, score: score - hits[0] * 0.6 };
+  }
+
+  segsFor(text, hitSet, crumbLen, baseColor){
+    const P = this.P, out = [];
+    let run = null;
+    for (let i = 0; i < text.length; i++) {
+      const hit = hitSet && hitSet.has(i);
+      const c = hit ? P.peach : (i < crumbLen ? P.s2 : baseColor);
+      const w = hit ? '700' : '400';
+      if (run && run.c === c) { run.t += text[i]; }
+      else { run = { t: text[i], c, w }; out.push(run); }
+    }
+    return out.map((r, i) => ({ t: r.t, style: { color: r.c, fontWeight: r.w, whiteSpace: 'pre' } }));
+  }
+
+  visible(){
+    const q = this.state.q;
+    if (q) {
+      const scored = [];
+      this.leaves().forEach(n => {
+        const crumb = n.crumbs ? n.crumbs + ' › ' : '';
+        const text = crumb + n.label;
+        const m = this.fuzzy(q, text);
+        if (m) scored.push({ node: n, text, crumbLen: crumb.length, hits: new Set(m.hits), score: m.score });
+      });
+      scored.sort((a, b) => b.score - a.score);
+      return scored.map(s => ({ ...s, depth: 0, isGroup: false }));
+    }
+    const out = [], exp = this.state.exp;
+    const walk = (n, depth) => {
+      const crumb = '';
+      out.push({ node: n, text: n.label, crumbLen: 0, hits: null, depth, isGroup: !!n.children });
+      if (n.children && exp[n.id]) n.children.forEach(c => walk(c, depth + 1));
+    };
+    this.data().forEach(n => walk(n, 0));
+    return out;
+  }
+
+  move(d){
+    const rows = this.visible();
+    if (!rows.length) return;
+    this.setState(s => ({ cur: (s.cur + d + rows.length) % rows.length }));
+  }
+
+  toggle(){
+    const rows = this.visible(), r = rows[this.state.cur];
+    if (!r || !r.node.children) return;
+    this.setState(s => ({ exp: { ...s.exp, [r.node.id]: !s.exp[r.node.id] } }));
+  }
+
+  expand(){
+    const r = this.visible()[this.state.cur];
+    if (!r || !r.node.children) return;
+    if (this.state.exp[r.node.id]) return this.move(1);
+    this.setState(s => ({ exp: { ...s.exp, [r.node.id]: true } }));
+  }
+
+  collapse(){
+    const rows = this.visible(), r = rows[this.state.cur];
+    if (!r) return;
+    if (r.node.children && this.state.exp[r.node.id]) return this.setState(s => ({ exp: { ...s.exp, [r.node.id]: false } }));
+    for (let i = this.state.cur - 1; i >= 0; i--) if (rows[i].depth < r.depth) return this.setState({ cur: i });
+  }
+
+  fire(){
+    const rows = this.visible(), r = rows[this.state.cur];
+    if (!r) return;
+    if (r.node.children && !this.state.q) return this.toggle();
+    clearTimeout(this._t);
+    this.setState({ toast: '⏎  ' + r.node.pv.action + '  ·  ' + r.node.label + '  ·  popup closed' });
+    this._t = setTimeout(() => this.setState({ toast: null }), 2200);
+  }
+
+  onKey = (e) => {
+    const k = e.key;
+    if (k === 'ArrowDown' || (e.ctrlKey && k === 'n')) { e.preventDefault(); return this.move(1); }
+    if (k === 'ArrowUp' || (e.ctrlKey && k === 'p')) { e.preventDefault(); return this.move(-1); }
+    if (k === 'Tab' || k === 'ArrowRight') { e.preventDefault(); return this.expand(); }
+    if (k === 'ArrowLeft') { e.preventDefault(); return this.collapse(); }
+    if (k === ' ' && !this.state.q) { e.preventDefault(); return this.expand(); }
+    if (k === 'Enter') { e.preventDefault(); return this.fire(); }
+    if (k === 'Backspace') { e.preventDefault(); return this.setState(s => ({ q: s.q.slice(0, -1), cur: 0 })); }
+    if (k === 'Escape') { e.preventDefault(); return this.setState({ q: '', cur: 0, toast: null }); }
+    if (k.length === 1 && !e.metaKey && !e.ctrlKey) { e.preventDefault(); return this.setState(s => ({ q: s.q + k, cur: 0 })); }
+  };
+
+  renderVals(){
+    const P = this.P, K = this.KIND, q = this.state.q, search = q.length > 0;
+    const rowsRaw = this.visible();
+    const cur = Math.min(this.state.cur, Math.max(0, rowsRaw.length - 1));
+    const sel = rowsRaw[cur];
+
+    const rows = rowsRaw.map((r, i) => {
+      const kind = K[r.node.kind] || K.pane;
+      const on = i === cur;
+      const isGroup = r.isGroup && !search;
+      return {
+        segs: this.segsFor(r.text, r.hits, r.crumbLen, on ? P.text : (isGroup ? P.sub1 : P.sub0)),
+        twisty: isGroup || r.node.children ? (this.state.exp[r.node.id] ? '▾' : '▸') : ' ',
+        icon: kind.icon, meta: r.node.meta || '',
+        rowStyle: { display:'flex', alignItems:'center', gap:'7px', height:'26px', paddingRight:'12px',
+          paddingLeft: (10 + r.depth * 14) + 'px', cursor:'pointer',
+          background: on ? '#363a4f' : 'transparent',
+          borderLeft: '2px solid ' + (on ? kind.color : 'transparent') },
+        twistyStyle: { color: on ? P.text : P.s2, width:'10px', fontSize:'11px' },
+        iconStyle: { color: kind.color, width:'12px', fontSize: r.node.kind === 'pane' ? '10px' : '12px', textAlign:'center' },
+        metaStyle: { color: on ? P.ov2 : P.s2, fontSize:'10.5px', flexShrink:0, letterSpacing:'.02em', paddingLeft:'10px' },
+        onClick: () => this.setState({ cur: i })
+      };
+    });
+
+    const pv = sel ? sel.node.pv : null;
+    const kind = sel ? (K[sel.node.kind] || K.pane) : K.group;
+    const chip = c => ({ fontSize:'10.5px', color:c, border:'1px solid ' + c + '55', background:c + '18', borderRadius:'3px', padding:'2px 7px' });
+
+    return {
+      wrapRef: this.wrapRef, onKey: this.onKey, query: q, rows,
+      modeLabel: search ? 'SEARCH' : 'BROWSE',
+      modeBadgeStyle: { fontSize:'10.5px', fontWeight:700, letterSpacing:'.1em', padding:'2px 7px', borderRadius:'3px',
+        color: search ? P.peach : P.sap, background: (search ? P.peach : P.sap) + '1f', border:'1px solid ' + (search ? P.peach : P.sap) + '55' },
+      countLabel: search ? rows.length + '/' + this.leaves().length + ' leaves' : this.data().length + ' groups · ' + this.leaves().length + ' targets',
+      placeholder: q ? '' : 'type to fuzzy-search all targets…',
+      placeholderStyle: { color: P.s2, fontSize:'13.5px', marginLeft:'2px' },
+      caretStyle: { display:'inline-block', width:'8px', height:'16px', background:P.mauve, animation:'caret 1.05s steps(1) infinite', marginLeft:'1px', verticalAlign:'-2px' },
+      scopeLabel: search ? 'flat leaves · fuzzy' : 'tree · target groups',
+      positionLabel: rows.length ? (cur + 1) + '/' + rows.length : '0/0',
+      pvIcon: kind.icon, pvIconStyle: { color: kind.color, fontSize:'13px' },
+      pvTitle: pv ? pv.title : '', pvSub: pv ? pv.sub : '',
+      pvPaneLabel: pv ? pv.paneLabel : '',
+      pvChips: pv ? pv.chips.map(c => ({ t: c.t, style: chip(c.c) })) : [],
+      pvLines: pv ? pv.lines.map(l => ({ t: l.t || ' ', style: { color: l.c, whiteSpace:'pre' } })) : [],
+      pvAction: pv ? pv.action : '', pvAltAction: pv ? pv.alt : '',
+      keys: [ {key:'↑↓', label:'move'}, {key:'⏎', label: search ? 'run default action' : 'open / expand'},
+        {key:'→ / ␣', label:'expand'}, {key:'←', label:'collapse'}, {key:'a-z', label:'search mode'}, {key:'^p', label:'pin'},
+        {key:'^d', label:'kill'}, {key:'esc', label: search ? 'clear' : 'close'} ],
+      toast: this.state.toast || '',
+      toastStyle: this.state.toast ? { position:'absolute', left:'50%', bottom:'54px', transform:'translateX(-50%)',
+        background:'#363a4f', border:'1px solid ' + P.green + '66', color:P.text, fontSize:'12px',
+        padding:'8px 14px', borderRadius:'5px', animation:'toastin .18s ease-out', whiteSpace:'nowrap',
+        boxShadow:'0 8px 24px rgba(0,0,0,.5)' } : { display:'none' }
+    };
+  }
+}
+</script>
+</body>
+</html>

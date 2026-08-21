@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+<template id="__bundler_thumbnail" data-bg-color="#24273a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="1200" height="800" fill="#24273a"/>
+    <rect x="180" y="200" width="840" height="400" rx="24" fill="#1e2030" stroke="#494d64" stroke-width="4"/>
+    <rect x="180" y="200" width="840" height="70" rx="24" fill="#363a4f"/>
+    <rect x="230" y="320" width="300" height="18" rx="9" fill="#c6a0f6"/>
+    <rect x="230" y="374" width="230" height="18" rx="9" fill="#8aadf4"/>
+    <rect x="230" y="428" width="260" height="18" rx="9" fill="#a6da95"/>
+    <rect x="230" y="482" width="190" height="18" rx="9" fill="#eed49f"/>
+    <rect x="620" y="320" width="330" height="180" rx="12" fill="#24273a" stroke="#5b6078" stroke-width="3"/>
+    <rect x="600" y="230" width="4" height="340" fill="#494d64"/>
+  </svg>
+</template>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  doc-page:not(:defined){visibility:hidden}
+  a { color:#5b4bc4; }
+  a:hover { color:#8aadf4; }
+</style>
+<script src="./doc-page.js"></script>
+</helmet>
+<doc-page margin="0.8in">
+  <div slot="header" style="display:flex;align-items:baseline;gap:8px;font:11px 'JetBrains Mono',monospace;color:#8087a2;padding-bottom:6px;border-bottom:1px solid #e2e2ea">
+    <span style="color:#5b4bc4;font-weight:700">herdr</span>
+    <span>switcher · implementation spec</span>
+    <span style="flex:1"></span>
+    <span>rev 1 · 2026-08-21</span>
+  </div>
+  <div slot="footer" style="font:10.5px 'JetBrains Mono',monospace;color:#a5adcb;padding-top:6px;border-top:1px solid #e2e2ea">herdr switcher — design description for implementation</div>
+
+  <h1 style="font:600 30px 'IBM Plex Sans',sans-serif;color:#181926;margin:0 0 6px;letter-spacing:-0.02em">Herdr Switcher — TUI Design Specification</h1>
+  <p style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#5b6078;margin:0 0 4px">A popup target switcher for the <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">herdr</span> terminal multiplexer: one keystroke away, two modes, five target groups, live preview. Catppuccin Macchiato.</p>
+  <p style="font:12px 'JetBrains Mono',monospace;color:#8087a2;margin:0 0 18px">Audience: an implementing agent (Claude Code or equivalent). Reference prototype: <span style="color:#5b4bc4">Herdr Switcher.dc.html</span> — behaviour there is normative where this document and the prototype agree; this document wins where they differ.</p>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">1. Purpose and scope</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The switcher answers one question — <em>where do I want to be?</em> — for every kind of "place" herdr knows about: a live pane in the current session, an agent that is waiting on you, a directory you visit often, a plugin you want to poke. It is a modal popup over the terminal, not a persistent panel. It opens, you aim, you hit Enter, it closes and herdr has moved you.</p>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Two hard design constraints drive everything below. First, <strong>a single keystroke must be enough to change interaction model</strong>: browsing structure and searching text are different tasks, so typing any printable character flips the whole left pane from a tree into a ranked flat list. Second, <strong>the preview pane never changes shape</strong> — it is always the answer to "what is the thing under the cursor", in both modes, for every node kind. That invariant is what makes the mode switch feel free rather than disorienting.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">Non-goals</h3>
+  <ul style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:20px">
+    <li>Not a session manager UI: no renaming, resizing, or layout editing beyond the destructive shortcuts listed in §8.</li>
+    <li>Not a file browser: directory targets are jump destinations, never a path-by-path navigator.</li>
+    <li>Not a command palette: it switches to targets, it does not run arbitrary commands.</li>
+  </ul>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">2. Window, geometry, chrome</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The popup is a floating, bordered, rounded rectangle centred over the dimmed host terminal. It has four horizontal bands: title bar, search bar, body (split), footer. All measurements are given in character cells for a TUI implementation, with the prototype's pixel values in parentheses.</p>
+  <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
+    <thead><tr>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">BAND</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">HEIGHT</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">CONTENT</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Title bar</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1 row (34px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><span style="font-family:'JetBrains Mono',monospace;font-size:12px">herdr switch</span> left; mode badge + counts right</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Search bar</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1 row (46px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">prompt <span style="font-family:'JetBrains Mono',monospace">❯</span>, query, block caret, placeholder</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Body</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">flex (486px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">list 44% · vertical rule · preview 56%</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Footer</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1 row (30px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">global keymap hints</td></tr>
+    </tbody>
+  </table>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Target size is 80% of the host terminal, clamped to 100×34 cells (prototype: 1180px wide). Below 60 cells wide, drop the preview pane and show it on demand (§7.4). Below 20 rows, drop the footer hints to a single <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">?</span> affordance. The list pane owns a one-row status strip at its bottom edge: scope on the left (<span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">tree · target groups</span> / <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">flat leaves · fuzzy</span>), cursor position on the right (<span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">6/12</span>).</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/02-view.png" alt="Browse mode, all groups collapsed" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 1 — Browse mode, root level. Five target groups; the right-hand meta column states each group's drill-down shape. Preview shows the group summary.</figcaption>
+  </figure>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">3. The two modes</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Mode is <strong>derived, never toggled</strong>: <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">mode = if query.is_empty() { Browse } else { Search }</span>. There is no mode key, and no state that survives the transition except the query itself. Consequences the implementation must respect:</p>
+  <ul style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:20px">
+    <li>Typing the first character enters search mode; deleting the last character returns to browse mode with the tree's expansion state exactly as it was.</li>
+    <li>The cursor index resets to 0 on every query mutation (insert or delete). Re-ranking makes a preserved index meaningless.</li>
+    <li>Expansion state (<span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">expanded: Set&lt;NodeId&gt;</span>) is untouched by searching. It is the browse view's state alone.</li>
+    <li><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">Esc</span> is two-stage: in search mode it clears the query (back to browse); in browse mode it closes the popup.</li>
+  </ul>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden">Browse                                   Search
+  ┌──────────────────┐   printable char   ┌──────────────────┐
+  │ tree of groups   │ ─────────────────► │ flat leaf list   │
+  │ groups expandable│                    │ fuzzy + ranked   │
+  │ ⏎ = expand/enter │ ◄───────────────── │ ⏎ = run action   │
+  └──────────────────┘  backspace to ""   └──────────────────┘
+        │ Esc                                   │ Esc
+        ▼                                       ▼
+      close                                clear query</pre>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">3.1 Browse mode</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">A single-selection tree. Rows are indented 2 cells (14px) per depth level, prefixed by a twisty (<span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">▾</span> open, <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">▸</span> closed, blank for leaves) and a kind glyph. Both branches and leaves are selectable — the cursor moves through the visible flattening of the tree, never into a collapsed subtree.</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/03-view.png" alt="Session group drilled down to a pane" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 2 — Session drill-down: workspace → tab → pane, with the pane's live scrollback in the preview. Note the depth indentation and the per-kind glyph (◫ workspace, ▤ tab, ▪ pane).</figcaption>
+  </figure>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">3.2 Search mode</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The tree is replaced by <strong>the fully rolled-out set of leaves only</strong> — every pane, agent, directory and plugin in one list, no branches, no indentation. Each row shows its own path as a breadcrumb prefix, dimmed, so a leaf is unambiguous without its tree: <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">herdr-dev › editor › nvim src/switcher.rs</span>. The query fuzzy-filters and re-ranks this list (§6). The preview pane behaves identically to browse mode.</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/05-view.png" alt="Search mode with fuzzy matches" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 3 — Search mode. Badge flips to SEARCH, counts become <span style="color:#33344a">matches / total leaves</span>, breadcrumbs are dimmed, matched characters are peach and bold. Groups have disappeared entirely.</figcaption>
+  </figure>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">4. Target groups and the node model</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Five groups at root, in this fixed order. The order is deliberate: the two groups whose contents are <em>live and volatile</em> (your session, your agents) come first because they are the reason you opened the popup mid-task; the three <em>stable</em> groups follow, ordered by how explicitly you chose them.</p>
+  <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
+    <thead><tr>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">#</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">GROUP</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">SHAPE</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">LEAF KIND</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">SORT</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Session</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">3-level tree: workspace / tab / pane</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">pane</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">session order, active workspace first</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">2</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Agents</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">flat list</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">agent</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">waiting → working → idle, then recency</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">3</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Pinned dirs</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">flat list</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">dir</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">config file order (slot ⌘1–⌘9)</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">4</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">zoxide</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">flat list</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">zox</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">frecency score, descending</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">5</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Plugins</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">flat list</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">plugin</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">name, errors surfaced in group meta</td></tr>
+    </tbody>
+  </table>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Groups are collapsed by default except Session, which opens to its active workspace and that workspace's active tab. Restoring the previous expansion set across invocations is optional; if implemented, expire it after 10 minutes so a stale tree never greets you.</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/04-view.png" alt="Agents group expanded" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 4 — Agents: a flat list of agent panes with status in the meta column. The selected agent is blocked on a confirmation prompt; the preview shows the question verbatim so you can decide before jumping.</figcaption>
+  </figure>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">4.1 Node structure</h3>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden">enum Kind { Group, Workspace, Tab, Pane, Dir, Zox, Plugin, Agent }
+
+struct Node {
+    id:       NodeId,        // stable, provider-scoped: "session:%2", "zox:/home/dd/dotfiles"
+    kind:     Kind,
+    label:    String,        // what the row shows: command, path, plugin name
+    meta:     String,        // right-aligned column: "%2", "902", "waiting", "v0.3.0"
+    crumbs:   Option<String>,// "herdr-dev › editor"  — set on LEAVES ONLY, for search mode
+    children: Vec<Node>,     // empty ⇒ leaf ⇒ appears in search mode
+    preview:  Preview,       // §7 — resolved lazily, cached per id
+    actions:  Actions,       // §8.2 — default + alternate
+}</pre>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Two rules make the rest of the UI fall out for free. <strong>Leaf-ness is structural</strong> (<span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">children.is_empty()</span>), so search mode is one recursive walk with no per-group special-casing. <strong>Crumbs are precomputed</strong> at tree build time, so search-mode rows need no upward traversal during keystroke handling.</p>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">5. Providers</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">One provider per group, each producing a subtree and resolving previews for its own nodes. Providers are cheap to enumerate and lazy to preview.</p>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden">trait Provider {
+    fn id(&self) -> &'static str;              // "session" | "agents" | "pinned" | "zoxide" | "plugins"
+    fn enumerate(&self) -> Result&lt;Node&gt;;       // must return in &lt; 30ms, cached data OK
+    fn preview(&self, id: &NodeId) -> Preview;  // may block up to 80ms; render stale + spinner past that
+    fn invoke(&self, id: &NodeId, act: Act) -> Result&lt;Outcome&gt;;
+}</pre>
+  <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
+    <thead><tr>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">PROVIDER</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">SOURCE</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">REFRESH</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">session</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">herdr daemon IPC: workspace/tab/pane graph, pane pids, cwd, last command, scrollback tail</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">on open + on daemon event</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">agents</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><span style="font-family:'JetBrains Mono',monospace;font-size:12px">agent-detect</span> plugin: <span style="font-family:'JetBrains Mono',monospace;font-size:12px">agent.start</span>/<span style="font-family:'JetBrains Mono',monospace;font-size:12px">agent.stop</span> hooks, else process-tree heuristic</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">on open + on hook fire</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">pinned</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><span style="font-family:'JetBrains Mono',monospace;font-size:12px">~/.config/herdr/targets.toml</span></td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">on file mtime change</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">zoxide</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><span style="font-family:'JetBrains Mono',monospace;font-size:12px">zoxide query --list --score</span>, top 50, existing paths only</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">on open (cache 30s)</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">plugins</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">plugin registry: name, version, enabled, load error, declared actions</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">on open</td></tr>
+    </tbody>
+  </table>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">A provider that fails must not break the popup: its group row stays, its meta becomes <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#a3384a">unavailable</span> in red, and its preview shows the error text. Agents and Session must reflect reality at the moment of opening — a jump to a dead pane is the one failure users will not forgive.</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/06-view.png" alt="zoxide group expanded with directory preview" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 5 — zoxide entries carry their frecency score in the meta column; the preview adds git branch/dirty state (via the <span style="color:#33344a">git-status</span> plugin), a directory listing, and last-visit recency.</figcaption>
+  </figure>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">6. Search: flattening, matching, ranking</h2>
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">6.1 The haystack</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Build once per invocation (not per keystroke): a <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">Vec&lt;Leaf&gt;</span> from a depth-first walk of all five subtrees, in group order. Each leaf's match text is <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">crumbs + " › " + label</span> — crumbs are searchable, which is what lets <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">editor nvim</span> and <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">notes zsh</span> work as queries. Store the crumb prefix length alongside, so rendering knows which characters to dim.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">6.2 Matching</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Case-insensitive greedy subsequence match, left to right; a leaf whose match text does not contain the query as a subsequence is dropped. Return the matched character indices — they are needed for highlighting, and their distribution is the score.</p>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden">score  = Σ (8.0 if index == prev_index + 1 else 0.0)   // consecutive-run bonus
+       − Σ (0.4 × gap_before_this_char)                 // scattered matches are worse
+       − 0.6 × first_match_index                        // prefix matches win
+       + 4.0 if match starts at a word boundary         // after / › · space _ -
+       + provider_bias                                  // §6.3</pre>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Sort descending by score; ties break by the haystack's original order, which means group order, which means live things before stored things. Do not use a smarter algorithm than this without also making it deterministic — users learn the ranking, and a ranking that reshuffles is worse than one that is merely imperfect.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">6.3 Provider bias</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Applied as a flat additive constant so it nudges rather than dominates: agents needing input <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">+6</span>, live panes <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">+4</span>, pinned dirs <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">+3</span>, other agents <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">+2</span>, zoxide <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">+0</span>, plugins <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">−2</span>. Plugins are last because they are the only group you rarely reach for mid-flow.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">6.4 Highlighting</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Render the match text as runs, not per character: coalesce adjacent characters that share a colour into one span/attribute run. Matched characters are <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">peach #f5a97f</span> and bold, in both the crumb prefix and the label. Unmatched crumb characters use <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">surface2 #5b6078</span>; unmatched label characters use <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">subtext0 #a5adcb</span>, or <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">text #cad3f5</span> on the selected row.</p>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">7. Preview pane</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">One shape for every node kind, in four stacked regions. It is the only place in the popup where content is allowed to be dense.</p>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden">struct Preview {
+    icon: Glyph, title: String,   // kind glyph + primary identity
+    subtitle: String,             // provenance: full path, or crumbs + pane id + detection source
+    chips: Vec&lt;Chip&gt;,             // 1–3 status pills, coloured by semantics
+    body_label: &'static str,     // "PANE PREVIEW" | "DIRECTORY" | "AGENT TRANSCRIPT" | "PLUGIN" | "SUMMARY"
+    body: Vec&lt;Line&gt;,              // monospace, pre-wrapped, clipped — never scrollable
+    action: String, alt: String,  // footer: default action name, alternate hint
+}</pre>
+  <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
+    <thead><tr>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">KIND</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">BODY</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">CHIPS</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">pane</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">last N lines of live scrollback, ANSI colour preserved; footer line = cwd + cursor position</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">focused/running, pid, cpu</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">workspace / tab</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">child inventory, plus an ASCII split diagram for a tab's layout</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">active/detached, layout name</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">dir / zox</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">first ~8 entries (dirs first), then last-visit recency and hit count</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">git branch + dirty, entry count</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">agent</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">tail of the agent transcript; if blocked, the pending question and its options verbatim</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">status + duration, token count</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">plugin</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">one-line description, declared hooks, matched objects; load error with file and line if failing</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">enabled/error, version</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">group</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">aggregate roster of its children + one line explaining the group's role</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">counts, error counts</td></tr>
+    </tbody>
+  </table>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px"><strong>7.4 Behaviour.</strong> The preview is read-only and never scrolls — it is clipped at the pane's height, because a preview you have to navigate has stopped being a preview. Resolution is debounced 60ms after the cursor settles; while a slow provider resolves, keep the previous preview visible and dim it rather than flashing empty. On narrow terminals the pane is hidden and bound to a toggle key, with the list widening to full width.</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/07-view.png" alt="Plugin with a load error selected" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 6 — Failure states live in the preview, not in a dialog: a plugin that failed to load shows its error and source location, and its default action becomes "view error" rather than "run plugin action".</figcaption>
+  </figure>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">8. Keymap and actions</h2>
+  <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
+    <thead><tr>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">KEY</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">BROWSE</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">SEARCH</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">↓ / ^n</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">next visible row (wraps)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">next match (wraps)</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">↑ / ^p</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">previous visible row (wraps)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">previous match (wraps)</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">→ / Space / Tab</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">expand node; if already open, step to first child</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">→ / Tab inert; <strong>Space types a space</strong></td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">←</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">collapse node; if already closed, jump to parent</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">inert</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">⏎</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">branch → toggle; leaf → default action, close</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">default action, close</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">a–z 0–9 …</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">enter search mode with that character</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">append to query, re-rank, cursor → 0</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">⌫</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">—</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">delete last char; empty query → browse mode</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">Esc</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">close popup, no action</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">clear query → browse mode</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">^p</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a" colspan="2">pin the selected directory (or the selected pane's cwd) into Pinned dirs; toast, stay open</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">^d</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a" colspan="2">kill the selected pane / tab / workspace; confirm inline in the footer; stay open</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">^t</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a" colspan="2">on a dir / zoxide entry: open the workspace-template picker (§8.4)</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;font-family:'JetBrains Mono',monospace;color:#181926">^r ^c ^x</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a" colspan="2">context alternates (restart command, interrupt agent, detach agent), named per item in the preview footer (§8.2)</td></tr>
+    </tbody>
+  </table>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Footer hints are mode-aware: <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">⏎ open / expand</span> and <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">esc close</span> in browse mode become <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">⏎ run default action</span> and <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">esc clear</span> in search mode. Nothing else in the footer changes between modes.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">8.2 Default and alternate action per kind</h3>
+  <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
+    <thead><tr>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">KIND</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">⏎ DEFAULT</th>
+      <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">ALTERNATE</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">pane</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><strong>jump to the pane</strong> (switch workspace + tab + focus pane)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">^d kill pane · ^r restart command</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">agent</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><strong>jump to the pane</strong> the agent runs in — identical to a pane jump</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">^c interrupt · ^x detach</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">workspace / tab</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">switch to it, keeping its active pane</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">^p pin · ^d kill</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">dir / zox</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><strong>always open a new workspace</strong> at that path — a <em>worktree-space</em> if the path is inside a git repository, a plain workspace otherwise. The current workspace is never reused.</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">^t open with template (§8.4) · ^p pin</td></tr>
+      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">plugin</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><strong>open the plugin's action picker</strong> (§8.3), default action preselected; "view error" if the plugin failed to load</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">—</td></tr>
+    </tbody>
+  </table>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The default action is <strong>always named in the preview footer</strong> before you commit to it — Enter is never a guess. Executing it closes the popup and shows a one-line toast in the host terminal naming what happened; non-destructive side actions (pin) keep the popup open and toast in place. There is no enable/disable toggle in the switcher — plugin lifecycle belongs to config, not to a jump UI.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">8.3 Secondary selector (plugins)</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Enter on a plugin does not execute anything. It replaces the list pane with a small selector listing <strong>every action that plugin declares</strong>, in declaration order, with the plugin's default action preselected. Same row grammar as the main list, so the muscle memory carries: ↑↓ move, ⏎ runs the highlighted action and closes the popup, Esc returns to the switcher with the plugin still selected. The preview pane switches to the highlighted action's own description and, where the plugin provides one, a dry-run summary of what it will touch.</p>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden">❯ agent-detect                                    ▸ ACTION
+  ▸ rescan panes                        default     rescan panes
+    reload hooks                                    Re-runs process-tree detection across
+    list matched panes                              all panes and re-tags agent panes.
+    dump detection log                              touches: 7 panes · no side effects
+                                                    ⏎ run  esc back</pre>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">A plugin declaring exactly one action still shows the picker — it stays predictable, and one row is cheap. A plugin declaring none is not selectable: its default action becomes "view error" or "no actions declared", and Enter is inert.</p>
+
+  <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">8.4 Optional: open-with-template (dirs and zoxide)</h3>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px"><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^t</span> on a directory or zoxide entry opens the same selector shape, listing the <strong>configured workspace templates</strong> — a tmuxinator-style declaration of tabs, panes, splits and startup commands — with one preselected: the template whose <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">match</span> pattern fits the path, else the configured default. Enter opens a new workspace (or worktree-space) at that path built from the highlighted template; Esc returns.</p>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden"># ~/.config/herdr/templates.toml
+[[template]]
+name    = "rust-dev"            # shown in the picker
+match   = ["**/Cargo.toml"]     # auto-preselect when the target path matches
+tabs    = [
+  { name = "editor", panes = ["nvim .", "cargo watch -x test"], split = "v", ratio = 60 },
+  { name = "shell",  panes = ["zsh"] },
+]
+
+[[template]]
+name    = "plain"               # the fallback default
+default = true
+tabs    = [{ name = "shell", panes = ["zsh"] }]</pre>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The feature is optional: with no <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">templates.toml</span>, <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^t</span> is unbound and the preview footer omits the hint. Plain Enter never consults templates beyond the default one — the picker is the only place a template is chosen explicitly.</p>
+
+  <figure style="margin:16px 0 20px;break-inside:avoid">
+    <img src="images/08-view.png" alt="Executing the default action from search mode" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 7 — Enter in search mode: the toast names the action, the target, and the fact that the popup closed. Note that a two-character query already separates a pinned dir from a live pane.</figcaption>
+  </figure>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">9. Theme — Catppuccin Macchiato</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Palette is fixed; the mapping below is the contract. Never introduce a colour outside the palette, and never use colour as the only carrier of meaning — every coloured state also has a word in the meta column or a chip label.</p>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0 14px;break-inside:avoid">
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#24273a"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">base #24273a<br /><span style="color:#181926">popup body</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#1e2030"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">mantle #1e2030<br /><span style="color:#181926">bars, preview bg</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#181926"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">crust #181926<br /><span style="color:#181926">dimmed host term</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#363a4f"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">surface0 #363a4f<br /><span style="color:#181926">selection, rules</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#cad3f5"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">text #cad3f5<br /><span style="color:#181926">selected label</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#a5adcb"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">subtext0 #a5adcb<br /><span style="color:#181926">unselected label</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#5b6078"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">surface2 #5b6078<br /><span style="color:#181926">crumbs, meta</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#c6a0f6"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">mauve #c6a0f6<br /><span style="color:#181926">prompt, caret, group</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#f5a97f"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">peach #f5a97f<br /><span style="color:#181926">match hits, SEARCH</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#7dc4e4"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">sapphire #7dc4e4<br /><span style="color:#181926">BROWSE badge</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#a6da95"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">green #a6da95<br /><span style="color:#181926">agents, ok, action</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#ed8796"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">red #ed8796<br /><span style="color:#181926">errors, blocked</span></div></div>
+  </div>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">Kind glyph + colour: workspace <span style="font-family:'JetBrains Mono',monospace">◫</span> lavender <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#b7bdf8</span>, tab <span style="font-family:'JetBrains Mono',monospace">▤</span> sky <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#91d7e3</span>, pane <span style="font-family:'JetBrains Mono',monospace">▪</span> blue <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#8aadf4</span>, dir <span style="font-family:'JetBrains Mono',monospace">/</span> yellow <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#eed49f</span>, zoxide <span style="font-family:'JetBrains Mono',monospace">/</span> teal <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#8bd5ca</span>, plugin <span style="font-family:'JetBrains Mono',monospace">⬢</span> pink <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#f5bde6</span>, agent <span style="font-family:'JetBrains Mono',monospace">◆</span> green <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#a6da95</span>, group <span style="font-family:'JetBrains Mono',monospace">❯</span> mauve <span style="font-family:'JetBrains Mono',monospace;font-size:12px">#c6a0f6</span>. Two directory kinds share a glyph and differ only in colour, because they differ only in provenance.</p>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px"><strong>Selected row:</strong> <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">surface0</span> background, a 2px left bar in the row's kind colour, label promoted to <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">text</span>. Nothing else marks selection — no bold, no inverse video, no arrow — so the eye tracks one moving band. Fall back to reverse video only on terminals without truecolour.</p>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">10. Row rendering rules</h2>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">One row is one terminal line, laid out as: <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">[indent][twisty 1][glyph 1][gap][label — flexible, truncated][gap 2][meta — right-aligned]</span>. The label truncates with an ellipsis and never wraps; the meta column never truncates and always keeps at least two cells of clearance from the label. When a truncated label would hide a match hit in search mode, truncate from the <em>left</em> of the crumb prefix instead, so the hit stays visible.</p>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">11. Edge cases and empty states</h2>
+  <ul style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:20px">
+    <li><strong>No matches:</strong> list shows one dim centred line — <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">no targets match "qzx"</span> — counts read <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">0/20</span>, preview keeps the last resolved item but dims to 50%, Enter is inert.</li>
+    <li><strong>Empty group:</strong> stays visible with <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">empty</span> in the meta column; expanding shows one dim child row explaining how to populate it (e.g. "no pins — press ^p on a directory").</li>
+    <li><strong>Provider unavailable:</strong> group row meta becomes red <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">unavailable</span>; its leaves are excluded from search rather than shown stale.</li>
+    <li><strong>Target dies while open:</strong> on Enter, if the provider reports the target gone, do not close — flash the row red, refresh that provider, keep the query.</li>
+    <li><strong>Single match:</strong> never auto-execute. Enter stays an explicit act.</li>
+    <li><strong>Duplicate labels</strong> (same command in two panes) are disambiguated by crumbs in search mode and by position in browse mode; never dedupe.</li>
+    <li><strong>Very long queries</strong> that match nothing: keep accepting input; do not clear or beep.</li>
+  </ul>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">12. Performance budgets</h2>
+  <ul style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:20px">
+    <li>Open to first paint: <strong>&lt; 60ms</strong>. Paint the chrome and the tree from cached provider data; refresh in place as providers answer.</li>
+    <li>Keystroke to re-ranked list: <strong>&lt; 8ms</strong> for 1,000 leaves. Matching is allocation-free per keystroke; reuse the haystack and a scratch score buffer.</li>
+    <li>Preview resolution: debounce 60ms, budget 80ms, then show stale-and-dim. Never block the input loop on a provider.</li>
+    <li>Redraw only the two rows whose selection changed, plus the preview region.</li>
+  </ul>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">13. Configuration</h2>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden"># ~/.config/herdr/switcher.toml
+groups        = ["session", "agents", "pinned", "zoxide", "plugins"]  # order = display order
+open_key      = "ctrl-k"
+zoxide_limit  = 50
+preview       = { enabled = true, width_pct = 56, min_cols = 60 }
+expand        = { session_default = "active", restore_ttl_secs = 600 }
+scoring       = { consecutive = 8.0, gap = 0.4, prefix = 0.6, word_boundary = 4.0 }
+bias          = { agent_waiting = 6, pane = 4, pinned = 3, agent = 2, zoxide = 0, plugin = -2 }
+
+# ~/.config/herdr/targets.toml — pinned dirs
+[[pin]] path = "~/code/herdr"    slot = 1
+[[pin]] path = "~/work/infra"    slot = 2</pre>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">14. Acceptance criteria</h2>
+  <ol style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:22px">
+    <li>Opening the popup shows five groups in the order of §4, Session pre-expanded to its active tab, cursor on row 0, preview showing the Session summary.</li>
+    <li>Typing one printable character flips the badge to SEARCH, replaces the tree with leaves only, dims crumbs, highlights hits in peach, and resets the cursor to 0.</li>
+    <li>Backspacing to an empty query restores the exact prior tree, including expansion state; the cursor returns to row 0.</li>
+    <li>→, Space and Tab all expand the selected group in browse mode; Space types a space in search mode.</li>
+    <li>← collapses an open node and jumps to the parent of a closed one.</li>
+    <li>The preview updates for every cursor move in both modes, and its footer always names the action Enter will perform.</li>
+    <li>Enter on a leaf performs that action, closes the popup, and toasts what happened; Enter on a branch in browse mode only toggles it.</li>
+    <li>Enter on a pane or an agent lands the user in that pane. Enter on a dir or zoxide entry always creates a new workspace — a worktree-space inside a git repo — and never reuses the current one.</li>
+    <li>Enter on a plugin opens its action picker with the default preselected; Esc from the picker returns to the switcher with that plugin still selected.</li>
+    <li>Esc clears the query in search mode and closes the popup in browse mode.</li>
+    <li>A killed pane, a failed plugin, and an unavailable provider are all representable without any modal dialog.</li>
+    <li>All colours used are Catppuccin Macchiato palette entries, and every coloured status is also stated in words.</li>
+  </ol>
+
+  <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">15. Open questions</h2>
+  <ul style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:20px">
+    <li>Merge <em>Pinned dirs</em> and <em>zoxide</em> into one "Directories" group with a provenance tag in the meta column? Fewer roots, but loses the pinned/frecency distinction at a glance.</li>
+    <li>Should a group name typed as a prefix act as a scope filter (<span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">agents&nbsp;</span> restricting the haystack) rather than as ordinary match text?</li>
+    <li><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^k</span> is drawn in the search bar as the open keybind but has no in-popup function — document it, repurpose it, or drop the affordance.</li>
+    <li>Should agents needing input raise a passive notification in the host status line while the popup is closed?</li>
+  </ul>
+</doc-page>
+
+</x-dc>
+</body>
+</html>
