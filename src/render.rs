@@ -161,9 +161,12 @@ fn draw_body(frame: &mut Frame, area: Rect, tree: &Tree) {
         .split(area);
 
     draw_list(frame, split[0], tree);
-    // Vertical rule — a 1-cell surface2 column (spec §2), no border.
+    // Vertical rule — a thin `│` line via a ratatui LEFT border on
+    // the 1-cell column (spec §2), not a filled surface2 bar.
     frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(SURFACE2)),
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(SURFACE2)),
         split[1],
     );
     draw_preview_placeholder(frame, split[2]);
