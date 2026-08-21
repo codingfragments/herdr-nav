@@ -458,6 +458,28 @@ pub fn expand_path(path: &str) -> String {
     path.to_string()
 }
 
+/// Resolve a template `cwd` against a base directory.
+/// - Absolute paths (`/...`) are returned as-is.
+/// - `~`/`$HOME` expand to HOME.
+/// - Relative paths (`./...`, `../...`, `foo`) expand against `base`.
+///   herdr's socket API does NOT resolve relative cwd (it falls back to
+///   HOME), so the plugin must expand them before passing to the
+///   socket (confirmed live).
+pub fn resolve_cwd(base: &str, cwd: &str) -> String {
+    // ~ and $HOME → HOME.
+    if cwd.starts_with('~') || cwd.starts_with("$HOME") {
+        return expand_path(cwd);
+    }
+    // Absolute → as-is.
+    if cwd.starts_with('/') {
+        return cwd.to_string();
+    }
+    // Relative → join with base. Strip a leading `./`.
+    let base = base.trim_end_matches('/');
+    let rel = cwd.strip_prefix("./").unwrap_or(cwd);
+    format!("{base}/{rel}")
+}
+
 /// Is `path` inside a git work tree? (decides worktree-space vs plain.)
 fn is_inside_git_repo(path: &str) -> bool {
     let Ok(out) = std::process::Command::new("git")
@@ -960,7 +982,7 @@ pub fn build_workspace_from_template(
     for (tab_i, tab) in template.tabs.iter().enumerate() {
         // Per-tab cwd (None = the workspace's cwd = the path
         // the workspace was opened at).
-        let tab_cwd = tab.cwd.as_deref().unwrap_or(path);
+        let tab_cwd = resolve_cwd(path, tab.cwd.as_deref().unwrap_or(path));
         // The first tab uses the workspace's initial pane; later
         // tabs need tab.create.
         let (pane_id, _new_tab) = if tab_i == 0 {
@@ -992,7 +1014,7 @@ pub fn build_workspace_from_template(
         };
         // Recursively build the tab's layout. The first pane is
         // the workspace's root pane (tab 0) or the new tab's root.
-        build_layout(&socket, &pane_id, &tab.layout, tab_cwd);
+        build_layout(&socket, &pane_id, &tab.layout, &tab_cwd);
     }
     // Restore focus to the pane that was focused before the build
     // (the user stays in the current workspace, not the new one).
@@ -1013,6 +1035,12 @@ pub fn build_workspace_from_template(
 fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
     let mut current = first_pane_id.to_string();
     for (i, child) in layout.panes.iter().enumerate() {
+        // Determine this child's cwd: a pane child may
+        // override the tab cwd; a nested split uses the tab cwd.
+        let child_cwd = match child {
+            PaneNode::Pane { cwd: Some(p), .. } => resolve_cwd(cwd, p),
+            _ => cwd.to_string(),
+        };
         if i > 0 {
             // Focus `current` before splitting — herdr's pane.split
             // targets the ACTIVE pane, not the pane_id you pass, so
@@ -1024,7 +1052,9 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
                 "pane.focus",
                 serde_json::json!({"pane_id": &current}),
             );
-            // Split the current pane to create the next sibling.
+            // Split the current pane to create the next sibling, with
+            // the child's resolved cwd (so relative paths like
+            // `../` expand against the tab cwd, not HOME).
             let direction = if layout.direction == "h" {
                 "down"
             } else {
@@ -1038,7 +1068,7 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
             let r = crate::socket_client::request(
                 socket,
                 "pane.split",
-                serde_json::json!({"pane_id": current, "direction": direction, "ratio": ratio, "cwd": cwd}),
+                serde_json::json!({"pane_id": current, "direction": direction, "ratio": ratio, "cwd": child_cwd}),
             ).ok();
             if let Some(r) = r {
                 current = r
@@ -1054,18 +1084,19 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
                 command,
                 cwd: pane_cwd,
             } => {
-                // Pane-level cwd overrides the tab cwd.
-                let c = pane_cwd.as_deref().unwrap_or(cwd);
-                if i > 0 {
-                    // The split above already passed `c` as cwd; only
-                    // re-send if the pane cwd differs from the tab cwd.
-                    if pane_cwd.is_some() && pane_cwd.as_deref() != Some(cwd) {
-                        // Best-effort: set the pane's cwd via cd.
-                        let _ = crate::socket_client::request(
-                            socket,
-                            "pane.send_text",
-                            serde_json::json!({"pane_id": current, "text": format!("cd {c}\n")}),
-                        );
+                // The split (i > 0) already passed child_cwd; for i == 0,
+                // the first pane started in the tab/workspace cwd. If the
+                // pane has its own cwd, cd to the resolved path.
+                if i == 0 {
+                    if let Some(p) = pane_cwd {
+                        let c = resolve_cwd(cwd, p);
+                        if c != cwd {
+                            let _ = crate::socket_client::request(
+                                socket,
+                                "pane.send_text",
+                                serde_json::json!({"pane_id": current, "text": format!("cd {c}\n")}),
+                            );
+                        }
                     }
                 }
                 if let Some(cmd) = command {
@@ -1080,9 +1111,7 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
             }
             PaneNode::Nested { layout: nested } => {
                 // Recurse into the current pane (the new split's root).
-                build_layout(socket, &current, nested, cwd);
-                // After the nested subtree, `current` stays as the
-                // root of that subtree — the next sibling splits it.
+                build_layout(socket, &current, nested, &child_cwd);
             }
         }
     }
@@ -1712,5 +1741,26 @@ tabs:
         ];
         assert_eq!(preselect_template(&templates, "/Users/foo/Cargo.toml"), 0);
         assert_eq!(preselect_template(&templates, "/Users/foo/notes"), 1);
+    }
+}
+
+#[cfg(test)]
+mod resolve_cwd_tests {
+    use super::*;
+    #[test]
+    fn absolute_asis() {
+        assert_eq!(resolve_cwd("/base", "/abs/path"), "/abs/path");
+    }
+    #[test]
+    fn tilde_to_home() {
+        std::env::set_var("HOME", "/Users/test");
+        assert_eq!(resolve_cwd("/base", "~/code"), "/Users/test/code");
+        std::env::remove_var("HOME");
+    }
+    #[test]
+    fn relative_against_base() {
+        assert_eq!(resolve_cwd("/base", "../sibling"), "/base/../sibling");
+        assert_eq!(resolve_cwd("/base", "./sub"), "/base/sub");
+        assert_eq!(resolve_cwd("/base", "sub"), "/base/sub");
     }
 }

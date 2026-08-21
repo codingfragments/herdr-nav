@@ -76,6 +76,11 @@ So a child is either a leaf (`command`) or a branch (`layout`).
 
 `cwd` is passed to `pane.split`/`tab.create` natively — no `cd` command.
 
+Relative paths (`./...`, `../...`, `foo`) expand against the workspace
+path (the dir you jumped to); `~`/`$HOME` expand to HOME. herdr's socket
+API does NOT resolve relative `cwd` (it falls back to HOME), so the plugin
+expands them before passing to the socket.
+
 ### Examples
 
 #### Simple (single-level)
