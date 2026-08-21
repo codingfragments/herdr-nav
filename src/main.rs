@@ -181,11 +181,14 @@ fn event_loop<B: ratatui::backend::Backend>(
     // a selector listing its actions; ↑↓ move, Enter runs,
     // Esc returns.
     let mut plugin_action_picker: Option<PluginActionPicker> = None;
+    // Kill confirm (spec §8: `^d`): first press shows an inline
+    // footer confirm; second `^d` confirms, any other key cancels.
+    let mut kill_confirm: Option<(String, String)> = None;
 
     // Haystack built once per invocation (spec §6.1): DFS, leaves
     // only, group order. Stable for the whole popup (providers
     // don't refresh mid-invocation in Phase 4).
-    let haystack = search::build_haystack(tree);
+    let mut haystack = search::build_haystack(tree);
     // Whether any templates exist (for the ^t footer hint, spec §8.4).
     let templates_exist = !source::read_templates().is_empty();
     // Search view: None = browse mode, Some = search mode (query non-empty).
@@ -213,6 +216,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                     plugin_action_picker
                         .as_ref()
                         .map(|p| (p.plugin_id.as_str(), p.actions.as_slice(), p.cursor)),
+                    kill_confirm
+                        .as_ref()
+                        .map(|(id, label)| (id.as_str(), label.as_str())),
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -251,6 +257,8 @@ fn event_loop<B: ratatui::backend::Backend>(
         use KeyCode::*;
         match key.code {
             Esc => {
+                // Cancel any pending kill confirm.
+                kill_confirm = None;
                 // Cancel the plugin action picker first (don't run, stay open).
                 if plugin_action_picker.take().is_some() {
                     continue;
@@ -317,10 +325,53 @@ fn event_loop<B: ratatui::backend::Backend>(
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                if let Some(v) = search_view.as_mut() {
-                    v.move_up();
-                } else {
-                    tree.move_up();
+                // `^p` pin (spec §8): pin the selected dir (or the
+                // selected pane's cwd) into Pinned dirs; writes
+                // `targets.toml`; stay open (no toast — dropped per
+                // user request). Spec §8 amended: `^p` is pin, not
+                // up-nav (up is ↑ arrow only; `^n` stays for down).
+                if let Some(node) = current_cursor(tree, &search_view, &haystack) {
+                    if let Some(path) = pin_path_for(&node, socket_path) {
+                        match source::write_pin(&path) {
+                            Ok(slot) => {
+                                flash_error =
+                                    Some((node.id.clone(), format!("pinned → slot {slot}")));
+                                // Rebuild the tree so the new pin
+                                // appears in the Pinned group; keep the
+                                // cursor on the same node.
+                                refresh(tree, &mut search_view, &mut haystack, socket_path);
+                            }
+                            Err(e) => {
+                                flash_error = Some((node.id.clone(), e));
+                            }
+                        }
+                    }
+                }
+            }
+            Char('u')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^u` unpin (spec §8 amended): on a pinned dir,
+                // remove it from `targets.toml`; stay open. Inert on
+                // non-pinned kinds (pane/agent/plugin/ws/tab).
+                if let Some(node) = current_cursor(tree, &search_view, &haystack) {
+                    if node.kind == nav::Kind::Dir || node.kind == nav::Kind::Zox {
+                        let path = node.id.split_once(':').map(|(_, p)| p).unwrap_or(&node.id);
+                        match source::unpin(path) {
+                            Ok(true) => {
+                                flash_error = Some((node.id.clone(), "unpinned".to_string()));
+                                refresh(tree, &mut search_view, &mut haystack, socket_path);
+                            }
+                            Ok(false) => {
+                                flash_error = Some((node.id.clone(), "not pinned".to_string()));
+                            }
+                            Err(e) => {
+                                flash_error = Some((node.id.clone(), e));
+                            }
+                        }
+                    }
                 }
             }
             Backspace => {
@@ -395,6 +446,115 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 templates,
                                 cursor,
                             });
+                        }
+                    }
+                }
+            }
+            Char('d')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^d` kill (spec §8): kill the selected pane / tab /
+                // workspace. First press shows an inline footer confirm;
+                // second `^d` confirms + kills; any other key cancels.
+                // Stay open. Inert on non-killable kinds (dir/zox/plugin).
+                if let Some(node) = current_cursor(tree, &search_view, &haystack) {
+                    if let Some((target_id, label)) = kill_target(&node) {
+                        if let Some((confirm_id, _)) = &kill_confirm {
+                            if confirm_id == &target_id {
+                                // Confirm: execute the kill.
+                                match do_kill(socket_path, &node) {
+                                    Ok(()) => {
+                                        flash_error = Some((node.id.clone(), "killed".to_string()));
+                                        // Rebuild the tree: the killed
+                                        // node is gone; the cursor
+                                        // clamps to the nearest valid row.
+                                        refresh(tree, &mut search_view, &mut haystack, socket_path);
+                                    }
+                                    Err(e) => {
+                                        flash_error = Some((node.id.clone(), e));
+                                    }
+                                }
+                                kill_confirm = None;
+                            }
+                        } else {
+                            kill_confirm = Some((target_id, label));
+                        }
+                    }
+                }
+            }
+            Char('r')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^r` restart command (spec §8.2): on a pane, send
+                // Ctrl+C to interrupt the foreground process. Stay open.
+                if let Some(node) = current_cursor(tree, &search_view, &haystack) {
+                    if node.kind == nav::Kind::Pane {
+                        if let Some(pid) = node.id.strip_prefix("session:pane:") {
+                            let _ = crate::socket_client::request(
+                                socket_path,
+                                "pane.send_keys",
+                                serde_json::json!({
+                                    "pane_id": pid,
+                                    "keys": ["ctrl+c"],
+                                }),
+                            );
+                            flash_error = Some((node.id.clone(), "interrupted".to_string()));
+                            // Refresh so the pane's status meta
+                            // updates (e.g. foreground process).
+                            refresh(tree, &mut search_view, &mut haystack, socket_path);
+                        }
+                    }
+                }
+            }
+            Char('c')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^c` interrupt agent (spec §8.2): on an agent, send
+                // Ctrl+C to the agent's pane. Stay open.
+                if let Some(node) = current_cursor(tree, &search_view, &haystack) {
+                    if node.kind == nav::Kind::Agent {
+                        if let Some(pid) = agent_pane_id(&node, socket_path) {
+                            let _ = crate::socket_client::request(
+                                socket_path,
+                                "agent.send_keys",
+                                serde_json::json!({
+                                    "target": pid,
+                                    "keys": ["ctrl+c"],
+                                }),
+                            );
+                            flash_error = Some((node.id.clone(), "interrupted".to_string()));
+                            // Refresh so the agent's status meta
+                            // updates (waiting → running, etc.).
+                            refresh(tree, &mut search_view, &mut haystack, socket_path);
+                        }
+                    }
+                }
+            }
+            Char('x')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^x` detach agent (spec §8.2): on an agent, release
+                // the agent from its pane. Stay open.
+                if let Some(node) = current_cursor(tree, &search_view, &haystack) {
+                    if node.kind == nav::Kind::Agent {
+                        if let Some(pid) = agent_pane_id(&node, socket_path) {
+                            let _ = crate::socket_client::request(
+                                socket_path,
+                                "pane.release_agent",
+                                serde_json::json!({"pane_id": pid}),
+                            );
+                            flash_error = Some((node.id.clone(), "detached".to_string()));
+                            // Rebuild: the detached agent leaves
+                            // the Agents list; cursor clamps.
+                            refresh(tree, &mut search_view, &mut haystack, socket_path);
                         }
                     }
                 }
@@ -520,7 +680,10 @@ fn event_loop<B: ratatui::backend::Backend>(
                     }
                 }
             }
-            _ => {}
+            _ => {
+                // Any unhandled key cancels a pending kill confirm.
+                kill_confirm = None;
+            }
         }
 
         let cursor_after = search_view.as_ref().map_or(tree.cursor, |v| v.cursor);
@@ -531,6 +694,158 @@ fn event_loop<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+/// Cursor info (owned, works for both browse and search modes).
+struct CursorInfo {
+    id: String,
+    kind: nav::Kind,
+    label: String,
+}
+
+/// Refresh the tree + haystack after a side action mutates session
+/// state (spec §8: pin / kill / detach). Rebuilds the tree from the
+/// socket, preserves the cursor on the same object if it still
+/// exists, and re-runs the search query if search mode is active.
+fn refresh(
+    tree: &mut nav::Tree,
+    search_view: &mut Option<search::SearchView>,
+    haystack: &mut Vec<search::Leaf>,
+    socket_path: &str,
+) {
+    let new_root = source::build_tree(socket_path);
+    tree.reload(new_root);
+    *haystack = search::build_haystack(tree);
+    if let Some(v) = search_view.as_mut() {
+        v.requery(haystack);
+    }
+}
+
+/// Get the current cursor (browse or search mode) as owned info.
+fn current_cursor(
+    tree: &nav::Tree,
+    search: &Option<search::SearchView>,
+    haystack: &[search::Leaf],
+) -> Option<CursorInfo> {
+    if let Some(v) = search.as_ref() {
+        v.cursor_leaf(haystack).map(|l| CursorInfo {
+            id: l.id.clone(),
+            kind: l.kind,
+            label: l.label.clone(),
+        })
+    } else {
+        tree.cursor_row().map(|r| CursorInfo {
+            id: r.id.clone(),
+            kind: r.kind,
+            label: r.label.clone(),
+        })
+    }
+}
+
+/// Resolve a pin path for `^p` (spec §8): for a dir/zox leaf, the
+/// path; for a pane, the pane's cwd (fetched via `pane.get`); for
+/// an agent, the agent's cwd. None for non-pinnable kinds.
+fn pin_path_for(node: &CursorInfo, socket_path: &str) -> Option<String> {
+    match node.kind {
+        nav::Kind::Dir | nav::Kind::Zox => node.id.split_once(':').map(|(_, p)| p.to_string()),
+        nav::Kind::Pane => node.id.strip_prefix("session:pane:").and_then(|pid| {
+            crate::socket_client::request(
+                socket_path,
+                "pane.get",
+                serde_json::json!({"pane_id": pid}),
+            )
+            .ok()
+            .and_then(|r| {
+                r.get("pane")
+                    .and_then(|p| p.get("cwd"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+        }),
+        nav::Kind::Agent => agent_pane_id(node, socket_path).and_then(|pid| {
+            crate::socket_client::request(
+                socket_path,
+                "pane.get",
+                serde_json::json!({"pane_id": pid}),
+            )
+            .ok()
+            .and_then(|r| {
+                r.get("pane")
+                    .and_then(|p| p.get("cwd"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+        }),
+        _ => None,
+    }
+}
+
+/// Resolve the kill target (id + label) for `^d` (spec §8):
+/// pane → `pane.close`, tab → `tab.close`, workspace →
+/// `workspace.close`. None for non-killable kinds.
+fn kill_target(node: &CursorInfo) -> Option<(String, String)> {
+    match node.kind {
+        nav::Kind::Pane => node
+            .id
+            .strip_prefix("session:pane:")
+            .map(|pid| (pid.to_string(), format!("pane {}", node.label))),
+        nav::Kind::Tab => node
+            .id
+            .strip_prefix("session:tab:")
+            .map(|tid| (tid.to_string(), format!("tab {}", node.label))),
+        nav::Kind::Workspace => node
+            .id
+            .strip_prefix("session:ws:")
+            .map(|wid| (wid.to_string(), format!("workspace {}", node.label))),
+        _ => None,
+    }
+}
+
+/// Execute the kill via the right socket method.
+fn do_kill(socket_path: &str, node: &CursorInfo) -> Result<(), String> {
+    let (method, id_field, id) = match node.kind {
+        nav::Kind::Pane => (
+            "pane.close",
+            "pane_id",
+            node.id.strip_prefix("session:pane:").unwrap_or(&node.id),
+        ),
+        nav::Kind::Tab => (
+            "tab.close",
+            "tab_id",
+            node.id.strip_prefix("session:tab:").unwrap_or(&node.id),
+        ),
+        nav::Kind::Workspace => (
+            "workspace.close",
+            "workspace_id",
+            node.id.strip_prefix("session:ws:").unwrap_or(&node.id),
+        ),
+        _ => return Err("not killable".to_string()),
+    };
+    crate::socket_client::request(socket_path, method, serde_json::json!({ id_field: id }))
+        .map(|_| ())
+        .map_err(|e| format!("{method} failed: {e}"))
+}
+
+/// Resolve the pane id for an agent (via `agent.list` → pane_id).
+fn agent_pane_id(node: &CursorInfo, socket_path: &str) -> Option<String> {
+    let terminal_id = node.id.strip_prefix("agent:")?;
+    let Ok(r) = crate::socket_client::request(socket_path, "agent.list", serde_json::json!({}))
+    else {
+        return None;
+    };
+    r.get("agents")
+        .and_then(|v| v.as_array())
+        .and_then(|agents| {
+            agents.iter().find_map(|a| {
+                if a.get("terminal_id").and_then(|v| v.as_str()) == Some(terminal_id) {
+                    a.get("pane_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 /// Build a plugin action picker for `plugin_id` (spec §8.3):

@@ -7,6 +7,52 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 8 — Side actions (pin, kill, context alternates)
+
+- `^p` pin (spec §8): pin the selected dir (or the selected
+    pane's/agent's cwd) into Pinned dirs; writes
+    `~/.config/herdr/targets.toml`; stay open. Spec §8 amended:
+    `^p` is pin, not up-nav (up is ↑ arrow only; `^n` stays for
+    down) — the spec listed `^p` twice and the user resolved the
+    conflict in favour of pin.
+- `^d` kill (spec §8): kill the selected pane / tab / workspace.
+    First press shows an inline footer confirm ("kill <label>?
+    ^d confirm · any key cancel"); second `^d` confirms + kills;
+    any other key cancels. Stay open. Socket: `pane.close`,
+    `tab.close`, `workspace.close`.
+- `^r` restart command (spec §8.2): on a pane, send Ctrl+C to
+    interrupt the foreground process. Stay open. Socket:
+    `pane.send_keys` `["ctrl+c"]`.
+- `^c` interrupt agent (spec §8.2): on an agent, send Ctrl+C to
+    the agent's pane. Stay open. Socket: `agent.send_keys`
+    `{target: pane_id, keys: ["ctrl+c"]}`.
+- `^x` detach agent (spec §8.2): on an agent, release the agent
+    from its pane. Stay open. Socket: `pane.release_agent`
+    `{pane_id}`.
+- Footer hints: side-action keys shown per kind in browse mode
+    (`^p pin` on dir/zox/pane, `^d kill` on pane/ws/tab,
+    `^r interrupt` on pane, `^c interrupt`/`^x detach` on agent).
+- `write_pin` helper: appends a `[[pin]]` block to
+    `targets.toml`, idempotent (already-pinned path is a no-op),
+    slot = max+1.
+- **Live refresh after side actions**: every mutating side action
+    (`^p` pin, `^u` unpin, `^d` kill, `^r`/`^c` interrupt, `^x`
+    detach) rebuilds the tree + haystack from the socket so the
+    list reflects the new state immediately. `Tree::reload`
+    preserves the cursor on the same object if it still exists
+    (matched by id); if the node is gone (killed / detached /
+    unpinned), the cursor clamps to the nearest valid row. Search
+    mode re-queries too.
+- `^u` unpin (spec §8 amended): on a pinned dir (`Kind::Dir`),
+    remove it from `targets.toml` and renumber remaining slots
+    1..N (no gaps); stay open. Inert on zoxide entries
+    (`Kind::Zox`) and non-dir kinds. Footer hint: `^u unpin` on
+    pinned dirs only.
+- 7 new unit tests (parse round-trip, next-slot empty, next-slot
+    with existing, reload preserves cursor, reload clamps when
+    node gone, renumber after remove, unpin not-pinned no-op).
+    58 tests total.
+
 ### Phase 7 — Plugins provider + plugin action picker
 
 - `PluginsProvider` via `plugin.list` socket method (confirmed

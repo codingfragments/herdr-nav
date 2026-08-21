@@ -88,6 +88,7 @@ pub fn draw(
     template_picker: Option<(&[source::Template], usize)>,
     templates_exist: bool,
     plugin_action_picker: Option<(&str, &[(String, String)], usize)>,
+    kill_confirm: Option<(&str, &str)>,
 ) {
     let area = frame.area();
 
@@ -137,6 +138,7 @@ pub fn draw(
             cursor_kind,
             name_prompt,
             templates_exist,
+            kill_confirm,
         );
     }
 
@@ -528,7 +530,20 @@ fn draw_footer(
     cursor_kind: Option<Kind>,
     name_prompt: Option<(&str, &str)>,
     templates_exist: bool,
+    kill_confirm: Option<(&str, &str)>,
 ) {
+    // Kill confirm active: show the inline confirm prompt (spec §8).
+    if let Some((_id, label)) = kill_confirm {
+        let line = Line::from(vec![
+            Span::styled(" ⏎ ", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("kill {label}? ^d confirm · any key cancel"),
+                Style::default().fg(PEACH),
+            ),
+        ]);
+        frame.render_widget(line, area);
+        return;
+    }
     // Name prompt active: confirm/cancel hints.
     let (enter_hint, esc_hint) = if name_prompt.is_some() {
         ("create workspace", "cancel")
@@ -565,6 +580,69 @@ fn draw_footer(
             Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
         ));
         hints.push(Span::styled("template", Style::default().fg(SUBTEXT0)));
+    }
+    // Side-action hints (spec §8): ^p pin, ^d kill, ^r/^c/^x alternates.
+    // Shown per kind, only in browse mode (search mode keeps the footer
+    // minimal — the query is the focus).
+    if search.is_none() && name_prompt.is_none() {
+        match cursor_kind {
+            Some(Kind::Dir) => {
+                hints.push(Span::styled(
+                    "   ^p ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("pin   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled(
+                    "^u ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("unpin", Style::default().fg(SUBTEXT0)));
+            }
+            Some(Kind::Zox) => {
+                hints.push(Span::styled(
+                    "   ^p ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("pin", Style::default().fg(SUBTEXT0)));
+            }
+            Some(Kind::Pane) => {
+                hints.push(Span::styled(
+                    "   ^p ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("pin   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled(
+                    "^d ",
+                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("kill   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled(
+                    "^r ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("interrupt", Style::default().fg(SUBTEXT0)));
+            }
+            Some(Kind::Agent) => {
+                hints.push(Span::styled(
+                    "   ^c ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("interrupt   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled(
+                    "^x ",
+                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("detach", Style::default().fg(SUBTEXT0)));
+            }
+            Some(Kind::Workspace) | Some(Kind::Tab) => {
+                hints.push(Span::styled(
+                    "   ^d ",
+                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                ));
+                hints.push(Span::styled("kill", Style::default().fg(SUBTEXT0)));
+            }
+            _ => {}
+        }
     }
     frame.render_widget(
         Paragraph::new(Line::from(hints).style(Style::default().bg(MANTLE))),
