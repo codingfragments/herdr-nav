@@ -75,15 +75,13 @@ fn kind_color(kind: Kind) -> Color {
 pub fn draw(frame: &mut Frame, tree: &Tree) {
     let area = frame.area();
 
-    // Outer bordered frame. No bg fill — transparent so the terminal
-    // theme shows through; only the border glyphs are surface2.
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(SURFACE2));
-    let inner = outer.inner(area);
-    frame.render_widget(outer, area);
-
-    // title / search / rule / body / rule / footer
+    // No outer border — the Herdr popup window itself renders one
+    // (confirmed in the sister plugins: herdr-flash draws no outer
+    // border around the full area). Bands render directly into `area`.
+    //
+    // title / search / rule / body / rule / footer. The rules are
+    // 1-row `Block::default().borders(Borders::TOP)` bands — a
+    // thin `─` line in surface2, not a bulky filled band.
     let bands = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -94,7 +92,7 @@ pub fn draw(frame: &mut Frame, tree: &Tree) {
             Constraint::Length(1), // ─ rule
             Constraint::Length(1), // footer
         ])
-        .split(inner);
+        .split(area);
 
     draw_title_bar(frame, bands[0], tree);
     draw_search_bar(frame, bands[1]);
@@ -104,10 +102,14 @@ pub fn draw(frame: &mut Frame, tree: &Tree) {
     draw_footer(frame, bands[5]);
 }
 
-/// A full-width surface2 horizontal rule (spec §2 band separation).
+/// A thin full-width surface2 horizontal rule via a ratatui top
+/// border (spec §2 band separation). A 1-row `Block` with
+/// `Borders::TOP` — the border line occupies the row, no fill.
 fn draw_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(SURFACE2)),
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(SURFACE2)),
         area,
     );
 }
