@@ -115,9 +115,47 @@ impl Provider for SessionProvider {
         Preview::default()
     }
 
-    fn invoke(&self, _id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
-        // Phase 3: jump to pane (switch workspace + tab + focus pane).
-        Err("not implemented".to_string())
+    fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
+        // Phase 3: jump to the target. For a pane, `pane.focus` does the
+        // whole switch (workspace + tab + focus) in one call. For a
+        // workspace/tab node we focus the first pane under it (or the
+        // active one) — same invoke path.
+        let pane_id = id.strip_prefix("session:pane:").map(str::to_string);
+        match pane_id {
+            Some(pid) => {
+                let _ = crate::socket_client::request(
+                    &self.socket_path,
+                    "pane.focus",
+                    serde_json::json!({"pane_id": pid}),
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(crate::nav::Outcome::Close {
+                    toast: format!("jumped to pane {pid}"),
+                })
+            }
+            None => {
+                // Workspace/tab: focus the first pane under this node.
+                // Re-enumerate to find the node, then walk for its first pane.
+                let first_pane = self
+                    .enumerate()
+                    .ok()
+                    .and_then(|n| node_for(id, &n).and_then(first_pane_under));
+                match first_pane {
+                    Some(pid) => {
+                        let _ = crate::socket_client::request(
+                            &self.socket_path,
+                            "pane.focus",
+                            serde_json::json!({"pane_id": pid}),
+                        )
+                        .map_err(|e| e.to_string())?;
+                        Ok(crate::nav::Outcome::Close {
+                            toast: format!("switched to {id}"),
+                        })
+                    }
+                    None => Err(format!("no pane under {id}")),
+                }
+            }
+        }
     }
 }
 
@@ -273,6 +311,34 @@ fn tab_node(tab_id: &str, tab_name: &str, panes: &[&PaneRow], active_tab: &str) 
     }
 }
 
+/// Resolve a NodeId to its node by re-enumerating. (The tree is
+/// cheap to rebuild; this is only called on Enter, not per keystroke.)
+fn node_for<'a>(id: &str, root: &'a Node) -> Option<&'a Node> {
+    if root.id == id {
+        return Some(root);
+    }
+    for c in &root.children {
+        if let Some(n) = node_for(id, c) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// First pane id under a node (depth-first), or None. Returns an
+/// owned id so the caller doesn't borrow the transient tree.
+fn first_pane_under(node: &Node) -> Option<String> {
+    if node.kind == Kind::Pane {
+        return node.id.strip_prefix("session:pane:").map(str::to_string);
+    }
+    for c in &node.children {
+        if let Some(p) = first_pane_under(c) {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Build a `Pane` leaf.
 fn pane_leaf(pane_id: &str, label: &str) -> Node {
     Node {
@@ -414,5 +480,71 @@ mod tests {
         assert_eq!(root[4].label, "Plugins");
         // Every group is unavailable without a socket.
         assert!(root.iter().all(|n| n.meta == "unavailable"));
+    }
+
+    #[test]
+    fn first_pane_under_finds_pane() {
+        // A workspace → tab → pane tree; first_pane_under walks depth-first.
+        let pane = pane_leaf("w1:p1", "nvim");
+        let tab = Node {
+            id: "session:tab:t1".into(),
+            kind: Kind::Tab,
+            label: "t1".into(),
+            meta: String::new(),
+            crumbs: None,
+            children: vec![pane],
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        let ws = Node {
+            id: "session:ws:w1".into(),
+            kind: Kind::Workspace,
+            label: "w1".into(),
+            meta: String::new(),
+            crumbs: None,
+            children: vec![tab],
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        assert_eq!(first_pane_under(&ws), Some("w1:p1".to_string()));
+        // A workspace with no panes → None.
+        let empty_ws = Node {
+            id: "session:ws:w2".into(),
+            kind: Kind::Workspace,
+            label: "w2".into(),
+            meta: String::new(),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        assert_eq!(first_pane_under(&empty_ws), None);
+    }
+
+    #[test]
+    fn node_for_finds_by_id() {
+        let pane = pane_leaf("w1:p1", "nvim");
+        let session = Node {
+            id: "group:session".into(),
+            kind: Kind::Group,
+            label: "S".into(),
+            meta: String::new(),
+            crumbs: None,
+            children: vec![Node {
+                id: "session:ws:w1".into(),
+                kind: Kind::Workspace,
+                label: "w1".into(),
+                meta: String::new(),
+                crumbs: None,
+                children: vec![pane],
+                preview: Preview::default(),
+                actions: crate::nav::Actions::default(),
+            }],
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        assert!(node_for("session:ws:w1", &session).is_some());
+        assert!(node_for("session:pane:w1:p1", &session).is_some());
+        assert!(node_for("nope", &session).is_none());
     }
 }

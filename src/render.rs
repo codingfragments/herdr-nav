@@ -73,17 +73,15 @@ fn kind_color(kind: Kind) -> Color {
 
 /// Draw the whole popup (spec §2): four bands inside a bordered frame,
 /// with surface2 horizontal rules separating the bars from the body.
-pub fn draw(frame: &mut Frame, tree: &Tree, socket_path: &str, last_change: Option<Instant>) {
+pub fn draw(
+    frame: &mut Frame,
+    tree: &Tree,
+    socket_path: &str,
+    last_change: Option<Instant>,
+    flash_error: Option<&(String, String)>,
+) {
     let area = frame.area();
 
-    // No outer border and no title bar — the Herdr popup window
-    // itself renders both (its own border + the pane title "herdr
-    // switch" from herdr-plugin.toml), confirmed in the sister plugins.
-    // So the popup starts at the search bar.
-    //
-    // search / rule / body / rule / footer. The rules are thin
-    // `Block::default().borders(Borders::TOP)` bands — a `─` line
-    // in surface2, not a bulky filled band.
     let bands = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -97,7 +95,7 @@ pub fn draw(frame: &mut Frame, tree: &Tree, socket_path: &str, last_change: Opti
 
     draw_search_bar(frame, bands[0]);
     draw_rule(frame, bands[1]);
-    draw_body(frame, bands[2], tree, socket_path, last_change);
+    draw_body(frame, bands[2], tree, socket_path, last_change, flash_error);
     draw_rule(frame, bands[3]);
     draw_footer(frame, bands[4]);
 }
@@ -131,12 +129,13 @@ fn draw_body(
     tree: &Tree,
     socket_path: &str,
     last_change: Option<Instant>,
+    flash_error: Option<&(String, String)>,
 ) {
     // Body split: list 44% · vertical rule · preview 56% (spec §2).
     // Below 60 cols the preview is dropped and the list takes the full
     // width (spec §2; the toggle key lands in Phase 9).
     if area.width < 60 {
-        draw_list(frame, area, tree);
+        draw_list(frame, area, tree, flash_error);
         return;
     }
     let split = Layout::default()
@@ -148,7 +147,7 @@ fn draw_body(
         ])
         .split(area);
 
-    draw_list(frame, split[0], tree);
+    draw_list(frame, split[0], tree, flash_error);
     // Vertical rule — a thin `│` line via a ratatui LEFT border on
     // the 1-cell column (spec §2), not a filled surface2 bar.
     frame.render_widget(
@@ -166,7 +165,7 @@ fn draw_body(
     crate::preview::draw(frame, split[2], node.as_deref(), socket_path, last_change);
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree) {
+fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree, flash_error: Option<&(String, String)>) {
     let rows = tree.visible_rows();
     let h = area.height as usize;
 
@@ -199,7 +198,7 @@ fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree) {
         .enumerate()
         .skip(start)
         .take(list_h)
-        .map(|(i, row)| draw_row(i, row, i == tree.cursor))
+        .map(|(i, row)| draw_row(i, row, i == tree.cursor, flash_error))
         .collect();
 
     // No bg on the list paragraph — transparent so the terminal theme
@@ -224,7 +223,12 @@ fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree) {
     );
 }
 
-fn draw_row(_i: usize, row: &crate::nav::VisibleRow, selected: bool) -> Line<'static> {
+fn draw_row(
+    _i: usize,
+    row: &crate::nav::VisibleRow,
+    selected: bool,
+    flash_error: Option<&(String, String)>,
+) -> Line<'static> {
     let indent = "  ".repeat(row.depth);
     let twisty = match row.twisty {
         Twisty::Expanded => "▾ ",
@@ -234,7 +238,15 @@ fn draw_row(_i: usize, row: &crate::nav::VisibleRow, selected: bool) -> Line<'st
     let glyph = kind_glyph(row.kind);
     let glyph_color = kind_color(row.kind);
 
-    let label_color = if selected { TEXT } else { SUBTEXT0 };
+    // Error flash (spec §11): a row whose Enter failed flashes red.
+    let is_error = flash_error.is_some_and(|(id, _)| id == &row.id);
+    let label_color = if is_error {
+        RED
+    } else if selected {
+        TEXT
+    } else {
+        SUBTEXT0
+    };
 
     // Selection: a 2px left bar in the row's kind colour (spec §9). In a
     // cell TUI we render the first cell as a kind-coloured background
