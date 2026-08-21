@@ -1014,6 +1014,16 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
     let mut current = first_pane_id.to_string();
     for (i, child) in layout.panes.iter().enumerate() {
         if i > 0 {
+            // Focus `current` before splitting — herdr's pane.split
+            // targets the ACTIVE pane, not the pane_id you pass, so
+            // without focusing first the split lands on whatever pane
+            // happens to be active (often the previous sibling's left side),
+            // not the intended pane (confirmed live).
+            let _ = crate::socket_client::request(
+                socket,
+                "pane.focus",
+                serde_json::json!({"pane_id": &current}),
+            );
             // Split the current pane to create the next sibling.
             let direction = if layout.direction == "h" {
                 "down"
