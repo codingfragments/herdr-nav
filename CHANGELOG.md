@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 3 — Pane jump (the first real switch)
+
+- `Enter` is now the main action verb: on a pane leaf,
+    `SessionProvider::invoke` calls `pane.focus` (one socket call
+    switches workspace + tab + focuses the pane), the popup closes,
+    and a one-line toast shows in the host terminal via
+    `notification.show` ("jumped to pane <id>").
+- On a workspace/tab branch, `Enter` steps into it (focus the first
+    pane under it on a second Enter). `Enter` no longer toggles
+    branches — expand/collapse is `→`/`←`/`Space`/`Tab` only (spec
+    §8 amended: `Enter` is reserved for the action on every row).
+- Dead-target / provider error: the row flashes red, the popup
+    stays open, the query is kept (spec §11).
+- 2 new unit tests (first_pane_under, node_for). 25 tests total.
+
 ### Phase 2 — Preview pane (session kinds)
 
 - `Preview` four-region render (icon+title, subtitle, chips,

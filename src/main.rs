@@ -17,7 +17,7 @@ mod nav;
 mod preview;
 mod render;
 mod socket_client;
-mod source;
+pub mod source;
 
 use std::time::Duration;
 
@@ -125,11 +125,22 @@ fn event_loop<B: ratatui::backend::Backend>(
     // (spec §7.4). Any cursor-moving key updates this; the preview
     // stays stale-and-dimmed until the debounce window elapses.
     let mut last_cursor_change: Option<std::time::Instant> = None;
+    // The id + message of a row that failed on Enter (spec §11: flash
+    // red, refresh, keep the query). Cleared on the next cursor move.
+    let mut flash_error: Option<(String, String)> = None;
 
     loop {
         tree.ensure_cursor_valid();
         terminal
-            .draw(|frame| render::draw(frame, tree, socket_path, last_cursor_change))
+            .draw(|frame| {
+                render::draw(
+                    frame,
+                    tree,
+                    socket_path,
+                    last_cursor_change,
+                    flash_error.as_ref(),
+                )
+            })
             .map_err(|e| format!("draw: {e}"))?;
 
         if !event::poll(Duration::from_millis(250)).map_err(|e| format!("poll: {e}"))? {
@@ -176,16 +187,61 @@ fn event_loop<B: ratatui::backend::Backend>(
             }
             Right | Tab | Char(' ') => tree.expand_or_step(),
             Left => tree.collapse_or_parent(),
-            Enter => tree.toggle(),
+            Enter => {
+                // Phase 3: Enter is the main action verb (spec §8
+                // amended 2026-08-21: Enter no longer toggles
+                // branches — it runs the default action on every row;
+                // expand/collapse is →/←/Space/Tab only). On a leaf,
+                // invoke the provider; on a branch, step into it.
+                if let Some(row) = tree.cursor_row() {
+                    if row.is_leaf {
+                        match invoke_action(socket_path, &row.id) {
+                            Ok(nav::Outcome::Close { toast }) => {
+                                show_toast(socket_path, &toast);
+                                break;
+                            }
+                            Ok(nav::Outcome::Stay { toast }) => {
+                                show_toast(socket_path, &toast);
+                            }
+                            Err(e) => {
+                                // Target dies / provider error: flash the
+                                // row red, refresh, keep the query (spec §11).
+                                flash_error = Some((row.id.clone(), e));
+                            }
+                        }
+                    } else {
+                        tree.expand_or_step();
+                    }
+                }
+            }
             // Printable characters are inert in Phase 1 (search is Phase 4).
             _ => {}
         }
         if tree.cursor != before {
             last_cursor_change = Some(std::time::Instant::now());
+            flash_error = None;
         }
     }
 
     Ok(())
+}
+
+/// Invoke the default action on a node via its provider (Phase 3).
+/// Only the Session provider is real here; other groups' providers
+/// land in later phases and return "not implemented".
+fn invoke_action(socket_path: &str, id: &str) -> Result<nav::Outcome, String> {
+    use crate::nav::Provider;
+    let provider = source::SessionProvider::new(socket_path.to_string());
+    provider.invoke(&id.to_string(), nav::Act::Default)
+}
+
+/// Show a one-line toast in the host terminal via `notification.show`.
+fn show_toast(socket_path: &str, message: &str) {
+    let _ = socket_client::request(
+        socket_path,
+        "notification.show",
+        serde_json::json!({"title": "herdr-nav", "message": message, "duration_ms": 1500}),
+    );
 }
 
 fn main() {
