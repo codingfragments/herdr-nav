@@ -58,6 +58,14 @@ list of `panes`. Each child is one of:
 
 So a child is either a leaf (`command`) or a branch (`layout`).
 
+> **Schema caveat:** a pane child is **either** `command:` (leaf) **or**
+> `layout:` (nested split), not both. If a child has both keys,
+> `serde` matches the `Nested` variant (because it has `layout:`) and
+> silently ignores `command:`. This is a schema ambiguity, not a YAML
+> error — YAML itself is valid with both keys (each `- ` starts
+> a new list item), but the template schema treats them as
+> mutually exclusive. Use one or the other, never both.
+
 ### `cwd` resolution
 
 `cwd` is valid on three levels, most-specific wins:
