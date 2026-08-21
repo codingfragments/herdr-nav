@@ -37,6 +37,7 @@ keymap.
 | [`doc/keybinding.md`](doc/keybinding.md) | Shipped actions, binding a key, adding your own |
 | [`doc/navigation.md`](doc/navigation.md) | The two modes, the five groups, the switch action |
 | [`doc/query-filters.md`](doc/query-filters.md) | Query filter syntax: `@pane`, `kind:`, `!`, group scope, composition |
+| [`doc/templates.md`](doc/templates.md) | Workspace template file syntax: YAML, recursive layout, `cwd`, examples |
 | [`doc/use-cases.md`](doc/use-cases.md) | Worked walkthroughs |
 | [`doc/env-vars.md`](doc/env-vars.md) | The environment variables involved |
 

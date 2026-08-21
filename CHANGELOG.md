@@ -7,6 +7,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 6b — Templates (open-with-template picker, §8.4)
+
+- **Format change:** templates are now one YAML file per template in
+    `~/.config/herdr/templates/` (was a single `templates.toml`).
+    Recursive multi-level split layout, `cwd` at tab and pane level.
+    Added `serde-yaml` dependency.
+- `templates/*.yaml` parsing (one file per template; filename stem =
+    default name). Recursive `Layout`/`PaneNode` (leaf =
+    `command:`, branch = `layout:`).
+- `build_workspace_from_template` rewritten for the recursive
+    layout (depth-first split + send).
+- `^t` on a dir/zox opens a centered template-picker dialog listing
+    configured templates, one preselected: the template whose
+    `match` glob fits the path, else the configured `default`.
+- `Enter` builds a new workspace at that path from the highlighted
+    template, then focuses its first pane. `Esc` returns
+    to the switcher.
+- With no `templates/` dir: `^t` is unbound (inert).
+- Empty `command` = plain login shell (no nested shell).
+- `cwd` passed to `pane.split`/`tab.create` natively (no `cd`).
+- 5 new unit tests (YAML parse, nested layout, per-pane cwd, glob
+    preselect). 45 tests total.
+- Docs: `doc/query-filters.md` → Templates section with the full schema + examples.
+- Spec §8.4 amended (YAML, recursive layout, cwd).
+
 ### Phase 6a — Pinned + zoxide providers + "open new workspace"
 
 - `PinnedProvider` reads `~/.config/herdr/targets.toml` (slot order,

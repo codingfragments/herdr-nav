@@ -275,11 +275,12 @@ description and, where provided, a dry-run summary.
 
 ### Optional: open-with-template (§8.4)
 `^t` on a dir/zox entry opens the same selector shape listing configured
-workspace templates (`~/.config/herdr/templates.toml`), one preselected
+workspace templates (`~/.config/herdr/templates/*.yaml`, one YAML file per
+  template), one preselected
 (the template whose `match` pattern fits the path, else the configured
 default). Enter opens a new workspace/worktree-space at that path built
 from the highlighted template; Esc returns. **Optional:** with no
-`templates.toml`, `^t` is unbound and the footer omits the hint.
+`templates/` dir (or an empty one), `^t` is unbound and the footer omits the hint.
 
 ## 9. Theme — Catppuccin Macchiato (spec §9)
 
@@ -434,7 +435,7 @@ herdr-nav/
 │   ├── search.rs            # haystack build + subsequence match + score (§6)  [Phase 4]
 │   ├── preview.rs           # per-kind preview rendering (§7)                 [Phase 2+]
 │   └── render.rs            # bands, list rows, preview, footer, help (§2/§10)
-├── doc/{config-reference,env-vars,keybinding,navigation,query-filters,use-cases}.md
+├── doc/{config-reference,env-vars,keybinding,navigation,query-filters,templates,use-cases}.md
 ├── spec/                        # normative spec + prototype (frozen, see spec/README.md)
 └── tests/                   # fixtures + integration, per phase
 ```
@@ -560,19 +561,20 @@ host toast. The product's core verb.
 
 ### Phase 6b — Templates (open-with-template picker, §8.4)
 **Aspect:** the `^t` open-with-template feature for dirs and zoxide.
-- `templates.toml` parsing (tmuxinator-style: `name`, `match` globs,
+- `templates/*.yaml` parsing (one YAML file per template; recursive
+  multi-level split layout, cwd at tab and pane level).
   `default`, `tabs[]` with `name`/`panes`/`split`/`ratio`).
 - `^t` on a dir/zox entry opens the secondary-selector shape listing
   configured templates, one preselected: the template whose `match`
   pattern fits the path, else the configured `default`.
 - `Enter` opens a new workspace (or worktree-space) at that path built
   from the highlighted template; `Esc` returns to the switcher.
-- With no `templates.toml`: `^t` is unbound and the preview footer omits
+- With no `templates/` dir: `^t` is unbound and the preview footer omits
   the hint (spec §8.4). Plain `Enter` never consults templates beyond the
   default one.
 - **Exit criteria:** `^t` on a dir/zox opens the template picker with the
   right one preselected; Enter builds the workspace from it; Esc returns;
-  with no templates.toml the key is inert and the hint is gone.
+  with no templates/ dir the key is inert and the hint is gone.
 
 ### Phase 7 — Plugins provider + plugin action picker
 **Aspect:** the Plugins group + the secondary selector (§8.3).

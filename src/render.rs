@@ -28,6 +28,7 @@ use ratatui::Frame;
 
 use crate::nav::{Kind, Tree, Twisty};
 use crate::search::{Leaf, SearchView};
+use crate::source;
 
 // ── Minimal palette (spec §9, finalized in Phase 9) ───────────────────────────
 
@@ -84,6 +85,8 @@ pub fn draw(
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
     name_prompt: Option<(&str, &str)>,
+    template_picker: Option<(&[source::Template], usize)>,
+    templates_exist: bool,
 ) {
     let area = frame.area();
 
@@ -125,8 +128,15 @@ pub fn draw(
     // When the name-prompt dialog is active, suppress the footer —
     // the dialog carries its own ⏎/esc hints, so the overall footer
     // would duplicate them.
-    if name_prompt.is_none() {
-        draw_footer(frame, bands[4], search, cursor_kind, name_prompt);
+    if name_prompt.is_none() && template_picker.is_none() {
+        draw_footer(
+            frame,
+            bands[4],
+            search,
+            cursor_kind,
+            name_prompt,
+            templates_exist,
+        );
     }
 
     // Name-prompt dialog overlay (spec §8.2 amended): a centered
@@ -134,6 +144,12 @@ pub fn draw(
     // name. Rendered last so it sits above all bands.
     if let Some((label, name)) = name_prompt {
         draw_name_prompt(frame, area, label, name);
+    }
+
+    // Template-picker overlay (spec §8.4): a centered bordered
+    // dialog listing templates. Rendered last so it sits above all.
+    if let Some((templates, cursor)) = template_picker {
+        draw_template_picker(frame, area, templates, cursor);
     }
 }
 
@@ -503,6 +519,7 @@ fn draw_footer(
     search: Option<&SearchView>,
     cursor_kind: Option<Kind>,
     name_prompt: Option<(&str, &str)>,
+    templates_exist: bool,
 ) {
     // Name prompt active: confirm/cancel hints.
     let (enter_hint, esc_hint) = if name_prompt.is_some() {
@@ -513,7 +530,7 @@ fn draw_footer(
             None => (enter_action_label(cursor_kind, false), "close"),
         }
     };
-    let hints = vec![
+    let mut hints = vec![
         Span::styled(
             " ⏎ ",
             Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
@@ -530,6 +547,17 @@ fn draw_footer(
         ),
         Span::styled(esc_hint, Style::default().fg(SUBTEXT0)),
     ];
+    // ^t hint (spec §8.4): show only when templates exist AND the
+    // cursor is on a dir/zox (the kinds that support templates).
+    // Omitted when no templates/ dir — the key is unbound.
+    let is_dir = matches!(cursor_kind, Some(Kind::Dir) | Some(Kind::Zox));
+    if templates_exist && is_dir && name_prompt.is_none() {
+        hints.push(Span::styled(
+            "   ^t ",
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ));
+        hints.push(Span::styled("template", Style::default().fg(SUBTEXT0)));
+    }
     frame.render_widget(
         Paragraph::new(Line::from(hints).style(Style::default().bg(MANTLE))),
         area,
@@ -623,4 +651,75 @@ fn draw_name_prompt(frame: &mut Frame, area: Rect, _label: &str, name: &str) {
     frame.render_widget(Paragraph::new(label_line), body[0]);
     frame.render_widget(Paragraph::new(name_line), body[1]);
     frame.render_widget(Paragraph::new(hint), body[2]);
+}
+
+/// Centered template-picker dialog (spec §8.4). Lists the
+/// configured templates with the cursor highlighted; Enter builds,
+/// Esc returns. Sized to fit the template count.
+fn draw_template_picker(
+    frame: &mut Frame,
+    area: Rect,
+    templates: &[source::Template],
+    cursor: usize,
+) {
+    let n = templates.len() as u16;
+    // title border + one row per template + hint row + bottom border.
+    let h = (n + 3).min(area.height);
+    let w = 44u16;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SURFACE2))
+        .title(Span::styled(
+            " Open with template ",
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(MANTLE));
+    let inner = block.inner(dialog);
+    Clear.render(dialog, frame.buffer_mut());
+    block.render(dialog, frame.buffer_mut());
+
+    let mut rows: Vec<Line> = Vec::new();
+    for (i, t) in templates.iter().enumerate() {
+        let selected = i == cursor;
+        let mark = if selected { "▸ " } else { "  " };
+        let default_tag = if t.default { " (default)" } else { "" };
+        let style = if selected {
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(SUBTEXT0)
+        };
+        rows.push(
+            Line::from(vec![
+                Span::styled(mark.to_string(), style),
+                Span::styled(format!("{}{}", t.name, default_tag), style),
+            ])
+            .style(if selected {
+                Style::default().bg(SURFACE0)
+            } else {
+                Style::default().bg(MANTLE)
+            }),
+        );
+    }
+    rows.push(Line::raw(""));
+    rows.push(
+        Line::from(vec![
+            Span::styled(
+                " ⏎ ",
+                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("build   ", Style::default().fg(SUBTEXT0)),
+            Span::styled(
+                "esc ",
+                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("back", Style::default().fg(SUBTEXT0)),
+        ])
+        .style(Style::default().bg(MANTLE)),
+    );
+
+    frame.render_widget(Paragraph::new(rows), inner);
 }
