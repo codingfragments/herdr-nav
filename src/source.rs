@@ -972,14 +972,23 @@ pub fn build_workspace_from_template(
                 serde_json::json!({"workspace_id": ws_id, "cwd": tab_cwd}),
             )
             .map_err(|e| e.to_string())?;
-            (
-                r.get("root_pane")
-                    .and_then(|v| v.get("pane_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                true,
-            )
+            let new_root = r
+                .get("root_pane")
+                .and_then(|v| v.get("pane_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            // Focus the new tab's root pane before any splits —
+            // herdr's pane.split targets the ACTIVE pane in the ACTIVE tab,
+            // and tab.create does NOT make the new tab active (confirmed
+            // live), so without focusing first the split lands in the
+            // previous tab, creating an extra pane there.
+            let _ = crate::socket_client::request(
+                &socket,
+                "pane.focus",
+                serde_json::json!({"pane_id": &new_root}),
+            );
+            (new_root, true)
         };
         // Recursively build the tab's layout. The first pane is
         // the workspace's root pane (tab 0) or the new tab's root.
