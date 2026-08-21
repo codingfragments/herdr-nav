@@ -871,12 +871,17 @@ pub enum PaneNode {
     /// A nested split.
     Nested { layout: Layout },
     /// A leaf pane. `command` empty/omitted = plain
-    /// login shell (no nested shell).
+    /// login shell (no nested shell). `name` is an
+    /// optional pane label (set via `pane.rename` after
+    /// the split; herdr's pane.split does not accept a
+    /// label directly — confirmed live).
     Pane {
         #[serde(default)]
         command: Option<String>,
         #[serde(default)]
         cwd: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
     },
 }
 
@@ -1083,6 +1088,7 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
             PaneNode::Pane {
                 command,
                 cwd: pane_cwd,
+                name,
             } => {
                 // The split (i > 0) already passed child_cwd; for i == 0,
                 // the first pane started in the tab/workspace cwd. If the
@@ -1107,6 +1113,16 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
                             serde_json::json!({"pane_id": current, "text": format!("{cmd}\n")}),
                         );
                     }
+                }
+                // Pane name (spec §8.4): herdr's pane.split does not
+                // accept a label, so set it via pane.rename after
+                // the split (confirmed live).
+                if let Some(n) = name {
+                    let _ = crate::socket_client::request(
+                        socket,
+                        "pane.rename",
+                        serde_json::json!({"pane_id": &current, "label": n}),
+                    );
                 }
             }
             PaneNode::Nested { layout: nested } => {

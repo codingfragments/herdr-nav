@@ -54,6 +54,7 @@ list of `panes`. Each child is one of:
 | Child | Meaning |
 | --- | --- |
 | `command: "..."` | a leaf pane running that command. Empty/omitted = plain login shell (no nested shell). |
+| `name: "..."` | optional pane label (set via `pane.rename`; herdr's `pane.split` doesn't accept a label). |
 | `layout: { ... }` | a nested split (recursive — same shape). |
 
 So a child is either a leaf (`command`) or a branch (`layout`).
