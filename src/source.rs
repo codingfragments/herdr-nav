@@ -928,15 +928,20 @@ pub fn build_workspace_from_template(
                 true,
             )
         };
-        // Send the first pane's command.
+        // Send the first pane's command. An empty command = plain
+        // shell pane (the login shell herdr configured) —
+        // don't send anything, so no nested shell.
         if let Some(cmd) = tab.panes.first() {
-            let _ = crate::socket_client::request(
-                &socket,
-                "pane.send_text",
-                serde_json::json!({"pane_id": pane_id, "text": format!("{cmd}\n")}),
-            );
+            if !cmd.is_empty() {
+                let _ = crate::socket_client::request(
+                    &socket,
+                    "pane.send_text",
+                    serde_json::json!({"pane_id": pane_id, "text": format!("{cmd}\n")}),
+                );
+            }
         }
-        // Split additional panes.
+        // Split additional panes. An empty command = plain
+        // shell pane (skip the send).
         let mut current_pane = pane_id;
         for (_pane_i, cmd) in tab.panes.iter().enumerate().skip(1) {
             let direction = if tab.split == "h" { "down" } else { "right" };
@@ -957,11 +962,13 @@ pub fn build_workspace_from_template(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let _ = crate::socket_client::request(
-                &socket,
-                "pane.send_text",
-                serde_json::json!({"pane_id": current_pane, "text": format!("{cmd}\n")}),
-            );
+            if !cmd.is_empty() {
+                let _ = crate::socket_client::request(
+                    &socket,
+                    "pane.send_text",
+                    serde_json::json!({"pane_id": current_pane, "text": format!("{cmd}\n")}),
+                );
+            }
         }
     }
     // Restore focus to the pane that was focused before the build
