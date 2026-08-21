@@ -16,6 +16,7 @@ mod config;
 mod nav;
 mod preview;
 mod render;
+mod search;
 mod socket_client;
 pub mod source;
 
@@ -121,13 +122,15 @@ fn event_loop<B: ratatui::backend::Backend>(
     socket_path: &str,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
-    // Tracks when the cursor last moved, for the 60ms preview debounce
-    // (spec §7.4). Any cursor-moving key updates this; the preview
-    // stays stale-and-dimmed until the debounce window elapses.
     let mut last_cursor_change: Option<std::time::Instant> = None;
-    // The id + message of a row that failed on Enter (spec §11: flash
-    // red, refresh, keep the query). Cleared on the next cursor move.
     let mut flash_error: Option<(String, String)> = None;
+
+    // Haystack built once per invocation (spec §6.1): DFS, leaves
+    // only, group order. Stable for the whole popup (providers
+    // don't refresh mid-invocation in Phase 4).
+    let haystack = search::build_haystack(tree);
+    // Search view: None = browse mode, Some = search mode (query non-empty).
+    let mut search_view: Option<search::SearchView> = None;
 
     loop {
         tree.ensure_cursor_valid();
@@ -136,6 +139,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                 render::draw(
                     frame,
                     tree,
+                    &haystack,
+                    search_view.as_ref(),
                     socket_path,
                     last_cursor_change,
                     flash_error.as_ref(),
@@ -162,40 +167,103 @@ fn event_loop<B: ratatui::backend::Backend>(
         }
         last_key = Some((key, std::time::Instant::now()));
 
+        let cursor_before = search_view.as_ref().map_or(tree.cursor, |v| v.cursor);
+        let is_search = search_view.is_some();
+
         use KeyCode::*;
-        let before = tree.cursor;
         match key.code {
-            Esc => break,
-            // Bare arrows move the cursor (no modifier guard — the
-            // guard below would reject a plain Down/Up).
-            Down => tree.move_down(),
-            Up => tree.move_up(),
-            // ^n / ^p are the same motion (spec §8).
+            Esc => {
+                // Two-stage Esc (spec §3): search → clear query
+                // (back to browse); browse → close.
+                if is_search {
+                    search_view = None;
+                } else {
+                    break;
+                }
+            }
+            Down => {
+                if let Some(v) = search_view.as_mut() {
+                    v.move_down();
+                } else {
+                    tree.move_down();
+                }
+            }
+            Up => {
+                if let Some(v) = search_view.as_mut() {
+                    v.move_up();
+                } else {
+                    tree.move_up();
+                }
+            }
             Char('n')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                tree.move_down()
+                if let Some(v) = search_view.as_mut() {
+                    v.move_down();
+                } else {
+                    tree.move_down();
+                }
             }
             Char('p')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                tree.move_up()
+                if let Some(v) = search_view.as_mut() {
+                    v.move_up();
+                } else {
+                    tree.move_up();
+                }
             }
-            Right | Tab | Char(' ') => tree.expand_or_step(),
-            Left => tree.collapse_or_parent(),
+            Backspace => {
+                // Search only: delete last char; empty → browse
+                // (spec §3). Inert in browse.
+                if let Some(v) = search_view.as_mut() {
+                    v.query.pop();
+                    if v.query.is_empty() {
+                        search_view = None;
+                    } else {
+                        v.requery(&haystack);
+                    }
+                }
+            }
+            Right | Tab | Char(' ') => {
+                // In search mode, →/Tab are inert; Space types a
+                // space (spec §8). In browse, expand/step.
+                if is_search {
+                    if let Some(v) = search_view.as_mut() {
+                        if key.code == Char(' ') {
+                            v.query.push(' ');
+                            v.requery(&haystack);
+                        }
+                    }
+                } else {
+                    tree.expand_or_step();
+                }
+            }
+            Left => {
+                // Inert in search (spec §8).
+                if !is_search {
+                    tree.collapse_or_parent();
+                }
+            }
             Enter => {
-                // Phase 3: Enter is the main action verb (spec §8
-                // amended 2026-08-21: Enter no longer toggles
-                // branches — it runs the default action on every row;
-                // expand/collapse is →/←/Space/Tab only). On a leaf,
-                // invoke the provider; on a branch, step into it.
-                if let Some(row) = tree.cursor_row() {
-                    if row.is_leaf {
-                        match invoke_action(socket_path, &row.id) {
+                // The node id to invoke on: in search, the cursor
+                // leaf; in browse, the cursor row.
+                let leaf_id = search_view
+                    .as_ref()
+                    .and_then(|v| v.cursor_leaf(&haystack))
+                    .map(|l| l.id.clone())
+                    .or_else(|| tree.cursor_row().map(|r| r.id.clone()));
+                let is_leaf = match &search_view {
+                    Some(v) => v.cursor_leaf(&haystack).is_some(),
+                    None => tree.cursor_row().is_some_and(|r| r.is_leaf),
+                };
+                if is_leaf {
+                    if let Some(id) = leaf_id {
+                        match invoke_action(socket_path, &id) {
                             Ok(nav::Outcome::Close { toast }) => {
                                 show_toast(socket_path, &toast);
                                 break;
@@ -204,20 +272,36 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 show_toast(socket_path, &toast);
                             }
                             Err(e) => {
-                                // Target dies / provider error: flash the
-                                // row red, refresh, keep the query (spec §11).
-                                flash_error = Some((row.id.clone(), e));
+                                flash_error = Some((id, e));
                             }
                         }
-                    } else {
-                        tree.expand_or_step();
+                    }
+                } else if !is_search {
+                    // Branch in browse → step into it.
+                    tree.expand_or_step();
+                }
+            }
+            Char(c) if c.is_ascii_graphic() && key.modifiers.is_empty() => {
+                // Printable char → enter search (or append), re-rank,
+                // cursor → 0 (spec §3). No modifiers — ^n/^p are
+                // handled above.
+                match search_view.as_mut() {
+                    Some(v) => {
+                        v.query.push(c);
+                        v.requery(&haystack);
+                    }
+                    None => {
+                        let mut v = search::view(&haystack, c.to_string());
+                        v.cursor = 0;
+                        search_view = Some(v);
                     }
                 }
             }
-            // Printable characters are inert in Phase 1 (search is Phase 4).
             _ => {}
         }
-        if tree.cursor != before {
+
+        let cursor_after = search_view.as_ref().map_or(tree.cursor, |v| v.cursor);
+        if cursor_after != cursor_before {
             last_cursor_change = Some(std::time::Instant::now());
             flash_error = None;
         }

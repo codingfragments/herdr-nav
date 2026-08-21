@@ -27,6 +27,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::nav::{Kind, Tree, Twisty};
+use crate::search::{Leaf, SearchView};
 
 // ── Minimal palette (spec §9, finalized in Phase 9) ───────────────────────────
 
@@ -76,6 +77,8 @@ fn kind_color(kind: Kind) -> Color {
 pub fn draw(
     frame: &mut Frame,
     tree: &Tree,
+    haystack: &[Leaf],
+    search: Option<&SearchView>,
     socket_path: &str,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
@@ -93,11 +96,20 @@ pub fn draw(
         ])
         .split(area);
 
-    draw_search_bar(frame, bands[0]);
+    draw_search_bar(frame, bands[0], search);
     draw_rule(frame, bands[1]);
-    draw_body(frame, bands[2], tree, socket_path, last_change, flash_error);
+    draw_body(
+        frame,
+        bands[2],
+        tree,
+        haystack,
+        search,
+        socket_path,
+        last_change,
+        flash_error,
+    );
     draw_rule(frame, bands[3]);
-    draw_footer(frame, bands[4]);
+    draw_footer(frame, bands[4], search);
 }
 
 /// A thin full-width surface2 horizontal rule via a ratatui top
@@ -112,21 +124,37 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
     );
 }
 
-fn draw_search_bar(frame: &mut Frame, area: Rect) {
-    // Phase 1: query is empty; typing is inert (search mode is Phase 4).
+fn draw_search_bar(frame: &mut Frame, area: Rect, search: Option<&SearchView>) {
     let prompt = Span::styled(
         "❯ ",
         Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
     );
-    let placeholder = Span::styled("type to search…", Style::default().fg(SURFACE2));
-    let line = Line::from(vec![prompt, placeholder]).style(Style::default().bg(MANTLE));
+    let line = match search {
+        Some(v) => {
+            // Show the live query + a block caret.
+            Line::from(vec![
+                prompt,
+                Span::raw(v.query.clone()),
+                Span::styled("▮", Style::default().fg(MAUVE)),
+            ])
+            .style(Style::default().bg(MANTLE))
+        }
+        None => Line::from(vec![
+            prompt,
+            Span::styled("type to search…", Style::default().fg(SURFACE2)),
+        ])
+        .style(Style::default().bg(MANTLE)),
+    };
     frame.render_widget(Paragraph::new(line), area);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_body(
     frame: &mut Frame,
     area: Rect,
     tree: &Tree,
+    haystack: &[Leaf],
+    search: Option<&SearchView>,
     socket_path: &str,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
@@ -135,7 +163,7 @@ fn draw_body(
     // Below 60 cols the preview is dropped and the list takes the full
     // width (spec §2; the toggle key lands in Phase 9).
     if area.width < 60 {
-        draw_list(frame, area, tree, flash_error);
+        draw_list_or_search(frame, area, tree, haystack, search, flash_error);
         return;
     }
     let split = Layout::default()
@@ -147,7 +175,7 @@ fn draw_body(
         ])
         .split(area);
 
-    draw_list(frame, split[0], tree, flash_error);
+    draw_list_or_search(frame, split[0], tree, haystack, search, flash_error);
     // Vertical rule — a thin `│` line via a ratatui LEFT border on
     // the 1-cell column (spec §2), not a filled surface2 bar.
     frame.render_widget(
@@ -156,13 +184,34 @@ fn draw_body(
             .border_style(Style::default().fg(SURFACE2)),
         split[1],
     );
-    // Preview for the cursor node (spec §7). Look up the node via the
-    // cursor's visible-row path so the preview reads the live tree.
-    let node = tree
-        .cursor_row()
-        .and_then(|r| tree.node_at(&r.path))
-        .map(std::borrow::Cow::Borrowed);
+    // Preview for the cursor node (spec §7). In browse, the tree
+    // cursor's path; in search, the search cursor leaf's path.
+    let node = match search {
+        Some(v) => v
+            .cursor_leaf(haystack)
+            .and_then(|l| tree.node_at(&l.path))
+            .map(std::borrow::Cow::Borrowed),
+        None => tree
+            .cursor_row()
+            .and_then(|r| tree.node_at(&r.path))
+            .map(std::borrow::Cow::Borrowed),
+    };
     crate::preview::draw(frame, split[2], node.as_deref(), socket_path, last_change);
+}
+
+/// Dispatch to the browse tree list or the search flat list.
+fn draw_list_or_search(
+    frame: &mut Frame,
+    area: Rect,
+    tree: &Tree,
+    haystack: &[Leaf],
+    search: Option<&SearchView>,
+    flash_error: Option<&(String, String)>,
+) {
+    match search {
+        Some(v) => draw_search_list(frame, area, haystack, v, flash_error),
+        None => draw_list(frame, area, tree, flash_error),
+    }
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree, flash_error: Option<&(String, String)>) {
@@ -221,6 +270,137 @@ fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree, flash_error: Option<&(S
         ),
         strip_area,
     );
+}
+
+/// Search-mode flat list (spec §3.2/§6.4): one row per matched leaf,
+/// breadcrumb prefix dimmed, matched chars peach+bold, label subtext0
+/// (or text on the selected row). Status strip: `flat leaves ·
+/// fuzzy` + `matches/total`.
+fn draw_search_list(
+    frame: &mut Frame,
+    area: Rect,
+    haystack: &[Leaf],
+    view: &SearchView,
+    flash_error: Option<&(String, String)>,
+) {
+    let h = area.height as usize;
+    let (list_area, strip_area) = if h > 1 {
+        let s = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        (s[0], s[1])
+    } else {
+        (area, Rect::ZERO)
+    };
+
+    let list_h = list_area.height as usize;
+    let mut start = 0;
+    if list_h > 0 && view.cursor >= list_h {
+        start = view.cursor + 1 - list_h;
+    }
+
+    let visible: Vec<Line> = view
+        .matches
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(list_h)
+        .map(|(i, m)| {
+            let leaf = &haystack[m.index];
+            draw_search_row(leaf, m, i == view.cursor, flash_error)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(visible), list_area);
+
+    // Status strip: scope left, matches/total right (spec §2).
+    let scope = Span::styled(" flat leaves · fuzzy ", Style::default().fg(SURFACE2));
+    let pos = Span::styled(
+        format!(" {}/{} ", view.matches.len(), haystack.len()),
+        Style::default().fg(SUBTEXT0),
+    );
+    frame.render_widget(
+        Paragraph::new(
+            Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(MANTLE)),
+        ),
+        strip_area,
+    );
+}
+
+/// One search row (spec §3.2/§6.4/§10): breadcrumb prefix dimmed,
+/// matched chars peach+bold, label subtext0 (or text on selected).
+/// Match indices are character positions in `leaf.match_text`.
+fn draw_search_row(
+    leaf: &Leaf,
+    m: &crate::search::ScoredMatch,
+    selected: bool,
+    flash_error: Option<&(String, String)>,
+) -> Line<'static> {
+    let is_error = flash_error.is_some_and(|(id, _)| id == &leaf.id);
+    let glyph = kind_glyph(leaf.kind);
+    let glyph_color = kind_color(leaf.kind);
+
+    let label_color = if is_error {
+        RED
+    } else if selected {
+        TEXT
+    } else {
+        SUBTEXT0
+    };
+    let bar = if selected {
+        Span::styled(" ", Style::default().bg(glyph_color))
+    } else {
+        Span::raw(" ")
+    };
+
+    // Build the match-text runs: crumb prefix (dimmed surface2) +
+    // label (subtext0/text), with matched chars overlaid peach+bold.
+    let matched: std::collections::HashSet<u32> = m.indices.iter().copied().collect();
+    let chars: Vec<char> = leaf.match_text.chars().collect();
+    let crumb_end = leaf.crumb_prefix_len;
+
+    let mut spans: Vec<Span<'static>> = vec![
+        bar,
+        Span::styled(
+            format!("{glyph} "),
+            Style::default()
+                .fg(glyph_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    let mut run = String::new();
+    let mut run_style = Style::default();
+    let flush = |run: &mut String, style: Style, spans: &mut Vec<Span<'static>>| {
+        if !run.is_empty() {
+            spans.push(Span::styled(std::mem::take(run), style));
+        }
+    };
+    for (i, ch) in chars.iter().enumerate() {
+        let is_matched = matched.contains(&(i as u32));
+        let is_crumb = i < crumb_end;
+        let style = if is_matched {
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD)
+        } else if is_crumb {
+            Style::default().fg(SURFACE2)
+        } else {
+            Style::default().fg(label_color)
+        };
+        // Coalesce: if same style as the current run, append; else flush.
+        if run_style != style {
+            flush(&mut run, run_style, &mut spans);
+            run_style = style;
+        }
+        run.push(*ch);
+    }
+    flush(&mut run, run_style, &mut spans);
+
+    let line_style = if selected {
+        Style::default().bg(SURFACE0)
+    } else {
+        Style::default()
+    };
+    Line::from(spans).style(line_style)
 }
 
 fn draw_row(
@@ -290,29 +470,29 @@ fn draw_row(
     Line::from(spans).style(line_style)
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect) {
+fn draw_footer(frame: &mut Frame, area: Rect, search: Option<&SearchView>) {
     // Mode-aware hints (spec §8). Browse: ⏎ open/expand, esc close.
+    // Search: ⏎ run default action, esc clear.
+    let (enter_hint, esc_hint) = match search {
+        Some(_) => ("run default action", "clear"),
+        None => ("open/expand", "close"),
+    };
     let hints = vec![
         Span::styled(
             " ⏎ ",
             Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("open/expand", Style::default().fg(SUBTEXT0)),
+        Span::styled(enter_hint, Style::default().fg(SUBTEXT0)),
         Span::styled(
             "   ↑↓ ",
             Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
         ),
         Span::styled("move", Style::default().fg(SUBTEXT0)),
         Span::styled(
-            "   →← ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("expand/collapse", Style::default().fg(SUBTEXT0)),
-        Span::styled(
             "   esc ",
             Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("close", Style::default().fg(SUBTEXT0)),
+        Span::styled(esc_hint, Style::default().fg(SUBTEXT0)),
     ];
     frame.render_widget(
         Paragraph::new(Line::from(hints).style(Style::default().bg(MANTLE))),
