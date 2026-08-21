@@ -155,14 +155,19 @@ fn event_loop<B: ratatui::backend::Backend>(
         let before = tree.cursor;
         match key.code {
             Esc => break,
-            Down | Char('n')
+            // Bare arrows move the cursor (no modifier guard — the
+            // guard below would reject a plain Down/Up).
+            Down => tree.move_down(),
+            Up => tree.move_up(),
+            // ^n / ^p are the same motion (spec §8).
+            Char('n')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 tree.move_down()
             }
-            Up | Char('p')
+            Char('p')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
