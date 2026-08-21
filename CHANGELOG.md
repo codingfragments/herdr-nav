@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 2 — Preview pane (session kinds)
+
+- `Preview` four-region render (icon+title, subtitle, chips,
+    body_label+body, action+alt) per spec §7. Resolution debounced
+    60ms; stale-and-dim while resolving (spec §7.4).
+- Previews for the Session kinds: group (roster + role line),
+    workspace/tab (child inventory, active marked), pane (last-N
+    scrollback via `pane.read`, ANSI colour preserved via
+    `ansi-to-tui`). Footer names the (still-inert) default action.
+- Preview updates on every cursor move; the cursor-change instant
+    drives the debounce in the event loop.
+- 5 new unit tests (pane id strip, group roster, unavailable chip,
+    workspace active mark, ANSI plain fallback). 19 tests total.
+
 ### Phase 1 — Popup shell + Session tree browse
 
 - Four bands (title/search/body/footer) at 80%×80%, clamped to 100×34;

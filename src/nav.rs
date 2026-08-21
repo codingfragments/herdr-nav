@@ -109,7 +109,9 @@ pub struct Preview {
     pub subtitle: String,
     pub chips: Vec<Chip>,
     pub body_label: &'static str,
-    pub body: Vec<String>,
+    /// Pre-rendered monospace lines, ANSI-styled for pane scrollback.
+    /// Clipped at the pane height — never scrollable (spec §7.4).
+    pub body: Vec<ratatui::text::Line<'static>>,
     pub action: String,
     pub alt: String,
 }
