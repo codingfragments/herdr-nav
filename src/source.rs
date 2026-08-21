@@ -10,6 +10,7 @@
 //! (Agents → 5, Pinned+zoxide → 6a, Plugins → 7).
 
 use crate::nav::{Group, Kind, Node, NodeId, Preview, Provider};
+use serde::Deserialize;
 
 /// Build the five group subtrees in spec §4 fixed order, using the
 /// registered providers. A provider that fails leaves its group row in
@@ -792,6 +793,213 @@ fn tab_node(tab_id: &str, tab_name: &str, panes: &[&PaneRow], active_tab: &str) 
     }
 }
 
+// ── Templates (§8.4) ────────────────────────────────────────────────────
+
+/// A workspace template (spec §8.4): tmuxinator-style tabs/
+/// panes/splits/startup commands. Parsed from
+/// `~/.config/herdr/templates.toml` via the `toml` crate.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Template {
+    pub name: String,
+    /// Glob patterns that auto-preselect this template when the
+    /// target path matches (spec §8.4).
+    #[serde(default, rename = "match")]
+    pub match_globs: Vec<String>,
+    /// `default = true` — the fallback when no match glob fits.
+    #[serde(default)]
+    pub default: bool,
+    pub tabs: Vec<TemplateTab>,
+}
+
+/// One tab in a template.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TemplateTab {
+    pub name: String,
+    /// Startup commands, one per pane.
+    #[serde(default)]
+    pub panes: Vec<String>,
+    /// `"v"` (vertical/side-by-side) or `"h"` (horizontal/stacked).
+    #[serde(default = "default_split")]
+    pub split: String,
+    /// Split ratio (0–100). 0 = even.
+    #[serde(default)]
+    pub ratio: u32,
+}
+
+/// Read `~/.config/herdr/templates.toml` → `Vec<Template>`. Empty
+/// if missing or malformed (no crash). Spec §8.4: with no
+/// templates.toml, `^t` is unbound.
+pub fn read_templates_toml() -> Vec<Template> {
+    let Some(dir) = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{h}/.config/herdr"))
+    else {
+        return Vec::new();
+    };
+    let path = format!("{dir}/templates.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    parse_templates_toml(&content)
+}
+
+/// Parse `templates.toml` content → `Vec<Template>` via the `toml` crate.
+fn default_split() -> String {
+    "v".to_string()
+}
+
+fn parse_templates_toml(content: &str) -> Vec<Template> {
+    #[derive(Deserialize)]
+    struct Templates {
+        template: Vec<Template>,
+    }
+    match toml::from_str::<Templates>(content) {
+        Ok(t) => t
+            .template
+            .into_iter()
+            .filter(|t| !t.name.is_empty())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Build a workspace from a template at `path` (spec §8.4):
+/// create the workspace, then for each tab, split panes and send
+/// startup commands. Returns the first pane's id so the caller
+/// can focus it.
+pub fn build_workspace_from_template(
+    path: &str,
+    name: &str,
+    template: &Template,
+) -> Result<Option<String>, String> {
+    let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+    // Create the workspace (plain; worktree is handled by the caller).
+    let resp = crate::socket_client::request(
+        &socket,
+        "workspace.create",
+        serde_json::json!({"cwd": path, "label": name}),
+    )
+    .map_err(|e| e.to_string())?;
+    let ws_id = resp
+        .get("workspace")
+        .and_then(|v| v.get("workspace_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let first_pane = resp
+        .get("root_pane")
+        .and_then(|v| v.get("pane_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    for (tab_i, tab) in template.tabs.iter().enumerate() {
+        // The first tab uses the workspace's initial pane; later
+        // tabs need tab.create.
+        let (pane_id, _new_tab) = if tab_i == 0 {
+            (first_pane.clone().unwrap_or_default(), false)
+        } else {
+            let r = crate::socket_client::request(
+                &socket,
+                "tab.create",
+                serde_json::json!({"workspace_id": ws_id}),
+            )
+            .map_err(|e| e.to_string())?;
+            (
+                r.get("root_pane")
+                    .and_then(|v| v.get("pane_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                true,
+            )
+        };
+        // Send the first pane's command.
+        if let Some(cmd) = tab.panes.first() {
+            let _ = crate::socket_client::request(
+                &socket,
+                "pane.send_text",
+                serde_json::json!({"pane_id": pane_id, "text": format!("{cmd}\n")}),
+            );
+        }
+        // Split additional panes.
+        let mut current_pane = pane_id;
+        for (_pane_i, cmd) in tab.panes.iter().enumerate().skip(1) {
+            let direction = if tab.split == "h" { "down" } else { "right" };
+            let ratio = if tab.ratio > 0 {
+                tab.ratio as f64 / 100.0
+            } else {
+                0.5
+            };
+            let r = crate::socket_client::request(
+                &socket,
+                "pane.split",
+                serde_json::json!({"pane_id": current_pane, "direction": direction, "ratio": ratio}),
+            )
+            .map_err(|e| e.to_string())?;
+            current_pane = r
+                .get("pane")
+                .and_then(|v| v.get("pane_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let _ = crate::socket_client::request(
+                &socket,
+                "pane.send_text",
+                serde_json::json!({"pane_id": current_pane, "text": format!("{cmd}\n")}),
+            );
+        }
+    }
+    Ok(first_pane)
+}
+
+/// Preselect the template whose `match` glob fits `path`, else the
+/// configured `default` (spec §8.4). Falls back to 0.
+pub fn preselect_template(templates: &[Template], path: &str) -> usize {
+    // First: a match glob fits.
+    for (i, t) in templates.iter().enumerate() {
+        for glob in &t.match_globs {
+            if glob_match(glob, path) {
+                return i;
+            }
+        }
+    }
+    // Else: the default template.
+    for (i, t) in templates.iter().enumerate() {
+        if t.default {
+            return i;
+        }
+    }
+    0
+}
+
+/// Minimal glob match: `**` matches any sequence, `*` matches
+/// within a path segment. Good enough for template `match` patterns.
+fn glob_match(glob: &str, path: &str) -> bool {
+    // `**/Cargo.toml` → `**` matches zero-or-more path segments,
+    // so it matches both `/Users/foo/Cargo.toml` and `Cargo.toml`.
+    if let Some(rest) = glob.strip_prefix("**") {
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        return path.ends_with(rest);
+    }
+    // `*` → matches any chars within a segment.
+    if glob.contains('*') {
+        let parts: Vec<&str> = glob.split('*').collect();
+        let mut idx = 0;
+        for (i, part) in parts.iter().enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+            match path[idx..].find(part) {
+                Some(pos) => idx += pos + part.len(),
+                None => return false,
+            }
+            let _ = i;
+        }
+        return true;
+    }
+    path == glob
+}
+
 /// Resolve a NodeId to its node by re-enumerating. (The tree is
 /// cheap to rebuild; this is only called on Enter, not per keystroke.)
 fn node_for<'a>(id: &str, root: &'a Node) -> Option<&'a Node> {
@@ -1231,5 +1439,71 @@ mod name_default_tests {
         assert_eq!(workspace_name_default("/trailing/"), "trailing");
         assert_eq!(workspace_name_default("/"), "workspace");
         assert_eq!(workspace_name_default("bare"), "bare");
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    #[test]
+    fn parse_templates_toml_basic() {
+        let toml = r#"
+[[template]]
+name = "rust-dev"
+match = ["**/Cargo.toml"]
+tabs = [
+  { name = "editor", panes = ["nvim .", "cargo watch -x test"], split = "v", ratio = 60 },
+  { name = "shell", panes = ["zsh"] },
+]
+
+[[template]]
+name = "plain"
+default = true
+tabs = [{ name = "shell", panes = ["zsh"] }]
+"#;
+        let t = parse_templates_toml(toml);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].name, "rust-dev");
+        assert!(t[0].match_globs.contains(&"**/Cargo.toml".to_string()));
+        assert!(!t[0].default);
+        assert_eq!(t[0].tabs.len(), 2);
+        assert_eq!(
+            t[0].tabs[0].panes,
+            vec!["nvim .".to_string(), "cargo watch -x test".to_string()]
+        );
+        assert_eq!(t[0].tabs[0].split, "v");
+        assert_eq!(t[0].tabs[0].ratio, 60);
+        assert_eq!(t[1].name, "plain");
+        assert!(t[1].default);
+    }
+
+    #[test]
+    fn glob_match_double_star() {
+        assert!(glob_match("**/Cargo.toml", "/Users/foo/code/Cargo.toml"));
+        assert!(glob_match("**/Cargo.toml", "Cargo.toml"));
+        assert!(!glob_match("**/Cargo.toml", "/Users/foo/code/lib.rs"));
+    }
+
+    #[test]
+    fn preselect_template_match_then_default() {
+        let templates = vec![
+            Template {
+                name: "rust-dev".into(),
+                match_globs: vec!["**/Cargo.toml".into()],
+                default: false,
+                tabs: vec![],
+            },
+            Template {
+                name: "plain".into(),
+                match_globs: vec![],
+                default: true,
+                tabs: vec![],
+            },
+        ];
+        // A rust path → match glob fits → preselect rust-dev (0).
+        assert_eq!(preselect_template(&templates, "/Users/foo/Cargo.toml"), 0);
+        // A non-rust path → no match → default (plain, 1).
+        assert_eq!(preselect_template(&templates, "/Users/foo/notes"), 1);
     }
 }

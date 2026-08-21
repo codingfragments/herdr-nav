@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 6b — Templates (open-with-template picker, §8.4)
+
+- `templates.toml` parsing via the `toml` crate (tmuxinator-style:
+    `name`, `match` globs, `default`, `tabs[]` with `name`/`panes`/
+    `split`/`ratio`).
+- `^t` on a dir/zox opens a centered template-picker dialog listing
+    configured templates, one preselected: the template whose
+    `match` glob fits the path, else the configured `default`.
+- `Enter` builds a new workspace at that path from the highlighted
+    template (`workspace.create` + `tab.create` + `pane.split` +
+    `pane.send_text`), then focuses its first pane. `Esc` returns
+    to the switcher.
+- With no `templates.toml`: `^t` is unbound (inert).
+- 3 new unit tests (template parse, glob match, preselect). 43 total.
+
 ### Phase 6a — Pinned + zoxide providers + "open new workspace"
 
 - `PinnedProvider` reads `~/.config/herdr/targets.toml` (slot order,

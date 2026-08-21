@@ -58,6 +58,22 @@ struct NamePrompt {
     name: String,
 }
 
+/// Template picker state (spec §8.4): `^t` on a dir/zox
+/// opens a selector listing templates; ↑↓ moves, Enter builds,
+/// Esc returns to the switcher.
+struct TemplatePicker {
+    /// The node id being acted on (`pinned:<path>` / `zox:<path>`).
+    node_id: String,
+    /// The expanded path.
+    path: String,
+    /// The workspace name (prefilled default).
+    name: String,
+    /// The available templates.
+    templates: Vec<source::Template>,
+    /// Cursor into `templates`.
+    cursor: usize,
+}
+
 // ── Launch context ────────────────────────────────────────────────────────────
 
 /// Launch context: which pane this popup was opened relative to.
@@ -146,6 +162,9 @@ fn event_loop<B: ratatui::backend::Backend>(
     // confirm = create + enter; cancel = don't create, stay open).
     // None = no prompt active; Some = prompt visible, editing the name.
     let mut name_prompt: Option<NamePrompt> = None;
+    // Template picker (spec §8.4): `^t` on a dir/zox opens a
+    // selector listing templates; Enter builds, Esc returns.
+    let mut template_picker: Option<TemplatePicker> = None;
 
     // Haystack built once per invocation (spec §6.1): DFS, leaves
     // only, group order. Stable for the whole popup (providers
@@ -169,6 +188,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                     name_prompt
                         .as_ref()
                         .map(|p| (p.node_id.as_str(), p.name.as_str())),
+                    template_picker
+                        .as_ref()
+                        .map(|p| (p.templates.as_slice(), p.cursor)),
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -207,6 +229,10 @@ fn event_loop<B: ratatui::backend::Backend>(
         use KeyCode::*;
         match key.code {
             Esc => {
+                // Cancel the template picker first (don't build, stay open).
+                if template_picker.take().is_some() {
+                    continue;
+                }
                 // Cancel the name prompt first (don't create, stay open).
                 if name_prompt.take().is_some() {
                     continue;
@@ -220,14 +246,22 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Down => {
-                if let Some(v) = search_view.as_mut() {
+                if let Some(p) = template_picker.as_mut() {
+                    if p.cursor + 1 < p.templates.len() {
+                        p.cursor += 1;
+                    }
+                } else if let Some(v) = search_view.as_mut() {
                     v.move_down();
                 } else {
                     tree.move_down();
                 }
             }
             Up => {
-                if let Some(v) = search_view.as_mut() {
+                if let Some(p) = template_picker.as_mut() {
+                    if p.cursor > 0 {
+                        p.cursor -= 1;
+                    }
+                } else if let Some(v) = search_view.as_mut() {
                     v.move_up();
                 } else {
                     tree.move_up();
@@ -289,7 +323,74 @@ fn event_loop<B: ratatui::backend::Backend>(
                     tree.collapse_or_parent();
                 }
             }
+            Char('t')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^t` on a dir/zox: open the template picker (spec §8.4).
+                // Inert on non-dir leaves and in search mode (no group
+                // context for the path). Unbound if no templates.toml.
+                let is_dir = match &search_view {
+                    Some(v) => v
+                        .cursor_leaf(&haystack)
+                        .is_some_and(|l| l.kind == nav::Kind::Dir || l.kind == nav::Kind::Zox),
+                    None => tree
+                        .cursor_row()
+                        .is_some_and(|r| r.kind == nav::Kind::Dir || r.kind == nav::Kind::Zox),
+                };
+                if is_dir && template_picker.is_none() && name_prompt.is_none() {
+                    let templates = source::read_templates_toml();
+                    if !templates.is_empty() {
+                        let leaf_id = search_view
+                            .as_ref()
+                            .and_then(|v| v.cursor_leaf(&haystack))
+                            .map(|l| l.id.clone())
+                            .or_else(|| tree.cursor_row().map(|r| r.id.clone()));
+                        if let Some(id) = leaf_id {
+                            let path = id
+                                .split_once(':')
+                                .map(|(_, p)| p)
+                                .unwrap_or(&id)
+                                .to_string();
+                            let cursor = source::preselect_template(&templates, &path);
+                            template_picker = Some(TemplatePicker {
+                                node_id: id.clone(),
+                                path: source::expand_path(&path),
+                                name: source::workspace_name_default(&path),
+                                templates,
+                                cursor,
+                            });
+                        }
+                    }
+                }
+            }
             Enter => {
+                // If a template picker is active, confirm: build the workspace
+                // from the selected template (spec §8.4).
+                if let Some(picker) = template_picker.take() {
+                    let template = &picker.templates[picker.cursor.min(picker.templates.len() - 1)];
+                    match source::build_workspace_from_template(
+                        &picker.path,
+                        &picker.name,
+                        template,
+                    ) {
+                        Ok(Some(pane_id)) => {
+                            // Focus the first pane so the user lands in it.
+                            let _ = socket_client::request(
+                                socket_path,
+                                "pane.focus",
+                                serde_json::json!({"pane_id": pane_id}),
+                            );
+                            break;
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            flash_error = Some((picker.node_id, e));
+                        }
+                    }
+                    continue;
+                }
                 // If a name prompt is active, confirm it.
                 if let Some(prompt) = name_prompt.take() {
                     match source::open_dir_workspace_named(&prompt.node_id, Some(&prompt.name)) {
