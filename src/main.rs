@@ -324,8 +324,16 @@ fn event_loop<B: ratatui::backend::Backend>(
 /// land in later phases and return "not implemented".
 fn invoke_action(socket_path: &str, id: &str) -> Result<nav::Outcome, String> {
     use crate::nav::Provider;
-    let provider = source::SessionProvider::new(socket_path.to_string());
-    provider.invoke(&id.to_string(), nav::Act::Default)
+    // Dispatch to the right provider based on the node-id prefix.
+    // session:pane:... → SessionProvider; agents:... → AgentsProvider.
+    // Future providers (pinned/zox/plugin) land in later phases.
+    if id.starts_with("agents:") {
+        let provider = source::AgentsProvider::new(socket_path.to_string());
+        provider.invoke(&id.to_string(), nav::Act::Default)
+    } else {
+        let provider = source::SessionProvider::new(socket_path.to_string());
+        provider.invoke(&id.to_string(), nav::Act::Default)
+    }
 }
 
 /// Show a one-line toast in the host terminal via `notification.show`.
