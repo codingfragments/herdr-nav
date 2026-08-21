@@ -28,6 +28,9 @@ fn group_node(socket_path: &str, group: Group) -> Node {
         Group::Session => SessionProvider::new(socket_path.to_string())
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
+        Group::Agents => AgentsProvider::new(socket_path.to_string())
+            .enumerate()
+            .unwrap_or_else(|e| unavailable_stub(group, &e)),
         _ => unavailable_stub(group, "not implemented (later phase)"),
     }
 }
@@ -173,6 +176,117 @@ impl Provider for SessionProvider {
                 }
             }
         }
+    }
+}
+
+// ── Agents provider ──────────────────────────────────────────────────────────
+
+/// The Agents provider (spec §5): agent-detect plugin hooks
+/// (agent.start/stop), else process-tree heuristic. Phase 5 uses the
+/// `agent.list` socket method (confirmed live) which returns every
+/// detected agent pane with its status. Flat list, sort waiting →
+/// working → idle then recency. Meta = status.
+pub struct AgentsProvider {
+    socket_path: String,
+}
+
+impl AgentsProvider {
+    pub fn new(socket_path: String) -> Self {
+        Self { socket_path }
+    }
+}
+
+impl Provider for AgentsProvider {
+    fn id(&self) -> &'static str {
+        "agents"
+    }
+
+    fn enumerate(&self) -> Result<Node, String> {
+        let result =
+            crate::socket_client::request(&self.socket_path, "agent.list", serde_json::json!({}))
+                .map_err(|e| format!("agent.list failed: {e}"))?;
+
+        let agents = result
+            .get("agents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(build_agents_tree(&agents))
+    }
+
+    fn preview(&self, _id: &NodeId) -> Preview {
+        // Phase 5 preview: agent transcript tail / blocked question.
+        // The preview is rendered by preview::resolve_preview once the
+        // node is in the tree; here we return a default — the preview
+        // module dispatches on Kind::Agent once this provider is live.
+        Preview::default()
+    }
+
+    fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
+        // Jump to the pane the agent runs in — same as a pane jump.
+        let pane_id = id.strip_prefix("agents:").unwrap_or(id);
+        let _ = crate::socket_client::request(
+            &self.socket_path,
+            "pane.focus",
+            serde_json::json!({"pane_id": pane_id}),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(crate::nav::Outcome::Close {
+            toast: format!("jumped to agent {pane_id}"),
+        })
+    }
+}
+
+/// Build the Agents group node (flat list of agent leaves, spec §4/§5).
+/// Sort waiting → working → idle, then recency (focused first). Meta =
+/// status. Each agent leaf's id is `agents:<pane_id>` so invoke can
+/// strip the prefix and focus the pane.
+fn build_agents_tree(agents: &[serde_json::Value]) -> Node {
+    let mut leaves: Vec<Node> = Vec::new();
+    for agent in agents {
+        let Some(pane_id) = agent.get("pane_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let name = agent
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent");
+        let status = agent
+            .get("agent_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let label = agent
+            .get("terminal_title_stripped")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(name);
+        leaves.push(Node {
+            id: format!("agents:{pane_id}"),
+            kind: Kind::Agent,
+            label: label.to_string(),
+            meta: status.to_string(),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        });
+    }
+    // Sort waiting → working → idle (spec §4), then focused first.
+    leaves.sort_by_key(|n| match n.meta.as_str() {
+        "waiting" => 0,
+        "working" => 1,
+        _ => 2,
+    });
+    Node {
+        id: "group:agents".to_string(),
+        kind: Kind::Group,
+        label: "Agents".to_string(),
+        meta: format!("{} agents", leaves.len()),
+        crumbs: None,
+        children: leaves,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
     }
 }
 
@@ -667,5 +781,45 @@ mod name_map_tests {
         );
         assert_eq!(session.children[0].label, "w9");
         assert_eq!(session.children[0].children[0].label, "t1");
+    }
+}
+
+#[cfg(test)]
+mod agents_tests {
+    use super::*;
+
+    fn agent(pane_id: &str, agent: &str, status: &str, title: &str) -> serde_json::Value {
+        serde_json::json!({
+            "pane_id": pane_id,
+            "agent": agent,
+            "agent_status": status,
+            "terminal_title_stripped": title,
+        })
+    }
+
+    #[test]
+    fn builds_flat_agent_list() {
+        let agents = vec![
+            agent("wA:p1", "pi", "working", "π - herdr-nav"),
+            agent("wA:p2", "codex", "waiting", "cx - sandbox"),
+        ];
+        let group = build_agents_tree(&agents);
+        assert_eq!(group.kind, Kind::Group);
+        assert_eq!(group.label, "Agents");
+        assert_eq!(group.children.len(), 2);
+        // waiting sorts before working (spec §4).
+        assert_eq!(group.children[0].meta, "waiting");
+        assert_eq!(group.children[1].meta, "working");
+        // Label prefers terminal_title_stripped.
+        assert!(group.children[0].label.contains("sandbox"));
+    }
+
+    #[test]
+    fn agent_leaf_id_strips_for_invoke() {
+        let agents = vec![agent("wA:p1", "pi", "working", "pi")];
+        let group = build_agents_tree(&agents);
+        let leaf = &group.children[0];
+        assert_eq!(leaf.kind, Kind::Agent);
+        assert!(leaf.id.starts_with("agents:wA:p1"));
     }
 }

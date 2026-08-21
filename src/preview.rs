@@ -208,6 +208,7 @@ fn header_line(node: &Node, p: &Preview) -> Line<'static> {
 fn resolve_preview(node: &Node, socket_path: &str) -> Preview {
     match node.kind {
         Kind::Pane => pane_preview(node, socket_path),
+        Kind::Agent => agent_preview(node, socket_path),
         Kind::Group => group_preview(node),
         Kind::Workspace => workspace_preview(node),
         Kind::Tab => tab_preview(node),
@@ -281,6 +282,34 @@ fn ansi_to_lines(text: &str) -> Vec<Line<'static>> {
     match text.into_text() {
         Ok(t) => t.lines.into_iter().collect(),
         Err(_) => text.lines().map(|l| Line::raw(l.to_string())).collect(),
+    }
+}
+
+/// Agent preview (spec §7): tail of the agent transcript; if
+/// blocked, the pending question + its options verbatim. Chips:
+/// status + duration, token count. Phase 5 fetches the transcript
+/// via `pane.read` (the agent runs in a pane) and shows the tail.
+fn agent_preview(node: &Node, socket_path: &str) -> Preview {
+    let pane_id = node.id.strip_prefix("agents:").unwrap_or(&node.id);
+    let status = node.meta.clone();
+    let chips = vec![Chip {
+        text: status.clone(),
+        semantic: match status.as_str() {
+            "waiting" => ChipSemantic::Blocked,
+            "working" => ChipSemantic::Ok,
+            _ => ChipSemantic::Info,
+        },
+    }];
+    let body = read_pane_scrollback(socket_path, pane_id);
+    Preview {
+        icon: kind_glyph(Kind::Agent),
+        title: node.label.clone(),
+        subtitle: format!("agent pane {pane_id}"),
+        chips,
+        body_label: "AGENT TRANSCRIPT",
+        body,
+        action: "jump to agent pane".to_string(),
+        alt: String::new(),
     }
 }
 

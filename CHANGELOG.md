@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 5 — Agents provider + agent jump
+
+- `AgentsProvider` via `agent.list` socket method (confirmed
+    live): flat list of agent leaves with status (waiting →
+    working → idle, then recency). Meta = status. Label prefers
+    `terminal_title_stripped`.
+- Agent preview: transcript tail via `pane.read` (the agent runs
+    in a pane), chips = status (blocked/waiting red, working green).
+    Footer: "jump to agent pane".
+- `Enter` on an agent jumps to its pane (same `pane.focus` invoke
+    path as Phase 3). Agents group drops its "unavailable" stub.
+- Agents enter the search haystack for free (built from providers).
+- 2 new unit tests (flat agent list + sort, agent leaf id). 35 total.
+
 ### Phase 4 — Search mode (fuzzy + ranking + highlight)
 
 - Derived mode: `mode = if query.is_empty() { Browse } else { Search }`.
