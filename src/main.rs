@@ -273,13 +273,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                 if is_leaf {
                     if let Some(id) = leaf_id {
                         match invoke_action(socket_path, &id) {
-                            Ok(nav::Outcome::Close { toast }) => {
-                                show_toast(socket_path, &toast);
-                                break;
-                            }
-                            Ok(nav::Outcome::Stay { toast }) => {
-                                show_toast(socket_path, &toast);
-                            }
+                            Ok(nav::Outcome::Close { .. }) => break,
+                            Ok(nav::Outcome::Stay { .. }) => {}
                             Err(e) => {
                                 flash_error = Some((id, e));
                             }
@@ -324,11 +319,21 @@ fn event_loop<B: ratatui::backend::Backend>(
 /// land in later phases and return "not implemented".
 fn invoke_action(socket_path: &str, id: &str) -> Result<nav::Outcome, String> {
     use crate::nav::Provider;
-    let provider = source::SessionProvider::new(socket_path.to_string());
-    provider.invoke(&id.to_string(), nav::Act::Default)
+    // Dispatch to the right provider based on the node-id prefix.
+    // session:pane:... → SessionProvider; agents:... → AgentsProvider.
+    // Future providers (pinned/zox/plugin) land in later phases.
+    if id.starts_with("agents:") {
+        let provider = source::AgentsProvider::new(socket_path.to_string());
+        provider.invoke(&id.to_string(), nav::Act::Default)
+    } else {
+        let provider = source::SessionProvider::new(socket_path.to_string());
+        provider.invoke(&id.to_string(), nav::Act::Default)
+    }
 }
 
 /// Show a one-line toast in the host terminal via `notification.show`.
+#[allow(dead_code)] // toast dropped (2026-08-21) — the jump is the
+                    // important part; the toast was a spec nicety the user doesn't want.
 fn show_toast(socket_path: &str, message: &str) {
     let _ = socket_client::request(
         socket_path,
