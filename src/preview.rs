@@ -1,15 +1,12 @@
 //! Rich preview rendering for the selected target.
 //!
 //! The preview pane sits to the right of (or below) the fuzzy list and
-//! shows source-specific context for the highlighted target:
+//! shows source-specific context for the highlighted target.
 //!
-//! - **Pane** — a slice of the pane's scrollback (via `pane.read`).
-//! - **Agent** — the agent's status / last activity / working directory.
-//! - **Directory** — a file listing (via the socket, or a local `ls`).
-//! - **Plugin** — the plugin's manifest summary + config.
-//!
-//! **Status: scaffold only.** The first real preview renderers land in
-//! Phase 2 (PLANNING.md §17), then expand with each provider phase.
+//! **Status: Phase 1.** A placeholder preview is rendered by `render.rs`;
+//! the per-kind preview renderers land in Phase 2 (PLANNING.md §17),
+//! one per `Kind`.
+#![allow(dead_code)]
 
 use crate::nav::{Node, NodeId};
 

@@ -54,7 +54,7 @@
   </ul>
 
   <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">2. Window, geometry, chrome</h2>
-  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The popup is a floating, bordered, rounded rectangle centred over the dimmed host terminal. It has four horizontal bands: title bar, search bar, body (split), footer. All measurements are given in character cells for a TUI implementation, with the prototype's pixel values in parentheses.</p>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The popup is a floating, bordered, rounded rectangle centred over the dimmed host terminal. It has three horizontal bands: search bar, body (split), footer — the popup window itself renders the border and the pane title, so no title bar is drawn inside. All measurements are given in character cells for a TUI implementation, with the prototype's pixel values in parentheses.</p>
   <table style="width:100%;border-collapse:collapse;font:12.5px 'IBM Plex Sans',sans-serif;margin:6px 0 14px">
     <thead><tr>
       <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">BAND</th>
@@ -62,7 +62,6 @@
       <th style="text-align:left;border-bottom:1px solid #24273a;padding:6px 8px;font:11px 'JetBrains Mono',monospace;letter-spacing:.06em;color:#5b6078">CONTENT</th>
     </tr></thead>
     <tbody>
-      <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Title bar</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1 row (34px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a"><span style="font-family:'JetBrains Mono',monospace;font-size:12px">herdr switch</span> left; mode badge + counts right</td></tr>
       <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Search bar</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1 row (46px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">prompt <span style="font-family:'JetBrains Mono',monospace">❯</span>, query, block caret, placeholder</td></tr>
       <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Body</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">flex (486px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">list 44% · vertical rule · preview 56%</td></tr>
       <tr><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">Footer</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">1 row (30px)</td><td style="border-bottom:1px solid #e6e6ec;padding:6px 8px;color:#33344a">global keymap hints</td></tr>
@@ -106,7 +105,7 @@
 
   <figure style="margin:16px 0 20px;break-inside:avoid">
     <img src="images/05-view.png" alt="Search mode with fuzzy matches" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />
-    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 3 — Search mode. Badge flips to SEARCH, counts become <span style="color:#33344a">matches / total leaves</span>, breadcrumbs are dimmed, matched characters are peach and bold. Groups have disappeared entirely.</figcaption>
+    <figcaption style="font:11.5px 'JetBrains Mono',monospace;color:#6e738d;margin-top:6px">Fig 3 — Search mode. The tree is replaced by leaves only, breadcrumbs are dimmed, matched characters are peach and bold. Groups have disappeared entirely. <span style="color:#6e738d">(The title-bar mode badge + counts shown in the original prototype are removed — both are obvious from the search bar and the list status strip.)</span></figcaption>
   </figure>
 
   <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">4. Target groups and the node model</h2>
@@ -314,7 +313,7 @@ tabs    = [{ name = "shell", panes = ["zsh"] }]</pre>
     <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#5b6078"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">surface2 #5b6078<br /><span style="color:#181926">crumbs, meta</span></div></div>
     <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#c6a0f6"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">mauve #c6a0f6<br /><span style="color:#181926">prompt, caret, group</span></div></div>
     <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#f5a97f"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">peach #f5a97f<br /><span style="color:#181926">match hits, SEARCH</span></div></div>
-    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#7dc4e4"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">sapphire #7dc4e4<br /><span style="color:#181926">BROWSE badge</span></div></div>
+    <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#7dc4e4"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">sapphire #7dc4e4<br /><span style="color:#181926">BROWSE (mode accent)</span></div></div>
     <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#a6da95"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">green #a6da95<br /><span style="color:#181926">agents, ok, action</span></div></div>
     <div style="border:1px solid #e2e2ea;border-radius:5px;overflow:hidden"><div style="height:34px;background:#ed8796"></div><div style="padding:5px 7px;font:10.5px 'JetBrains Mono',monospace;color:#5b6078">red #ed8796<br /><span style="color:#181926">errors, blocked</span></div></div>
   </div>
@@ -360,7 +359,7 @@ bias          = { agent_waiting = 6, pane = 4, pinned = 3, agent = 2, zoxide = 0
   <h2 style="font:600 19px 'IBM Plex Sans',sans-serif;color:#181926;margin:26px 0 8px;border-top:1px solid #dcdce4;padding-top:14px">14. Acceptance criteria</h2>
   <ol style="font:14px/1.6 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px;padding-left:22px">
     <li>Opening the popup shows five groups in the order of §4, Session pre-expanded to its active tab, cursor on row 0, preview showing the Session summary.</li>
-    <li>Typing one printable character flips the badge to SEARCH, replaces the tree with leaves only, dims crumbs, highlights hits in peach, and resets the cursor to 0.</li>
+    <li>Typing one printable character enters search mode (replaces the tree with leaves only, dims crumbs, highlights hits in peach, and resets the cursor to 0).</li>
     <li>Backspacing to an empty query restores the exact prior tree, including expansion state; the cursor returns to row 0.</li>
     <li>→, Space and Tab all expand the selected group in browse mode; Space types a space in search mode.</li>
     <li>← collapses an open node and jumps to the parent of a closed one.</li>

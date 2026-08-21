@@ -5,9 +5,11 @@
 //! on stderr and built-in defaults are used. The Catppuccin Macchiato
 //! palette (§9) is fixed and not configurable.
 //!
-//! **Status: scaffold only.** The real schema (groups order, zoxide
-//! limit, preview, expand, scoring, bias) is wired in Phase 10
-//! (PLANNING.md §17); earlier phases use the built-in defaults.
+//! **Status: Phase 1.** The schema is defined upfront per the spec
+//! model; it is wired in by Phase 10. Earlier phases use the built-in
+//! defaults (`Config::load()` returns defaults until Phase 10 parses the
+//! file).
+#![allow(dead_code)]
 
 use serde::Deserialize;
 

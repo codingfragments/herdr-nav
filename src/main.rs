@@ -7,14 +7,10 @@
 //! backend directly, and runs an event loop until `Esc` closes the popup
 //! or `Enter` switches to the selected target.
 //!
-//! **Status: scaffold only.** Module bodies are stubs; the event loop
-//! renders a placeholder and exits on `Esc`. Real source gathering,
-//! fuzzy matching, preview rendering, and target-switching land in the
-//! phase sequence in PLANNING.md §17.
-
-// Scaffold only: stub modules are not yet wired into the event loop.
-// Remove this allow as each phase in PLANNING.md §17 lands real use.
-#![allow(dead_code)]
+//! **Status: Phase 1 — popup shell + Session tree browse.**
+//! The event loop renders the real tree and handles browse keys. Search
+//! mode (Phase 4), per-kind preview (Phase 2), and the switch action
+//! (Phase 3) land in later phases.
 
 mod config;
 mod nav;
@@ -48,6 +44,7 @@ const KEY_DEBOUNCE: Duration = Duration::from_millis(40);
 // ── Launch context ────────────────────────────────────────────────────────────
 
 /// Launch context: which pane this popup was opened relative to.
+#[allow(dead_code)] // focused_pane_id used in Phase 3 (pin-cwd / active ordering)
 struct LaunchContext {
     focused_pane_id: String,
 }
@@ -77,10 +74,15 @@ fn launch_context() -> Result<LaunchContext, String> {
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 fn run() -> Result<(), String> {
-    let _ctx = launch_context()?;
-    let _socket_path = std::env::var("HERDR_SOCKET_PATH")
-        .map_err(|_| "HERDR_SOCKET_PATH is not set".to_string())?;
+    // Launch context and socket path are best-effort in Phase 1: if Herdr
+    // isn't running, the Session provider degrades to an "unavailable"
+    // stub and the popup still opens (useful for dev). The real plugin
+    // always has both set (see doc/env-vars.md).
+    let _ctx = launch_context().ok();
+    let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
     let _config = config::Config::load();
+
+    let mut tree = nav::Tree::new(source::build_tree(&socket_path));
 
     // Terminal setup — same contract as the sister ports: enter raw mode,
     // hide the cursor, enter the alternate screen, then restore on exit.
@@ -92,7 +94,7 @@ fn run() -> Result<(), String> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).map_err(|e| format!("Terminal::new: {e}"))?;
 
-    let result = event_loop(&mut terminal);
+    let result = event_loop(&mut terminal, &mut tree);
 
     // Restore terminal regardless of how the loop exited.
     disable_raw_mode().ok();
@@ -105,15 +107,24 @@ fn run() -> Result<(), String> {
     result
 }
 
-/// Placeholder event loop: render a scaffold banner, exit on `Esc`.
+/// Phase 1 event loop: browse the Session tree (spec §3.1/§8).
 ///
-/// Replaced by the real tree-browse loop in Phase 1 (PLANNING.md §17).
-fn event_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<(), String> {
+/// Browse only — the query bar is empty and printable characters are
+/// inert (search mode lands in Phase 4). `↑↓`/`^n`/`^p` move the
+/// cursor (wraps); `→`/`Space`/`Tab` expand or step to the first child;
+/// `←` collapses or jumps to the parent; `Enter` toggles a branch
+/// (inert on a leaf — the leaf default action lands in Phase 3); `Esc`
+/// closes the popup.
+fn event_loop<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    tree: &mut nav::Tree,
+) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
 
     loop {
+        tree.ensure_cursor_valid();
         terminal
-            .draw(render::draw_placeholder)
+            .draw(|frame| render::draw(frame, tree))
             .map_err(|e| format!("draw: {e}"))?;
 
         if !event::poll(Duration::from_millis(250)).map_err(|e| format!("poll: {e}"))? {
@@ -135,10 +146,29 @@ fn event_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Resul
         }
         last_key = Some((key, std::time::Instant::now()));
 
-        if key.code == KeyCode::Esc {
-            break;
+        use KeyCode::*;
+        match key.code {
+            Esc => break,
+            Down | Char('n')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                tree.move_down()
+            }
+            Up | Char('p')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                tree.move_up()
+            }
+            Right | Tab | Char(' ') => tree.expand_or_step(),
+            Left => tree.collapse_or_parent(),
+            Enter => tree.toggle(),
+            // Printable characters are inert in Phase 1 (search is Phase 4).
+            _ => {}
         }
-        // All other keys are no-ops in the scaffold.
     }
 
     Ok(())
