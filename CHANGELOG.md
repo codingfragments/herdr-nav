@@ -7,6 +7,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 4 — Search mode (fuzzy + ranking + highlight)
+
+- Derived mode: `mode = if query.is_empty() { Browse } else { Search }`.
+    Typing any printable char flips to Search; `Backspace` to empty
+    restores Browse (expansion state untouched).
+- `search.rs`: haystack built once per invocation (DFS, leaves
+    only, group order); match text = `crumbs + " › " + label`.
+    Reuses the `FuzzyEngine` shape from herdr-zextract (nucleo-matcher,
+    smart-case, `fuzzy_indices`, `filter_with_bonus`). Provider
+    bias (§6.3) via `filter_with_bonus`.
+- Two-stage `Esc`: Search → clear query (Browse); Browse → close.
+    Cursor resets to 0 on every query mutation.
+- Search list: flat leaves with dimmed breadcrumb prefix, matched
+    chars peach+bold (coalesced into runs), label subtext0/text.
+    Status strip: `flat leaves · fuzzy` + `matches/total`.
+- `Enter` in Search invokes the action on the cursor leaf; preview
+    follows the search cursor.
+- 6 new unit tests (haystack walk, empty query, narrow, bias,
+    cursor wrap, requery reset). 31 tests total.
+
 ### Phase 3 — Pane jump (the first real switch)
 
 - `Enter` is now the main action verb: on a pane leaf,
