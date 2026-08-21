@@ -74,6 +74,18 @@ struct TemplatePicker {
     cursor: usize,
 }
 
+/// Plugin action picker state (spec §8.3): `Enter` on a plugin
+/// opens a selector listing its declared actions; ↑↓ move,
+/// Enter runs the action + closes, Esc returns.
+struct PluginActionPicker {
+    /// The plugin id (e.g. `herdr-flash`).
+    plugin_id: String,
+    /// The plugin's declared actions as (id, title) pairs.
+    actions: Vec<(String, String)>,
+    /// Cursor into `actions`.
+    cursor: usize,
+}
+
 // ── Launch context ────────────────────────────────────────────────────────────
 
 /// Launch context: which pane this popup was opened relative to.
@@ -165,6 +177,10 @@ fn event_loop<B: ratatui::backend::Backend>(
     // Template picker (spec §8.4): `^t` on a dir/zox opens a
     // selector listing templates; Enter builds, Esc returns.
     let mut template_picker: Option<TemplatePicker> = None;
+    // Plugin action picker (spec §8.3): Enter on a plugin opens
+    // a selector listing its actions; ↑↓ move, Enter runs,
+    // Esc returns.
+    let mut plugin_action_picker: Option<PluginActionPicker> = None;
 
     // Haystack built once per invocation (spec §6.1): DFS, leaves
     // only, group order. Stable for the whole popup (providers
@@ -194,6 +210,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                         .as_ref()
                         .map(|p| (p.templates.as_slice(), p.cursor)),
                     templates_exist,
+                    plugin_action_picker
+                        .as_ref()
+                        .map(|p| (p.plugin_id.as_str(), p.actions.as_slice(), p.cursor)),
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -232,6 +251,10 @@ fn event_loop<B: ratatui::backend::Backend>(
         use KeyCode::*;
         match key.code {
             Esc => {
+                // Cancel the plugin action picker first (don't run, stay open).
+                if plugin_action_picker.take().is_some() {
+                    continue;
+                }
                 // Cancel the template picker first (don't build, stay open).
                 if template_picker.take().is_some() {
                     continue;
@@ -249,7 +272,11 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Down => {
-                if let Some(p) = template_picker.as_mut() {
+                if let Some(p) = plugin_action_picker.as_mut() {
+                    if p.cursor + 1 < p.actions.len() {
+                        p.cursor += 1;
+                    }
+                } else if let Some(p) = template_picker.as_mut() {
                     if p.cursor + 1 < p.templates.len() {
                         p.cursor += 1;
                     }
@@ -260,7 +287,11 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Up => {
-                if let Some(p) = template_picker.as_mut() {
+                if let Some(p) = plugin_action_picker.as_mut() {
+                    if p.cursor > 0 {
+                        p.cursor -= 1;
+                    }
+                } else if let Some(p) = template_picker.as_mut() {
                     if p.cursor > 0 {
                         p.cursor -= 1;
                     }
@@ -369,6 +400,20 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Enter => {
+                // If a plugin action picker is active, confirm: run the action
+                // (spec §8.3) via plugin.action.invoke, then close.
+                if let Some(picker) = plugin_action_picker.take() {
+                    let action = &picker.actions[picker.cursor.min(picker.actions.len() - 1)];
+                    let _ = crate::socket_client::request(
+                        socket_path,
+                        "plugin.action.invoke",
+                        serde_json::json!({
+                            "plugin": &picker.plugin_id,
+                            "action_id": &action.0,
+                        }),
+                    );
+                    break;
+                }
                 // If a template picker is active, confirm: build the workspace
                 // from the selected template (spec §8.4).
                 if let Some(picker) = template_picker.take() {
@@ -431,6 +476,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 path: source::expand_path(path),
                                 name: source::workspace_name_default(path),
                             });
+                        } else if id.starts_with("plugin:") {
+                            // Plugin: open the action picker (spec §8.3),
+                            // unless the plugin has no actions (inert).
+                            let pid = id.strip_prefix("plugin:").unwrap_or(&id);
+                            if let Some(picker) = build_plugin_action_picker(socket_path, pid) {
+                                plugin_action_picker = Some(picker);
+                            } else {
+                                flash_error = Some((id, "no actions".to_string()));
+                            }
                         } else {
                             match invoke_action(socket_path, &id) {
                                 Ok(nav::Outcome::Close { .. }) => break,
@@ -477,6 +531,47 @@ fn event_loop<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+/// Build a plugin action picker for `plugin_id` (spec §8.3):
+/// fetches the plugin's declared actions from `plugin.list`.
+/// Returns None if the plugin has no actions (not selectable).
+fn build_plugin_action_picker(socket_path: &str, plugin_id: &str) -> Option<PluginActionPicker> {
+    let Ok(r) = crate::socket_client::request(socket_path, "plugin.list", serde_json::json!({}))
+    else {
+        return None;
+    };
+    let plugins = r.get("plugins").and_then(|v| v.as_array());
+    let plugin = plugins.and_then(|ps| {
+        ps.iter()
+            .find(|p| p.get("plugin_id").and_then(|v| v.as_str()) == Some(plugin_id))
+    });
+    let actions: Vec<(String, String)> = plugin
+        .and_then(|p| p.get("actions").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| {
+            (
+                a.get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                a.get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+            )
+        })
+        .collect();
+    if actions.is_empty() {
+        None
+    } else {
+        Some(PluginActionPicker {
+            plugin_id: plugin_id.to_string(),
+            actions,
+            cursor: 0,
+        })
+    }
 }
 
 /// Invoke the default action on a node via its provider (Phase 3).

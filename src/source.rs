@@ -24,6 +24,7 @@ pub fn build_tree(socket_path: &str) -> Vec<Node> {
 
 /// Produce one root group node. For Session, run the real provider; for
 /// every other group, render an "unavailable" stub until its phase lands.
+#[allow(unreachable_patterns)]
 fn group_node(socket_path: &str, group: Group) -> Node {
     match group {
         Group::Session => SessionProvider::new(socket_path.to_string())
@@ -36,6 +37,9 @@ fn group_node(socket_path: &str, group: Group) -> Node {
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
         Group::Zoxide => ZoxideProvider::new()
+            .enumerate()
+            .unwrap_or_else(|e| unavailable_stub(group, &e)),
+        Group::Plugins => PluginsProvider::new(socket_path.to_string())
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
         _ => unavailable_stub(group, "not implemented (later phase)"),
@@ -574,6 +578,103 @@ fn parse_targets_toml(content: &str) -> Vec<(String, u32)> {
         }
     }
     pins.into_iter().filter(|(p, _)| !p.is_empty()).collect()
+}
+
+// ── Plugins provider ───────────────────────────────────────────────────────
+
+/// The Plugins provider (spec §5/§8.3): plugin registry
+/// via `plugin.list` (confirmed live). Flat list, name order. Meta =
+/// version. Each plugin leaf's id is `plugin:<plugin_id>` so invoke
+/// can strip the prefix and run `plugin.action.invoke`.
+pub struct PluginsProvider {
+    socket_path: String,
+}
+
+impl PluginsProvider {
+    pub fn new(socket_path: String) -> Self {
+        Self { socket_path }
+    }
+}
+
+impl Provider for PluginsProvider {
+    fn id(&self) -> &'static str {
+        "plugins"
+    }
+
+    fn enumerate(&self) -> Result<Node, String> {
+        let result =
+            crate::socket_client::request(&self.socket_path, "plugin.list", serde_json::json!({}))
+                .map_err(|e| format!("plugin.list failed: {e}"))?;
+
+        let plugins = result
+            .get("plugins")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(build_plugins_tree(&plugins))
+    }
+
+    fn preview(&self, _id: &NodeId) -> Preview {
+        Preview::default()
+    }
+
+    fn invoke(&self, _id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
+        // Enter on a plugin opens the action picker (handled in main.rs),
+        // not a direct invoke. This is only reached if a plugin has no
+        // actions (inert) or for a future direct-action path.
+        Err("use the action picker".to_string())
+    }
+}
+
+/// Build the Plugins group node (flat list of Plugin leaves, spec §4/§5).
+/// Meta = version. A disabled plugin → red "disabled" meta. A plugin
+/// with no actions → "no actions" meta (not selectable).
+fn build_plugins_tree(plugins: &[serde_json::Value]) -> Node {
+    let mut leaves = Vec::new();
+    for plugin in plugins {
+        let Some(pid) = plugin.get("plugin_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let name = plugin.get("name").and_then(|v| v.as_str()).unwrap_or(pid);
+        let version = plugin.get("version").and_then(|v| v.as_str()).unwrap_or("");
+        let enabled = plugin
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let actions = plugin
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let meta = if !enabled {
+            "disabled".to_string()
+        } else if actions.is_empty() {
+            "no actions".to_string()
+        } else {
+            version.to_string()
+        };
+        leaves.push(Node {
+            id: format!("plugin:{pid}"),
+            kind: Kind::Plugin,
+            label: name.to_string(),
+            meta,
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        });
+    }
+    Node {
+        id: "group:plugins".to_string(),
+        kind: Kind::Group,
+        label: "Plugins".to_string(),
+        meta: format!("{} plugins", leaves.len()),
+        crumbs: None,
+        children: leaves,
+        preview: Preview::default(),
+        actions: crate::nav::Actions::default(),
+    }
 }
 
 /// Build the zoxide group node (flat list of Zox leaves).
@@ -1778,5 +1879,51 @@ mod resolve_cwd_tests {
         assert_eq!(resolve_cwd("/base", "../sibling"), "/base/../sibling");
         assert_eq!(resolve_cwd("/base", "./sub"), "/base/sub");
         assert_eq!(resolve_cwd("/base", "sub"), "/base/sub");
+    }
+}
+
+#[cfg(test)]
+mod plugins_tests {
+    use super::*;
+
+    fn plugin(pid: &str, version: &str, enabled: bool, actions: usize) -> serde_json::Value {
+        let actions_arr: Vec<serde_json::Value> = (0..actions)
+            .map(|i| serde_json::json!({"id": format!("act-{i}"), "title": format!("Action {i}")}))
+            .collect();
+        serde_json::json!({
+            "plugin_id": pid,
+            "name": pid,
+            "version": version,
+            "enabled": enabled,
+            "actions": actions_arr,
+        })
+    }
+
+    #[test]
+    fn builds_flat_plugin_list() {
+        let plugins = vec![
+            plugin("herdr-flash", "0.1.0", true, 2),
+            plugin("herdr-nav", "0.1.0", true, 1),
+        ];
+        let group = build_plugins_tree(&plugins);
+        assert_eq!(group.kind, Kind::Group);
+        assert_eq!(group.label, "Plugins");
+        assert_eq!(group.children.len(), 2);
+        assert_eq!(group.children[0].label, "herdr-flash");
+        assert_eq!(group.children[0].meta, "0.1.0");
+    }
+
+    #[test]
+    fn disabled_plugin_red_meta() {
+        let plugins = vec![plugin("broken", "0.1.0", false, 1)];
+        let group = build_plugins_tree(&plugins);
+        assert_eq!(group.children[0].meta, "disabled");
+    }
+
+    #[test]
+    fn no_actions_plugin_not_selectable() {
+        let plugins = vec![plugin("plain", "0.1.0", true, 0)];
+        let group = build_plugins_tree(&plugins);
+        assert_eq!(group.children[0].meta, "no actions");
     }
 }

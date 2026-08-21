@@ -75,7 +75,7 @@ fn kind_color(kind: Kind) -> Color {
 
 /// Draw the whole popup (spec §2): four bands inside a bordered frame,
 /// with surface2 horizontal rules separating the bars from the body.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn draw(
     frame: &mut Frame,
     tree: &Tree,
@@ -87,6 +87,7 @@ pub fn draw(
     name_prompt: Option<(&str, &str)>,
     template_picker: Option<(&[source::Template], usize)>,
     templates_exist: bool,
+    plugin_action_picker: Option<(&str, &[(String, String)], usize)>,
 ) {
     let area = frame.area();
 
@@ -128,7 +129,7 @@ pub fn draw(
     // When the name-prompt dialog is active, suppress the footer —
     // the dialog carries its own ⏎/esc hints, so the overall footer
     // would duplicate them.
-    if name_prompt.is_none() && template_picker.is_none() {
+    if name_prompt.is_none() && template_picker.is_none() && plugin_action_picker.is_none() {
         draw_footer(
             frame,
             bands[4],
@@ -150,6 +151,13 @@ pub fn draw(
     // dialog listing templates. Rendered last so it sits above all.
     if let Some((templates, cursor)) = template_picker {
         draw_template_picker(frame, area, templates, cursor);
+    }
+
+    // Plugin-action-picker overlay (spec §8.3): a centered
+    // bordered dialog listing a plugin's declared actions.
+    // Rendered last so it sits above all.
+    if let Some((plugin_id, actions, cursor)) = plugin_action_picker {
+        draw_plugin_action_picker(frame, area, plugin_id, actions, cursor);
     }
 }
 
@@ -712,6 +720,77 @@ fn draw_template_picker(
                 Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
             ),
             Span::styled("build   ", Style::default().fg(SUBTEXT0)),
+            Span::styled(
+                "esc ",
+                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("back", Style::default().fg(SUBTEXT0)),
+        ])
+        .style(Style::default().bg(MANTLE)),
+    );
+
+    frame.render_widget(Paragraph::new(rows), inner);
+}
+
+/// Centered plugin-action-picker dialog (spec §8.3). Lists a
+/// plugin's declared actions with the cursor highlighted; Enter runs,
+/// Esc returns. Sized to fit the action count.
+fn draw_plugin_action_picker(
+    frame: &mut Frame,
+    area: Rect,
+    plugin_id: &str,
+    actions: &[(String, String)],
+    cursor: usize,
+) {
+    let n = actions.len() as u16;
+    let h = (n + 3).min(area.height);
+    let w = 44u16;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SURFACE2))
+        .title(Span::styled(
+            format!(" {plugin_id} ▸ ACTION "),
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(MANTLE));
+    let inner = block.inner(dialog);
+    Clear.render(dialog, frame.buffer_mut());
+    block.render(dialog, frame.buffer_mut());
+
+    let mut rows: Vec<Line> = Vec::new();
+    for (i, (aid, title)) in actions.iter().enumerate() {
+        let selected = i == cursor;
+        let mark = if selected { "▸ " } else { "  " };
+        let style = if selected {
+            Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(SUBTEXT0)
+        };
+        let label = if selected { title.clone() } else { aid.clone() };
+        rows.push(
+            Line::from(vec![
+                Span::styled(mark.to_string(), style),
+                Span::styled(label, style),
+            ])
+            .style(if selected {
+                Style::default().bg(SURFACE0)
+            } else {
+                Style::default().bg(MANTLE)
+            }),
+        );
+    }
+    rows.push(Line::raw(""));
+    rows.push(
+        Line::from(vec![
+            Span::styled(
+                " ⏎ ",
+                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("run   ", Style::default().fg(SUBTEXT0)),
             Span::styled(
                 "esc ",
                 Style::default().fg(PEACH).add_modifier(Modifier::BOLD),

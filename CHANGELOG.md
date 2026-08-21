@@ -7,6 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 7 — Plugins provider + plugin action picker
+
+- `PluginsProvider` via `plugin.list` socket method (confirmed
+    live): flat list of plugin leaves. Meta = version;
+    disabled → red "disabled"; no actions → "no actions"
+    (not selectable).
+- Plugin preview: one-line description, declared actions list,
+    chips: enabled/version. Footer: "open actions".
+- Secondary selector (spec §8.3): `Enter` on a plugin opens
+    a centered action-picker dialog listing its declared actions
+    (declaration order, default preselected). `↑↓` move,
+    `Enter` runs the highlighted action via `plugin.action.invoke` +
+    closes; `Esc` returns to the switcher with the plugin still
+    selected. A plugin with no actions is inert.
+- Plugins group drops its "unavailable" stub and enters the
+    search haystack.
+- 3 new unit tests (flat plugin list, disabled red meta,
+    no-actions not selectable). 51 tests total.
+
 ### Phase 6b — Templates (open-with-template picker, §8.4)
 
 - **Format change:** templates are now one YAML file per template in
