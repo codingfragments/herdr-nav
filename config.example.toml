@@ -1,0 +1,49 @@
+# herdr-nav configuration
+#
+# Place this file at $HERDR_PLUGIN_CONFIG_DIR/config.toml and edit it.
+# Missing keys fall back to the built-in defaults shown below.
+# A missing or malformed config.toml never crashes the plugin — parse
+# errors are reported on stderr and built-in defaults are used.
+#
+# Schema: spec §13. The palette (§9) is fixed and not configurable.
+
+# Log level for stderr diagnostics: "error", "warn", "info", "debug", "trace".
+log_level = "info"
+
+# Root target groups, in display order. Any subset of the five; order is
+# the display order. Default: the spec §4 fixed order.
+groups = ["session", "agents", "pinned", "zoxide", "plugins"]
+
+# The host keybind that opens the switcher (informational here; the real
+# binding lives in your ~/.config/herdr/config.toml as a plugin_action).
+open_key = "ctrl-k"
+
+# zoxide: how many top entries to list (existing paths only).
+zoxide_limit = 50
+
+# Preview pane (spec §2/§7).
+[preview]
+enabled = true
+width_pct = 56
+min_cols = 60
+
+# Browse-mode expansion (spec §3.1/§4).
+[expand]
+session_default = "active"      # open Session to its active workspace + tab
+restore_ttl_secs = 600          # expire a restored expansion set after 10 min
+
+# Search scoring weights (spec §6.2).
+[scoring]
+consecutive = 8.0
+gap = 0.4
+prefix = 0.6
+word_boundary = 4.0
+
+# Provider bias — flat additive nudge, not a dominate (spec §6.3).
+[bias]
+agent_waiting = 6
+pane = 4
+pinned = 3
+agent = 2
+zoxide = 0
+plugin = -2
