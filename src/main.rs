@@ -169,6 +169,15 @@ fn event_loop<B: ratatui::backend::Backend>(
 
         let cursor_before = search_view.as_ref().map_or(tree.cursor, |v| v.cursor);
         let is_search = search_view.is_some();
+        // Shift-only (no Ctrl/Alt) is how uppercase letters arrive in most
+        // terminals — accept it for printable chars (sister-port contract).
+        let only_shift = key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::SHIFT)
+            && !key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+            && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
 
         use KeyCode::*;
         match key.code {
@@ -229,7 +238,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     }
                 }
             }
-            Right | Tab | Char(' ') => {
+            Right | Tab | Char(' ') if key.modifiers.is_empty() => {
                 // In search mode, →/Tab are inert; Space types a
                 // space (spec §8). In browse, expand/step.
                 if is_search {
@@ -281,7 +290,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     tree.expand_or_step();
                 }
             }
-            Char(c) if c.is_ascii_graphic() && key.modifiers.is_empty() => {
+            Char(c) if c.is_ascii_graphic() && (key.modifiers.is_empty() || only_shift) => {
                 // Printable char → enter search (or append), re-rank,
                 // cursor → 0 (spec §3). No modifiers — ^n/^p are
                 // handled above.
