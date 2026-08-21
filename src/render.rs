@@ -7,6 +7,16 @@
 //! (per-kind previews land in Phase 2). Theme colours and the full row
 //! grammar (§9/§10) are applied in Phase 9; here we use a minimal
 //! Catppuccin-Macchiato-flavoured palette sufficient to render.
+//!
+//! **Background decision (2026-08-21):** the popup body (list + preview
+//! content) is **transparent** — no explicit bg — so the host terminal's
+//! themed background shows through, instead of painting a fixed dark
+//! `base` that reads as pure black against a lighter terminal theme. The
+//! bars (title/search/footer/status-strip) keep `mantle` per spec §2
+//! ("bars = mantle"), and surface2 horizontal rules separate the bands
+//! for crisp separation. This amends spec §9's `base = popup body` to
+//! "body = terminal-themed (transparent)"; PLANNING.md wins per the
+//! standing precedence rule.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -18,6 +28,9 @@ use crate::nav::{Kind, Tree, Twisty};
 
 // ── Minimal palette (spec §9, finalized in Phase 9) ───────────────────────────
 
+// BASE is intentionally unused for fills: the body is transparent so the
+// terminal theme shows through. Kept only for reference / future use.
+#[allow(dead_code)]
 const BASE: Color = Color::Rgb(0x24, 0x27, 0x3a);
 const MANTLE: Color = Color::Rgb(0x1e, 0x20, 0x30);
 const SURFACE0: Color = Color::Rgb(0x36, 0x3a, 0x4f);
@@ -57,34 +70,46 @@ fn kind_color(kind: Kind) -> Color {
     }
 }
 
-/// Draw the whole popup (spec §2): four bands inside a bordered frame.
+/// Draw the whole popup (spec §2): four bands inside a bordered frame,
+/// with surface2 horizontal rules separating the bars from the body.
 pub fn draw(frame: &mut Frame, tree: &Tree) {
     let area = frame.area();
 
-    // Outer bordered frame. Render it over the full area, then split the
-    // *inner* area (inside the border) into bands so the band
-    // backgrounds never paint over the popup border.
+    // Outer bordered frame. No bg fill — transparent so the terminal
+    // theme shows through; only the border glyphs are surface2.
     let outer = Block::default()
         .borders(Borders::ALL)
-        .style(Style::default().bg(BASE))
         .border_style(Style::default().fg(SURFACE2));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
+    // title / search / rule / body / rule / footer
     let bands = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(1), // title bar
+            Constraint::Length(1), // search bar
+            Constraint::Length(1), // ─ rule
+            Constraint::Min(1),    // body
+            Constraint::Length(1), // ─ rule
+            Constraint::Length(1), // footer
         ])
         .split(inner);
 
     draw_title_bar(frame, bands[0], tree);
     draw_search_bar(frame, bands[1]);
-    draw_body(frame, bands[2], tree);
-    draw_footer(frame, bands[3]);
+    draw_rule(frame, bands[2]);
+    draw_body(frame, bands[3], tree);
+    draw_rule(frame, bands[4]);
+    draw_footer(frame, bands[5]);
+}
+
+/// A full-width surface2 horizontal rule (spec §2 band separation).
+fn draw_rule(frame: &mut Frame, area: Rect) {
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(SURFACE2)),
+        area,
+    );
 }
 
 fn draw_title_bar(frame: &mut Frame, area: Rect, tree: &Tree) {
@@ -93,7 +118,7 @@ fn draw_title_bar(frame: &mut Frame, area: Rect, tree: &Tree) {
         " BROWSE ",
         Style::default()
             .bg(SAPPHIRE)
-            .fg(BASE)
+            .fg(MANTLE)
             .add_modifier(Modifier::BOLD),
     );
     let counts = Span::styled(format!(" {} ", rows.len()), Style::default().fg(SUBTEXT0));
@@ -134,7 +159,7 @@ fn draw_body(frame: &mut Frame, area: Rect, tree: &Tree) {
         .split(area);
 
     draw_list(frame, split[0], tree);
-    // Vertical rule — a 1-cell surface2 column, no border (spec §2).
+    // Vertical rule — a 1-cell surface2 column (spec §2), no border.
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(SURFACE2)),
         split[1],
@@ -146,7 +171,8 @@ fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree) {
     let rows = tree.visible_rows();
     let h = area.height as usize;
 
-    // Reserve a 1-row status strip at the bottom (spec §2).
+    // Reserve a 1-row status strip at the bottom (spec §2). The strip is
+    // a bar (mantle); the list content above it is transparent.
     let (list_area, strip_area) = if h > 1 {
         let s = Layout::default()
             .direction(Direction::Vertical)
@@ -177,12 +203,11 @@ fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree) {
         .map(|(i, row)| draw_row(i, row, i == tree.cursor))
         .collect();
 
-    frame.render_widget(
-        Paragraph::new(visible).style(Style::default().bg(BASE)),
-        list_area,
-    );
+    // No bg on the list paragraph — transparent so the terminal theme
+    // shows through; selected rows carry their own SURFACE0 bg.
+    frame.render_widget(Paragraph::new(visible), list_area);
 
-    // Status strip: scope left, position right (spec §2).
+    // Status strip: scope left, position right (spec §2). A bar → mantle.
     let scope = Span::styled(" tree · target groups ", Style::default().fg(SURFACE2));
     let pos = Span::styled(
         format!(
@@ -210,13 +235,11 @@ fn draw_row(_i: usize, row: &crate::nav::VisibleRow, selected: bool) -> Line<'st
     let glyph = kind_glyph(row.kind);
     let glyph_color = kind_color(row.kind);
 
-    let row_bg = if selected { SURFACE0 } else { BASE };
     let label_color = if selected { TEXT } else { SUBTEXT0 };
 
     // Selection: a 2px left bar in the row's kind colour (spec §9). In a
     // cell TUI we render the first cell as a kind-coloured background
-    // (a space with bg=kind_color), which reads as a solid left bar —
-    // no glyph that could render as a full-width block.
+    // (a space with bg=kind_color), which reads as a solid left bar.
     let bar = if selected {
         Span::styled(" ", Style::default().bg(glyph_color))
     } else {
@@ -246,15 +269,20 @@ fn draw_row(_i: usize, row: &crate::nav::VisibleRow, selected: bool) -> Line<'st
             Style::default().fg(meta_color),
         ));
     }
-    // Line-level bg so raw spans (indent, gaps) inherit the row background
-    // instead of showing the terminal default through.
-    Line::from(spans).style(Style::default().bg(row_bg))
+    // Line-level bg only when selected (SURFACE0); non-selected rows are
+    // transparent so the terminal theme shows through.
+    let line_style = if selected {
+        Style::default().bg(SURFACE0)
+    } else {
+        Style::default()
+    };
+    Line::from(spans).style(line_style)
 }
 
 fn draw_preview_placeholder(frame: &mut Frame, area: Rect) {
     // Phase 2: per-kind preview (spec §7). Here a placeholder — no
-    // bordered box (spec §2 separates panes with a vertical rule only;
-    // the preview is a header line + body, not a second border).
+    // bordered box (spec §2 separates panes with a vertical rule only).
+    // Header line is a bar (mantle); body is transparent.
     let header = Line::styled(
         " preview ",
         Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
@@ -272,10 +300,8 @@ fn draw_preview_placeholder(frame: &mut Frame, area: Rect) {
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area);
     frame.render_widget(Paragraph::new(header), body_area[0]);
-    frame.render_widget(
-        Paragraph::new(body).style(Style::default().bg(BASE)),
-        body_area[1],
-    );
+    // Body transparent — terminal theme shows through.
+    frame.render_widget(Paragraph::new(body), body_area[1]);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
