@@ -435,6 +435,28 @@ impl Tree {
             self.cursor = n - 1;
         }
     }
+
+    /// Reload the tree's nodes after a side action mutates session
+    /// state (spec §8: pin / kill / detach). Preserves the cursor on
+    /// the same object if it still exists (matched by id); otherwise
+    /// keeps the cursor index (clamped). The `expanded` set is kept
+    /// — stale ids are harmless (they simply won't match anything).
+    pub fn reload(&mut self, root: Vec<Node>) {
+        // Capture the current cursor row's id before replacing.
+        let old_id = self.cursor_row().map(|r| r.id);
+        self.root = root;
+        // Re-resolve the cursor by id. If the node is gone, clamp.
+        let rows = self.visible_rows();
+        if let Some(id) = old_id {
+            if let Some(pos) = rows.iter().position(|r| r.id == id) {
+                self.cursor = pos;
+            } else {
+                self.ensure_cursor_valid();
+            }
+        } else {
+            self.ensure_cursor_valid();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -567,6 +589,47 @@ mod tests {
         assert!(t.expanded.contains("group:session"));
         assert!(t.expanded.contains("ws"));
         assert!(t.expanded.contains("tab"));
+    }
+    #[test]
+    fn reload_preserves_cursor_on_surviving_node() {
+        let root = vec![branch(
+            "group:session",
+            "Session",
+            vec![leaf("session:pane:p1", "p1"), leaf("session:pane:p2", "p2")],
+        )];
+        let mut tree = Tree::new(root);
+        tree.expanded.insert("group:session".into());
+        // Move cursor to p2.
+        tree.cursor = 2; // group, p1, p2
+        assert_eq!(tree.cursor_row().unwrap().id, "session:pane:p2");
+        // Reload with the same nodes — cursor should stay on p2.
+        let root2 = vec![branch(
+            "group:session",
+            "Session",
+            vec![leaf("session:pane:p1", "p1"), leaf("session:pane:p2", "p2")],
+        )];
+        tree.reload(root2);
+        assert_eq!(tree.cursor_row().unwrap().id, "session:pane:p2");
+    }
+
+    #[test]
+    fn reload_clamps_cursor_when_node_gone() {
+        let root = vec![branch(
+            "group:session",
+            "Session",
+            vec![leaf("session:pane:p1", "p1"), leaf("session:pane:p2", "p2")],
+        )];
+        let mut tree = Tree::new(root);
+        tree.expanded.insert("group:session".into());
+        tree.cursor = 2; // p2
+                         // Reload with p2 killed — cursor should clamp to p1 (last row).
+        let root2 = vec![branch(
+            "group:session",
+            "Session",
+            vec![leaf("session:pane:p1", "p1")],
+        )];
+        tree.reload(root2);
+        assert_eq!(tree.cursor_row().unwrap().id, "session:pane:p1");
     }
 }
 

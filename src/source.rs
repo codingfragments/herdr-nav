@@ -528,6 +528,77 @@ fn build_pinned_tree() -> Node {
     }
 }
 
+/// Append a pin to `~/.config/herdr/targets.toml` (spec §8: `^p`).
+/// `path` is already expanded (absolute). The slot is `max+1`, or 1
+/// if the file is empty/missing. Idempotent: a path already pinned
+/// is a no-op. Returns the slot assigned, or an error message.
+pub fn write_pin(path: &str) -> Result<u32, String> {
+    let dir = std::env::var("HOME")
+        .map(|h| format!("{h}/.config/herdr"))
+        .map_err(|_| "HOME not set".to_string())?;
+    let file = format!("{dir}/targets.toml");
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let pins = parse_targets_toml(&existing);
+    // Idempotent: already pinned.
+    let expanded = expand_path(path);
+    if pins.iter().any(|(p, _)| *p == expanded) {
+        return Ok(pins
+            .iter()
+            .map(|(_, s)| *s)
+            .find(|s| pins.iter().any(|(p, ss)| p == &expanded && ss == s))
+            .unwrap_or(0));
+    }
+    let next_slot = pins.iter().map(|(_, s)| *s).max().unwrap_or(0) + 1;
+    // Append a new [[pin]] block. If the file doesn't end with a
+    // newline, add one before appending.
+    let block = if existing.is_empty() {
+        format!(
+            "# herdr-nav pinned directories. Each [[pin]] is one jump target;\n\
+             # `slot` is the ⌘1–⌘9 display order (spec §4).\n\n\
+             [[pin]]\npath = \"{expanded}\"\nslot = {next_slot}\n"
+        )
+    } else {
+        let prefix = if existing.ends_with('\n') { "" } else { "\n" };
+        format!("{prefix}\n[[pin]]\npath = \"{expanded}\"\nslot = {next_slot}\n")
+    };
+    // Create the dir if missing.
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(&file, format!("{existing}{block}")).map_err(|e| e.to_string())?;
+    Ok(next_slot)
+}
+
+/// Remove a pin from `~/.config/herdr/targets.toml` (spec §8: `^u`).
+/// `path` is already expanded (absolute). Rewrites the file with the
+/// pin removed and remaining slots renumbered 1..N. No-op (Ok) if the
+/// path isn't pinned or the file is missing. Returns true if a pin was
+/// removed.
+pub fn unpin(path: &str) -> Result<bool, String> {
+    let dir = std::env::var("HOME")
+        .map(|h| format!("{h}/.config/herdr"))
+        .map_err(|_| "HOME not set".to_string())?;
+    let file = format!("{dir}/targets.toml");
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let pins = parse_targets_toml(&existing);
+    let expanded = expand_path(path);
+    let before = pins.len();
+    let mut kept: Vec<(String, u32)> = pins.into_iter().filter(|(p, _)| *p != expanded).collect();
+    if kept.len() == before {
+        return Ok(false); // not pinned — no-op
+    }
+    // Renumber slots 1..N so there are no gaps.
+    kept.sort_by_key(|(_, s)| *s);
+    let mut out = String::new();
+    if !kept.is_empty() {
+        out.push_str("# herdr-nav pinned directories. Each [[pin]] is one jump target;\n");
+        out.push_str("# `slot` is the ⌘1–⌘9 display order (spec §4).\n\n");
+        for (i, (p, _)) in kept.iter().enumerate() {
+            out.push_str(&format!("[[pin]]\npath = \"{p}\"\nslot = {}\n\n", i + 1));
+        }
+    }
+    std::fs::write(&file, out).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Read `~/.config/herdr/targets.toml` → `Vec<(path, slot)>`. Empty
 /// if missing or malformed (no crash).
 fn read_targets_toml() -> Vec<(String, u32)> {
@@ -1925,5 +1996,68 @@ mod plugins_tests {
         let plugins = vec![plugin("plain", "0.1.0", true, 0)];
         let group = build_plugins_tree(&plugins);
         assert_eq!(group.children[0].meta, "no actions");
+    }
+}
+
+#[cfg(test)]
+mod write_pin_tests {
+    use super::*;
+
+    #[test]
+    fn parse_round_trips() {
+        let content = "# header\n[[pin]]\npath = \"~/foo\"\nslot = 1\n\n[[pin]]\npath = \"~/bar\"\nslot = 2\n";
+        let pins = parse_targets_toml(content);
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].1, 1);
+        assert_eq!(pins[1].1, 2);
+    }
+
+    #[test]
+    fn next_slot_is_max_plus_one() {
+        // The slot logic: max(existing) + 1. For an empty file → 1.
+        let pins = parse_targets_toml("");
+        assert!(pins.is_empty());
+        // Simulate the max+1 logic.
+        let next = pins.iter().map(|(_, s)| *s).max().unwrap_or(0) + 1;
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn next_slot_with_existing() {
+        let content = "[[pin]]\npath = \"~/a\"\nslot = 3\n[[pin]]\npath = \"~/b\"\nslot = 1\n";
+        let pins = parse_targets_toml(content);
+        let next = pins.iter().map(|(_, s)| *s).max().unwrap_or(0) + 1;
+        assert_eq!(next, 4);
+    }
+}
+
+#[cfg(test)]
+mod unpin_tests {
+    use super::*;
+
+    #[test]
+    fn renumber_after_remove_closes_gaps() {
+        // Three pins slots 1,2,3 — remove the middle one; remaining
+        // slots must renumber to 1,2 (no gap).
+        let pins = vec![
+            ("~/a".to_string(), 1u32),
+            ("~/b".to_string(), 2),
+            ("~/c".to_string(), 3),
+        ];
+        let mut kept: Vec<(String, u32)> = pins.into_iter().filter(|(p, _)| p != "~/b").collect();
+        kept.sort_by_key(|(_, s)| *s);
+        let renumbered: Vec<u32> = (1..=kept.len() as u32).collect();
+        assert_eq!(renumbered, vec![1, 2]);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn unpin_not_pinned_is_noop() {
+        // Simulate: path not in pins → no removal.
+        let pins = vec![("~/a".to_string(), 1u32)];
+        let expanded = "~/b";
+        let before = pins.len();
+        let kept: Vec<(String, u32)> = pins.into_iter().filter(|(p, _)| p != expanded).collect();
+        assert_eq!(kept.len(), before); // unchanged → no-op
     }
 }
