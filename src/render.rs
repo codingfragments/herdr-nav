@@ -74,6 +74,7 @@ fn kind_color(kind: Kind) -> Color {
 
 /// Draw the whole popup (spec §2): four bands inside a bordered frame,
 /// with surface2 horizontal rules separating the bars from the body.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     tree: &Tree,
@@ -82,6 +83,7 @@ pub fn draw(
     socket_path: &str,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
+    name_prompt: Option<(&str, &str)>,
 ) {
     let area = frame.area();
 
@@ -107,7 +109,7 @@ pub fn draw(
         ])
         .split(area);
 
-    draw_search_bar(frame, bands[0], search);
+    draw_search_bar(frame, bands[0], search, name_prompt);
     draw_rule(frame, bands[1]);
     draw_body(
         frame,
@@ -120,7 +122,7 @@ pub fn draw(
         flash_error,
     );
     draw_rule(frame, bands[3]);
-    draw_footer(frame, bands[4], search, cursor_kind);
+    draw_footer(frame, bands[4], search, cursor_kind, name_prompt);
 }
 
 /// A thin full-width surface2 horizontal rule via a ratatui top
@@ -135,26 +137,41 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
     );
 }
 
-fn draw_search_bar(frame: &mut Frame, area: Rect, search: Option<&SearchView>) {
+fn draw_search_bar(
+    frame: &mut Frame,
+    area: Rect,
+    search: Option<&SearchView>,
+    name_prompt: Option<(&str, &str)>,
+) {
     let prompt = Span::styled(
         "❯ ",
         Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
     );
-    let line = match search {
-        Some(v) => {
-            // Show the live query + a block caret.
-            Line::from(vec![
+    let line = if let Some((label, name)) = name_prompt {
+        // Name prompt: show the label + editable name + caret.
+        Line::from(vec![
+            Span::styled(
+                format!(" {label}: "),
+                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(name.to_string()),
+            Span::styled("▮", Style::default().fg(MAUVE)),
+        ])
+        .style(Style::default().bg(MANTLE))
+    } else {
+        match search {
+            Some(v) => Line::from(vec![
                 prompt,
                 Span::raw(v.query.clone()),
                 Span::styled("▮", Style::default().fg(MAUVE)),
             ])
-            .style(Style::default().bg(MANTLE))
+            .style(Style::default().bg(MANTLE)),
+            None => Line::from(vec![
+                prompt,
+                Span::styled("type to search…", Style::default().fg(SURFACE2)),
+            ])
+            .style(Style::default().bg(MANTLE)),
         }
-        None => Line::from(vec![
-            prompt,
-            Span::styled("type to search…", Style::default().fg(SURFACE2)),
-        ])
-        .style(Style::default().bg(MANTLE)),
     };
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -486,13 +503,16 @@ fn draw_footer(
     area: Rect,
     search: Option<&SearchView>,
     cursor_kind: Option<Kind>,
+    name_prompt: Option<(&str, &str)>,
 ) {
-    // Mode- and cursor-aware hints (spec §8). The Enter hint names
-    // the action Enter will perform on the selected element — dynamic,
-    // not a static "open/expand".
-    let (enter_hint, esc_hint) = match search {
-        Some(_) => (enter_action_label(cursor_kind, true), "clear"),
-        None => (enter_action_label(cursor_kind, false), "close"),
+    // Name prompt active: confirm/cancel hints.
+    let (enter_hint, esc_hint) = if name_prompt.is_some() {
+        ("create workspace", "cancel")
+    } else {
+        match search {
+            Some(_) => (enter_action_label(cursor_kind, true), "clear"),
+            None => (enter_action_label(cursor_kind, false), "close"),
+        }
     };
     let hints = vec![
         Span::styled(

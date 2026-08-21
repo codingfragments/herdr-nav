@@ -374,15 +374,21 @@ impl Provider for ZoxideProvider {
 /// workspace otherwise. Never reuses the current workspace.
 /// `id` is the node id (`pinned:<path>` or `zox:<path>`); the
 /// path is the part after the colon.
-fn open_dir_workspace(id: &str) -> Result<crate::nav::Outcome, String> {
+pub fn open_dir_workspace(id: &str) -> Result<crate::nav::Outcome, String> {
+    open_dir_workspace_named(id, None)
+}
+
+/// Create a new workspace at the path, optionally named. `name` is
+/// the user-edited workspace label (None = let herdr pick).
+pub fn open_dir_workspace_named(
+    id: &str,
+    name: Option<&str>,
+) -> Result<crate::nav::Outcome, String> {
     let path = id.split_once(':').map(|(_, p)| p).unwrap_or(id);
     let expanded = expand_path(path);
     let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
 
-    // Create the workspace, then focus its first pane so the user
-    // lands in it (spec §8.2: Enter opens a new workspace AND enters
-    // it — not just creates it and leaves you in the old one).
-    let result = create_dir_workspace(&socket, &expanded)?;
+    let result = create_dir_workspace(&socket, &expanded, name)?;
     if let Some(pane_id) = result {
         let _ = crate::socket_client::request(
             &socket,
@@ -399,7 +405,11 @@ fn open_dir_workspace(id: &str) -> Result<crate::nav::Outcome, String> {
 /// git repo, plain otherwise) and return the first pane's id so
 /// the caller can focus it. Returns None if the create succeeded
 /// but no pane id was in the response (best-effort focus).
-fn create_dir_workspace(socket: &str, expanded: &str) -> Result<Option<String>, String> {
+fn create_dir_workspace(
+    socket: &str,
+    expanded: &str,
+    name: Option<&str>,
+) -> Result<Option<String>, String> {
     // Worktree-space if inside a git repo, else plain workspace.
     if is_inside_git_repo(expanded) {
         // Try worktree.create; fall back to workspace.create if
@@ -417,13 +427,14 @@ fn create_dir_workspace(socket: &str, expanded: &str) -> Result<Option<String>, 
                 .map(str::to_string));
         }
     }
-    // Plain workspace (or worktree fallback).
-    let resp = crate::socket_client::request(
-        socket,
-        "workspace.create",
-        serde_json::json!({"cwd": expanded}),
-    )
-    .map_err(|e| e.to_string())?;
+    // Plain workspace (or worktree fallback). Pass the name as
+    // `label` if provided.
+    let mut params = serde_json::json!({"cwd": expanded});
+    if let Some(name) = name {
+        params["label"] = serde_json::Value::String(name.to_string());
+    }
+    let resp = crate::socket_client::request(socket, "workspace.create", params)
+        .map_err(|e| e.to_string())?;
     Ok(resp
         .get("root_pane")
         .and_then(|v| v.get("pane_id"))
@@ -432,7 +443,7 @@ fn create_dir_workspace(socket: &str, expanded: &str) -> Result<Option<String>, 
 }
 
 /// Expand `~` and `$HOME` in a path.
-fn expand_path(path: &str) -> String {
+pub fn expand_path(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
             return format!("{home}/{rest}");
@@ -611,6 +622,19 @@ fn short_path(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Derive a good default workspace name from a directory path:
+/// the last path segment (e.g. `~/code/herdr` → `herdr`).
+pub fn workspace_name_default(path: &str) -> String {
+    let expanded = expand_path(path);
+    expanded
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("workspace")
+        .to_string()
 }
 /// `pane.list` panes array (spec §4/§5). Panes are grouped by
 /// `workspace_id` then `tab_id`; workspaces and tabs are synthesised as
@@ -1194,5 +1218,18 @@ mod dir_tests {
         let id = "pinned:~/code/herdr";
         let path = id.split_once(':').map(|(_, p)| p).unwrap_or(id);
         assert_eq!(path, "~/code/herdr");
+    }
+}
+
+#[cfg(test)]
+mod name_default_tests {
+    use super::*;
+    #[test]
+    fn workspace_name_default_is_last_segment() {
+        assert_eq!(workspace_name_default("/Users/foo/code/herdr"), "herdr");
+        assert_eq!(workspace_name_default("~/code/herdr"), "herdr");
+        assert_eq!(workspace_name_default("/trailing/"), "trailing");
+        assert_eq!(workspace_name_default("/"), "workspace");
+        assert_eq!(workspace_name_default("bare"), "bare");
     }
 }

@@ -42,6 +42,22 @@ use ratatui::Terminal;
 /// ports — confirmed live against Herdr 0.8.0.)
 const KEY_DEBOUNCE: Duration = Duration::from_millis(40);
 
+// ── Name prompt (dir/zox workspace creation) ────────────────────────────────
+
+/// An inline prompt for naming a new workspace (spec §8.2 amended).
+/// Prefilled with a good default derived from the path; the user
+/// confirms (Enter) to create + enter, or cancels (Esc) to abort
+/// without creating and stay in the popup.
+struct NamePrompt {
+    /// The node id being acted on (`pinned:<path>` / `zox:<path>`).
+    node_id: String,
+    /// The expanded path (for the workspace.create call).
+    #[allow(dead_code)] // used by open_dir_workspace_named via node_id
+    path: String,
+    /// The editable name (prefilled with the default).
+    name: String,
+}
+
 // ── Launch context ────────────────────────────────────────────────────────────
 
 /// Launch context: which pane this popup was opened relative to.
@@ -125,6 +141,12 @@ fn event_loop<B: ratatui::backend::Backend>(
     let mut last_cursor_change: Option<std::time::Instant> = None;
     let mut flash_error: Option<(String, String)> = None;
 
+    // Name prompt for dir/zox workspace creation (spec §8.2 amended:
+    // prompt the user to name the new workspace, prefill a default,
+    // confirm = create + enter; cancel = don't create, stay open).
+    // None = no prompt active; Some = prompt visible, editing the name.
+    let mut name_prompt: Option<NamePrompt> = None;
+
     // Haystack built once per invocation (spec §6.1): DFS, leaves
     // only, group order. Stable for the whole popup (providers
     // don't refresh mid-invocation in Phase 4).
@@ -144,6 +166,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                     socket_path,
                     last_cursor_change,
                     flash_error.as_ref(),
+                    name_prompt
+                        .as_ref()
+                        .map(|p| (p.node_id.as_str(), p.name.as_str())),
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -182,6 +207,10 @@ fn event_loop<B: ratatui::backend::Backend>(
         use KeyCode::*;
         match key.code {
             Esc => {
+                // Cancel the name prompt first (don't create, stay open).
+                if name_prompt.take().is_some() {
+                    continue;
+                }
                 // Two-stage Esc (spec §3): search → clear query
                 // (back to browse); browse → close.
                 if is_search {
@@ -227,9 +256,11 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Backspace => {
-                // Search only: delete last char; empty → browse
-                // (spec §3). Inert in browse.
-                if let Some(v) = search_view.as_mut() {
+                // Name prompt: delete last char of the name.
+                if let Some(prompt) = name_prompt.as_mut() {
+                    prompt.name.pop();
+                } else if let Some(v) = search_view.as_mut() {
+                    // Search: delete last char; empty → browse (spec §3).
                     v.query.pop();
                     if v.query.is_empty() {
                         search_view = None;
@@ -259,6 +290,21 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Enter => {
+                // If a name prompt is active, confirm it.
+                if let Some(prompt) = name_prompt.take() {
+                    match source::open_dir_workspace_named(&prompt.node_id, Some(&prompt.name)) {
+                        Ok(nav::Outcome::Close { .. }) => {
+                            // Create + focus the first pane (done in
+                            // open_dir_workspace), then close the popup.
+                            break;
+                        }
+                        Ok(nav::Outcome::Stay { .. }) => {}
+                        Err(e) => {
+                            flash_error = Some((prompt.node_id, e));
+                        }
+                    }
+                    continue;
+                }
                 // The node id to invoke on: in search, the cursor
                 // leaf; in browse, the cursor row.
                 let leaf_id = search_view
@@ -272,11 +318,22 @@ fn event_loop<B: ratatui::backend::Backend>(
                 };
                 if is_leaf {
                     if let Some(id) = leaf_id {
-                        match invoke_action(socket_path, &id) {
-                            Ok(nav::Outcome::Close { .. }) => break,
-                            Ok(nav::Outcome::Stay { .. }) => {}
-                            Err(e) => {
-                                flash_error = Some((id, e));
+                        // Dir/zox: prompt for a workspace name (spec §8.2
+                        // amended) instead of creating immediately.
+                        if id.starts_with("pinned:") || id.starts_with("zox:") {
+                            let path = id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
+                            name_prompt = Some(NamePrompt {
+                                node_id: id.clone(),
+                                path: source::expand_path(path),
+                                name: source::workspace_name_default(path),
+                            });
+                        } else {
+                            match invoke_action(socket_path, &id) {
+                                Ok(nav::Outcome::Close { .. }) => break,
+                                Ok(nav::Outcome::Stay { .. }) => {}
+                                Err(e) => {
+                                    flash_error = Some((id, e));
+                                }
                             }
                         }
                     }
@@ -286,18 +343,22 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Char(c) if c.is_ascii_graphic() && (key.modifiers.is_empty() || only_shift) => {
-                // Printable char → enter search (or append), re-rank,
-                // cursor → 0 (spec §3). No modifiers — ^n/^p are
-                // handled above.
-                match search_view.as_mut() {
-                    Some(v) => {
-                        v.query.push(c);
-                        v.requery(&haystack);
-                    }
-                    None => {
-                        let mut v = search::view(&haystack, c.to_string());
-                        v.cursor = 0;
-                        search_view = Some(v);
+                // Name prompt: append to the name.
+                if let Some(prompt) = name_prompt.as_mut() {
+                    prompt.name.push(c);
+                } else {
+                    // Printable char → enter search (or append), re-rank,
+                    // cursor → 0 (spec §3).
+                    match search_view.as_mut() {
+                        Some(v) => {
+                            v.query.push(c);
+                            v.requery(&haystack);
+                        }
+                        None => {
+                            let mut v = search::view(&haystack, c.to_string());
+                            v.cursor = 0;
+                            search_view = Some(v);
+                        }
                     }
                 }
             }
