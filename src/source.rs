@@ -106,8 +106,25 @@ impl Provider for SessionProvider {
             .cloned()
             .unwrap_or_default();
 
+        // Workspace/tab labels come from workspace.list + tab.list, not
+        // from pane.list (which only carries ids). Fall back to the id
+        // if either call fails — the tree still renders.
+        let ws_names = name_map(
+            &self.socket_path,
+            "workspace.list",
+            "workspaces",
+            "workspace_id",
+        );
+        let tab_names = name_map(&self.socket_path, "tab.list", "tabs", "tab_id");
+
         let (active_workspace, active_tab) = active_ids_from_env();
-        Ok(build_session_tree(&panes, &active_workspace, &active_tab))
+        Ok(build_session_tree(
+            &panes,
+            &active_workspace,
+            &active_tab,
+            &ws_names,
+            &tab_names,
+        ))
     }
 
     fn preview(&self, _id: &NodeId) -> Preview {
@@ -173,6 +190,8 @@ fn build_session_tree(
     panes: &[serde_json::Value],
     active_workspace: &str,
     active_tab: &str,
+    ws_names: &std::collections::HashMap<String, String>,
+    tab_names: &std::collections::HashMap<String, String>,
 ) -> Node {
     let mut workspaces: Vec<(String, String, Vec<PaneRow>)> = Vec::new();
     for pane in panes {
@@ -182,11 +201,14 @@ fn build_session_tree(
         let label = pane_label(pane, &pane_id);
         let ws_id = pane_str(pane, "workspace_id").unwrap_or_default();
         let tab_id = pane_str(pane, "tab_id").unwrap_or_default();
-        let ws_name = pane_str(pane, "workspace_name")
-            .or_else(|| pane_str(pane, "workspace_title"))
+        // Real labels from workspace.list / tab.list; fall back to the id.
+        let ws_name = ws_names
+            .get(&ws_id)
+            .cloned()
             .unwrap_or_else(|| ws_id.clone());
-        let tab_name = pane_str(pane, "tab_name")
-            .or_else(|| pane_str(pane, "tab_title"))
+        let tab_name = tab_names
+            .get(&tab_id)
+            .cloned()
             .unwrap_or_else(|| tab_id.clone());
 
         let entry = workspaces
@@ -353,6 +375,37 @@ fn pane_leaf(pane_id: &str, label: &str) -> Node {
     }
 }
 
+/// Fetch a list method and build an `{id -> label}` map. Used to
+/// get the real workspace/tab labels (pane.list only carries ids).
+/// Returns an empty map on any socket/parse failure — the caller
+/// falls back to the id, so the tree still renders.
+fn name_map(
+    socket_path: &str,
+    method: &str,
+    array_key: &str,
+    id_key: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if socket_path.is_empty() {
+        return map;
+    }
+    let Ok(result) = crate::socket_client::request(socket_path, method, serde_json::json!({}))
+    else {
+        return map;
+    };
+    if let Some(arr) = result.get(array_key).and_then(|v| v.as_array()) {
+        for item in arr {
+            if let (Some(id), Some(label)) = (
+                item.get(id_key).and_then(|v| v.as_str()),
+                item.get("label").and_then(|v| v.as_str()),
+            ) {
+                map.insert(id.to_string(), label.to_string());
+            }
+        }
+    }
+    map
+}
+
 /// Read the active workspace/tab ids from `HERDR_PLUGIN_CONTEXT_JSON`
 /// (set by Herdr for a real plugin-pane invocation). Falls back to empty
 /// strings (no active marker) when unavailable.
@@ -393,7 +446,7 @@ fn pane_label(pane: &serde_json::Value, pane_id: &str) -> String {
 mod tests {
     use super::*;
 
-    fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
+    pub(crate) fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
         serde_json::json!({
             "pane_id": id,
             "tab_id": tab,
@@ -410,7 +463,13 @@ mod tests {
             pane("p3", "t2", "w1", "zsh"),
             pane("p4", "t1", "w2", "editor"),
         ];
-        let session = build_session_tree(&panes, "", "");
+        let session = build_session_tree(
+            &panes,
+            "",
+            "",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(session.kind, Kind::Group);
         assert_eq!(session.label, "Session");
         // Two workspaces.
@@ -430,7 +489,13 @@ mod tests {
     #[test]
     fn active_workspace_first() {
         let panes = vec![pane("p1", "t1", "w1", "a"), pane("p2", "t1", "w2", "b")];
-        let session = build_session_tree(&panes, "w2", "t1");
+        let session = build_session_tree(
+            &panes,
+            "w2",
+            "t1",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
         // w2 (active) first.
         assert_eq!(session.children[0].id, "session:ws:w2");
         assert_eq!(session.children[0].meta, "active");
@@ -443,7 +508,13 @@ mod tests {
             serde_json::json!({"pane_id": "p1", "tab_id": "t1", "label": "nvim"}),
             serde_json::json!({"pane_id": "p2", "tab_id": "t1", "label": "sh"}),
         ];
-        let session = build_session_tree(&panes, "", "");
+        let session = build_session_tree(
+            &panes,
+            "",
+            "",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(session.children.len(), 1); // one implicit workspace
         assert_eq!(session.children[0].children.len(), 1); // one tab
         assert_eq!(session.children[0].children[0].children.len(), 2); // 2 panes
@@ -546,5 +617,55 @@ mod tests {
         assert!(node_for("session:ws:w1", &session).is_some());
         assert!(node_for("session:pane:w1:p1", &session).is_some());
         assert!(node_for("nope", &session).is_none());
+    }
+}
+
+#[cfg(test)]
+mod name_map_tests {
+    use super::*;
+
+    fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
+        serde_json::json!({
+            "pane_id": id,
+            "tab_id": tab,
+            "workspace_id": ws,
+            "label": label,
+        })
+    }
+
+    #[test]
+    fn build_session_tree_uses_name_maps() {
+        let panes = vec![
+            pane("w9:p1", "w9:t1", "w9", "nvim"),
+            pane("w9:p2", "w9:t1", "w9", "sh"),
+            pane("wA:p3", "wA:tA", "wA", "cargo"),
+        ];
+        let mut ws_names = std::collections::HashMap::new();
+        ws_names.insert("w9".to_string(), "claude-chats".to_string());
+        ws_names.insert("wA".to_string(), "herdr-nav".to_string());
+        let mut tab_names = std::collections::HashMap::new();
+        tab_names.insert("w9:t1".to_string(), "main".to_string());
+        tab_names.insert("wA:tA".to_string(), "dev".to_string());
+        let session = build_session_tree(&panes, "w9", "w9:t1", &ws_names, &tab_names);
+        // Workspace labels come from the map, not the raw id.
+        assert_eq!(session.children[0].label, "claude-chats");
+        assert_eq!(session.children[1].label, "herdr-nav");
+        // Tab label comes from the map too.
+        assert_eq!(session.children[0].children[0].label, "main");
+    }
+
+    #[test]
+    fn name_map_falls_back_to_id_on_empty() {
+        let panes = vec![pane("p1", "t1", "w9", "nvim")];
+        // Empty maps → fall back to the raw id (no crash).
+        let session = build_session_tree(
+            &panes,
+            "w9",
+            "t1",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(session.children[0].label, "w9");
+        assert_eq!(session.children[0].children[0].label, "t1");
     }
 }
