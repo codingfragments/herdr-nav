@@ -340,7 +340,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         .is_some_and(|r| r.kind == nav::Kind::Dir || r.kind == nav::Kind::Zox),
                 };
                 if is_dir && template_picker.is_none() && name_prompt.is_none() {
-                    let templates = source::read_templates_toml();
+                    let templates = source::read_templates();
                     if !templates.is_empty() {
                         let leaf_id = search_view
                             .as_ref()

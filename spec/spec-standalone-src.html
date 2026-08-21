@@ -280,21 +280,44 @@ struct Node {
   <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">A plugin declaring exactly one action still shows the picker — it stays predictable, and one row is cheap. A plugin declaring none is not selectable: its default action becomes "view error" or "no actions declared", and Enter is inert.</p>
 
   <h3 style="font:600 14.5px 'IBM Plex Sans',sans-serif;color:#24273a;margin:16px 0 6px">8.4 Optional: open-with-template (dirs and zoxide)</h3>
-  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px"><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^t</span> on a directory or zoxide entry opens the same selector shape, listing the <strong>configured workspace templates</strong> — a tmuxinator-style declaration of tabs, panes, splits and startup commands — with one preselected: the template whose <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">match</span> pattern fits the path, else the configured default. Enter opens a new workspace (or worktree-space) at that path built from the highlighted template; Esc returns.</p>
-  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden"># ~/.config/herdr/templates.toml
-[[template]]
-name    = "rust-dev"            # shown in the picker
-match   = ["**/Cargo.toml"]     # auto-preselect when the target path matches
-tabs    = [
-  { name = "editor", panes = ["nvim .", "cargo watch -x test"], split = "v", ratio = 60 },
-  { name = "shell",  panes = ["zsh"] },
-]
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px"><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^t</span> on a directory or zoxide entry opens the same selector shape, listing the <strong>configured workspace templates</strong> — one YAML file per template in <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">~/.config/herdr/templates/</span>, with a recursive split layout (tabs, panes, multi-level splits, startup commands) and per-tab / per-pane <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">cwd</span>. One template is preselected: the one whose <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">match</span> glob fits the path, else the configured default. Enter opens a new workspace (or worktree-space) at that path built from the highlighted template; Esc returns.</p>
+  <pre style="background:#1e2030;color:#cad3f5;font:12px/1.65 'JetBrains Mono',monospace;padding:12px 14px;border-radius:5px;margin:10px 0 14px;break-inside:avoid;overflow:hidden"># ~/.config/herdr/templates/rust-dev.yaml
+name: rust-dev
+match:
+  - "**/Cargo.toml"
+tabs:
+  - name: editor
+    cwd: ~/code            # tab-level cwd: every pane in this tab starts here
+    layout:                # a layout is a split (direction + panes)
+      direction: v          # v = side-by-side (left | right), h = stacked (top / bottom)
+      ratio: 60
+      panes:
+        - command: nvim .       # a leaf pane running that command
+        - command: cargo watch -x test
+  - name: shell
+    layout:
+      panes:
+        - {}                  # plain login shell (empty command = no nested shell)
 
-[[template]]
-name    = "plain"               # the fallback default
-default = true
-tabs    = [{ name = "shell", panes = ["zsh"] }]</pre>
-  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The feature is optional: with no <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">templates.toml</span>, <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^t</span> is unbound and the preview footer omits the hint. Plain Enter never consults templates beyond the default one — the picker is the only place a template is chosen explicitly.</p>
+
+# Multi-level split: left = pane A, right = B stacked over C
+# ~/.config/herdr/templates/dev.yaml
+tabs:
+  - name: main
+    layout:
+      direction: v
+      panes:
+        - command: nvim .
+        - layout:               # a nested split (recursive)
+            direction: h
+            panes:
+              - command: cargo watch -x test
+              - command: zsh
+
+# Per-pane cwd override
+#   - command: cargo watch -x test
+#     cwd: ~/code/watch      # this pane overrides the tab cwd</pre>
+  <p style="font:14px/1.62 'IBM Plex Sans',sans-serif;color:#33344a;margin:0 0 10px">The feature is optional: with no <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">templates/</span> dir (or an empty one), <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">^t</span> is unbound and the preview footer omits the hint. Plain Enter never consults templates beyond the default one — the picker is the only place a template is chosen explicitly. An empty <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">command</span> = a plain login shell (no nested shell). <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">cwd</span> is passed to the pane natively (no <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px">cd</span> command).</p>
 
   <figure style="margin:16px 0 20px;break-inside:avoid">
     <img src="images/08-view.png" alt="Executing the default action from search mode" style="width:100%;display:block;border:1px solid #363a4f;border-radius:6px" />

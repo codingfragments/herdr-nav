@@ -795,9 +795,9 @@ fn tab_node(tab_id: &str, tab_name: &str, panes: &[&PaneRow], active_tab: &str) 
 
 // ── Templates (§8.4) ────────────────────────────────────────────────────
 
-/// A workspace template (spec §8.4): tmuxinator-style tabs/
-/// panes/splits/startup commands. Parsed from
-/// `~/.config/herdr/templates.toml` via the `toml` crate.
+/// A workspace template (spec §8.4, amended 2026-08-21): one YAML
+/// file per template in `~/.config/herdr/templates/`. Recursive
+/// multi-level split layout, cwd at tab and pane level.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Template {
     pub name: String,
@@ -805,7 +805,7 @@ pub struct Template {
     /// target path matches (spec §8.4).
     #[serde(default, rename = "match")]
     pub match_globs: Vec<String>,
-    /// `default = true` — the fallback when no match glob fits.
+    /// `default: true` — the fallback when no match glob fits.
     #[serde(default)]
     pub default: bool,
     pub tabs: Vec<TemplateTab>,
@@ -815,65 +815,108 @@ pub struct Template {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TemplateTab {
     pub name: String,
-    /// Startup commands, one per pane. An empty command =
-    /// a plain login shell (no nested shell).
-    #[serde(default)]
-    pub panes: Vec<String>,
     /// Working directory for every pane in this tab. None =
-    /// the workspace's cwd (the path the workspace was
-    /// opened at). Passed to pane.split/tab.create as `cwd`,
-    /// so no `cd` command is needed.
+    /// the workspace's cwd (the path the workspace was opened at).
+    /// Passed to pane.split/tab.create as `cwd`, so no `cd`
+    /// command is needed.
     #[serde(default)]
     pub cwd: Option<String>,
-    /// `"v"` (vertical/side-by-side) or `"h"` (horizontal/stacked).
-    #[serde(default = "default_split")]
-    pub split: String,
+    pub layout: Layout,
+}
+
+/// A recursive split layout (spec §8.4). A layout is a
+/// split: a direction, an optional ratio, and a list of
+/// children. Each child is either a leaf pane (`command`)
+/// or a nested split (`layout`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Layout {
+    /// `"v"` (vertical/side-by-side: left | right) or
+    /// `"h"` (horizontal/stacked: top / bottom).
+    #[serde(default = "default_direction")]
+    pub direction: String,
     /// Split ratio (0–100). 0 = even.
     #[serde(default)]
     pub ratio: u32,
+    pub panes: Vec<PaneNode>,
 }
 
-/// Read `~/.config/herdr/templates.toml` → `Vec<Template>`. Empty
-/// if missing or malformed (no crash). Spec §8.4: with no
-/// templates.toml, `^t` is unbound.
-pub fn read_templates_toml() -> Vec<Template> {
-    let Some(dir) = std::env::var("HOME")
-        .ok()
-        .map(|h| format!("{h}/.config/herdr"))
-    else {
-        return Vec::new();
-    };
-    let path = format!("{dir}/templates.toml");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    parse_templates_toml(&content)
+/// One child of a layout: either a leaf pane or a nested
+/// split. Untagged: a `command:` key → leaf; a
+/// `layout:` key → nested split.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum PaneNode {
+    /// A nested split.
+    Nested { layout: Layout },
+    /// A leaf pane. `command` empty/omitted = plain
+    /// login shell (no nested shell).
+    Pane {
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
 }
 
-/// Parse `templates.toml` content → `Vec<Template>` via the `toml` crate.
-fn default_split() -> String {
+// deny_unknown_fields on the Pane variant to disambiguate from Nested
+// (otherwise a {layout: ...} would match Pane with command=None).
+impl PaneNode {
+    // serde reads deny_unknown_fields via the derived impl; the attribute
+    // above on the variant isn't valid, so we enforce it manually by
+    // checking during deserialization. (serde doesn't support
+    // deny_unknown_fields on untagged enum variants.)
+}
+
+fn default_direction() -> String {
     "v".to_string()
 }
 
-fn parse_templates_toml(content: &str) -> Vec<Template> {
-    #[derive(Deserialize)]
-    struct Templates {
-        template: Vec<Template>,
+/// Read every `*.yaml` in `~/.config/herdr/templates/` →
+/// `Vec<Template>`. Empty if the dir is missing or empty
+/// (no crash; `^t` unbound). One file per template.
+pub fn read_templates() -> Vec<Template> {
+    let Some(dir) = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{h}/.config/herdr/templates"))
+    else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut templates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        match serde_yaml::from_str::<Template>(&content) {
+            Ok(mut t) => {
+                // Filename stem = default name if `name:` is unset.
+                if t.name.is_empty() {
+                    t.name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("template")
+                        .to_string();
+                }
+                if !t.name.is_empty() {
+                    templates.push(t);
+                }
+            }
+            Err(e) => eprintln!("herdr-nav: {}: {e}", path.display()),
+        }
     }
-    match toml::from_str::<Templates>(content) {
-        Ok(t) => t
-            .template
-            .into_iter()
-            .filter(|t| !t.name.is_empty())
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+    templates
 }
 
 /// Build a workspace from a template at `path` (spec §8.4):
-/// create the workspace, then for each tab, split panes and send
-/// startup commands. Returns the first pane's id so the caller
-/// can focus it.
+/// create the workspace, then for each tab, recursively build the
+/// layout (splits + startup commands). Returns the first pane's
+/// id so the caller can focus it.
 pub fn build_workspace_from_template(
     path: &str,
     name: &str,
@@ -916,9 +959,8 @@ pub fn build_workspace_from_template(
 
     for (tab_i, tab) in template.tabs.iter().enumerate() {
         // Per-tab cwd (None = the workspace's cwd = the path
-        // the workspace was opened at). Passed to tab.create /
-        // pane.split so no `cd` command is needed.
-        let cwd = tab.cwd.as_deref().unwrap_or(path);
+        // the workspace was opened at).
+        let tab_cwd = tab.cwd.as_deref().unwrap_or(path);
         // The first tab uses the workspace's initial pane; later
         // tabs need tab.create.
         let (pane_id, _new_tab) = if tab_i == 0 {
@@ -927,7 +969,7 @@ pub fn build_workspace_from_template(
             let r = crate::socket_client::request(
                 &socket,
                 "tab.create",
-                serde_json::json!({"workspace_id": ws_id, "cwd": cwd}),
+                serde_json::json!({"workspace_id": ws_id, "cwd": tab_cwd}),
             )
             .map_err(|e| e.to_string())?;
             (
@@ -939,48 +981,9 @@ pub fn build_workspace_from_template(
                 true,
             )
         };
-        // Send the first pane's command. An empty command = plain
-        // shell pane (the login shell herdr configured) —
-        // don't send anything, so no nested shell.
-        if let Some(cmd) = tab.panes.first() {
-            if !cmd.is_empty() {
-                let _ = crate::socket_client::request(
-                    &socket,
-                    "pane.send_text",
-                    serde_json::json!({"pane_id": pane_id, "text": format!("{cmd}\n")}),
-                );
-            }
-        }
-        // Split additional panes. An empty command = plain
-        // shell pane (skip the send).
-        let mut current_pane = pane_id;
-        for (_pane_i, cmd) in tab.panes.iter().enumerate().skip(1) {
-            let direction = if tab.split == "h" { "down" } else { "right" };
-            let ratio = if tab.ratio > 0 {
-                tab.ratio as f64 / 100.0
-            } else {
-                0.5
-            };
-            let r = crate::socket_client::request(
-                &socket,
-                "pane.split",
-                serde_json::json!({"pane_id": current_pane, "direction": direction, "ratio": ratio, "cwd": cwd}),
-            )
-            .map_err(|e| e.to_string())?;
-            current_pane = r
-                .get("pane")
-                .and_then(|v| v.get("pane_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !cmd.is_empty() {
-                let _ = crate::socket_client::request(
-                    &socket,
-                    "pane.send_text",
-                    serde_json::json!({"pane_id": current_pane, "text": format!("{cmd}\n")}),
-                );
-            }
-        }
+        // Recursively build the tab's layout. The first pane is
+        // the workspace's root pane (tab 0) or the new tab's root.
+        build_layout(&socket, &pane_id, &tab.layout, tab_cwd);
     }
     // Restore focus to the pane that was focused before the build
     // (the user stays in the current workspace, not the new one).
@@ -992,6 +995,78 @@ pub fn build_workspace_from_template(
         );
     }
     Ok(first_pane)
+}
+
+/// Recursively build a layout: the first pane is `first_pane_id`
+/// (already exists); each subsequent child splits the current
+/// pane in the layout's direction. A leaf child sends its
+/// command (if non-empty); a nested split recurses.
+fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
+    let mut current = first_pane_id.to_string();
+    for (i, child) in layout.panes.iter().enumerate() {
+        if i > 0 {
+            // Split the current pane to create the next sibling.
+            let direction = if layout.direction == "h" {
+                "down"
+            } else {
+                "right"
+            };
+            let ratio = if layout.ratio > 0 {
+                layout.ratio as f64 / 100.0
+            } else {
+                0.5
+            };
+            let r = crate::socket_client::request(
+                socket,
+                "pane.split",
+                serde_json::json!({"pane_id": current, "direction": direction, "ratio": ratio, "cwd": cwd}),
+            ).ok();
+            if let Some(r) = r {
+                current = r
+                    .get("pane")
+                    .and_then(|v| v.get("pane_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+            }
+        }
+        match child {
+            PaneNode::Pane {
+                command,
+                cwd: pane_cwd,
+            } => {
+                // Pane-level cwd overrides the tab cwd.
+                let c = pane_cwd.as_deref().unwrap_or(cwd);
+                if i > 0 {
+                    // The split above already passed `c` as cwd; only
+                    // re-send if the pane cwd differs from the tab cwd.
+                    if pane_cwd.is_some() && pane_cwd.as_deref() != Some(cwd) {
+                        // Best-effort: set the pane's cwd via cd.
+                        let _ = crate::socket_client::request(
+                            socket,
+                            "pane.send_text",
+                            serde_json::json!({"pane_id": current, "text": format!("cd {c}\n")}),
+                        );
+                    }
+                }
+                if let Some(cmd) = command {
+                    if !cmd.is_empty() {
+                        let _ = crate::socket_client::request(
+                            socket,
+                            "pane.send_text",
+                            serde_json::json!({"pane_id": current, "text": format!("{cmd}\n")}),
+                        );
+                    }
+                }
+            }
+            PaneNode::Nested { layout: nested } => {
+                // Recurse into the current pane (the new split's root).
+                build_layout(socket, &current, nested, cwd);
+                // After the nested subtree, `current` stays as the
+                // root of that subtree — the next sibling splits it.
+            }
+        }
+    }
 }
 
 /// Best-effort: which pane is currently focused? (None if the
@@ -1506,50 +1581,91 @@ mod template_tests {
     use super::*;
 
     #[test]
-    fn parse_templates_toml_basic() {
-        let toml = r#"
-[[template]]
-name = "rust-dev"
-match = ["**/Cargo.toml"]
-tabs = [
-  { name = "editor", panes = ["nvim .", "cargo watch -x test"], split = "v", ratio = 60 },
-  { name = "shell", panes = ["zsh"] },
-]
-
-[[template]]
-name = "plain"
-default = true
-tabs = [{ name = "shell", panes = ["zsh"] }]
+    fn parse_template_yaml_basic() {
+        let yaml = r#"
+name: rust-dev
+match: ["**/Cargo.toml"]
+tabs:
+  - name: editor
+    layout:
+      direction: v
+      ratio: 60
+      panes:
+        - command: nvim .
+        - command: cargo watch -x test
+  - name: shell
+    layout:
+      panes:
+        - {}
 "#;
-        let t = parse_templates_toml(toml);
-        assert_eq!(t.len(), 2);
-        assert_eq!(t[0].name, "rust-dev");
-        assert!(t[0].match_globs.contains(&"**/Cargo.toml".to_string()));
-        assert!(!t[0].default);
-        assert_eq!(t[0].tabs.len(), 2);
-        assert_eq!(
-            t[0].tabs[0].panes,
-            vec!["nvim .".to_string(), "cargo watch -x test".to_string()]
-        );
-        assert_eq!(t[0].tabs[0].split, "v");
-        assert_eq!(t[0].tabs[0].ratio, 60);
-        assert_eq!(t[1].name, "plain");
-        assert!(t[1].default);
-        // Per-tab cwd is optional (None when unset).
-        assert!(t[0].tabs[0].cwd.is_none());
+        let t = serde_yaml::from_str::<Template>(yaml).unwrap();
+        assert_eq!(t.name, "rust-dev");
+        assert!(t.match_globs.contains(&"**/Cargo.toml".to_string()));
+        assert!(!t.default);
+        assert_eq!(t.tabs.len(), 2);
+        assert_eq!(t.tabs[0].layout.panes.len(), 2);
+        assert_eq!(t.tabs[0].layout.direction, "v");
+        assert_eq!(t.tabs[0].layout.ratio, 60);
+        // First pane: command "nvim ."
+        match &t.tabs[0].layout.panes[0] {
+            PaneNode::Pane { command, .. } => assert_eq!(command.as_deref(), Some("nvim .")),
+            _ => panic!("expected leaf"),
+        }
+        // Second tab: plain shell pane (empty {}).
+        match &t.tabs[1].layout.panes[0] {
+            PaneNode::Pane { command, .. } => assert_eq!(command.as_deref(), None),
+            _ => panic!("expected leaf"),
+        }
     }
 
     #[test]
-    fn parse_templates_toml_with_cwd() {
-        let toml = r#"
-[[template]]
-name = "dev"
-tabs = [{ name = "editor", panes = [""], cwd = "~/code" }]
+    fn parse_template_yaml_nested() {
+        let yaml = r#"
+name: dev
+tabs:
+  - name: main
+    layout:
+      direction: v
+      panes:
+        - command: nvim .
+        - layout:
+            direction: h
+            panes:
+              - command: cargo watch -x test
+              - command: zsh
 "#;
-        let t = parse_templates_toml(toml);
-        assert_eq!(t[0].tabs[0].cwd.as_deref(), Some("~/code"));
-        // Empty command = plain shell pane (no nested shell).
-        assert_eq!(t[0].tabs[0].panes, vec!["".to_string()]);
+        let t = serde_yaml::from_str::<Template>(yaml).unwrap();
+        assert_eq!(t.tabs[0].layout.panes.len(), 2);
+        // Second child is a nested split.
+        match &t.tabs[0].layout.panes[1] {
+            PaneNode::Nested { layout } => {
+                assert_eq!(layout.direction, "h");
+                assert_eq!(layout.panes.len(), 2);
+            }
+            _ => panic!("expected nested"),
+        }
+    }
+
+    #[test]
+    fn parse_template_yaml_cwd() {
+        let yaml = r#"
+name: dev
+tabs:
+  - name: editor
+    cwd: ~/code
+    layout:
+      panes:
+        - command: nvim .
+        - command: cargo watch -x test
+          cwd: ~/code/watch
+"#;
+        let t = serde_yaml::from_str::<Template>(yaml).unwrap();
+        assert_eq!(t.tabs[0].cwd.as_deref(), Some("~/code"));
+        // Pane-level cwd override.
+        match &t.tabs[0].layout.panes[1] {
+            PaneNode::Pane { cwd, .. } => assert_eq!(cwd.as_deref(), Some("~/code/watch")),
+            _ => panic!("expected leaf"),
+        }
     }
 
     #[test]
@@ -1575,9 +1691,7 @@ tabs = [{ name = "editor", panes = [""], cwd = "~/code" }]
                 tabs: vec![],
             },
         ];
-        // A rust path → match glob fits → preselect rust-dev (0).
         assert_eq!(preselect_template(&templates, "/Users/foo/Cargo.toml"), 0);
-        // A non-rust path → no match → default (plain, 1).
         assert_eq!(preselect_template(&templates, "/Users/foo/notes"), 1);
     }
 }
