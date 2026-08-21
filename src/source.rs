@@ -48,7 +48,7 @@ fn unavailable_stub(group: Group, reason: &str) -> Node {
             subtitle: reason.to_string(),
             chips: Vec::new(),
             body_label: "SUMMARY",
-            body: vec![format!("provider unavailable: {reason}")],
+            body: vec![format!("provider unavailable: {reason}").into()],
             action: String::new(),
             alt: String::new(),
         },
@@ -396,7 +396,7 @@ mod tests {
         let n = unavailable_stub(Group::Agents, "nope");
         assert_eq!(n.meta, "unavailable");
         assert_eq!(n.preview.body_label, "SUMMARY");
-        assert!(n.preview.body[0].contains("nope"));
+        assert!(n.preview.body[0].to_string().contains("nope"));
     }
 
     #[test]

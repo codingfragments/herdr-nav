@@ -10,6 +10,7 @@ name = "herdr-nav"
 path = "src/main.rs"
 
 [dependencies]
+ansi-to-tui = "8.0.1"
 crossterm = "0.29"
 nucleo-matcher = "0.3.1"
 ratatui = "0.30"

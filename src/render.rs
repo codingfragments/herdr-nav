@@ -18,6 +18,8 @@
 //! "body = terminal-themed (transparent)"; PLANNING.md wins per the
 //! standing precedence rule.
 
+use std::time::Instant;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -71,7 +73,7 @@ fn kind_color(kind: Kind) -> Color {
 
 /// Draw the whole popup (spec §2): four bands inside a bordered frame,
 /// with surface2 horizontal rules separating the bars from the body.
-pub fn draw(frame: &mut Frame, tree: &Tree) {
+pub fn draw(frame: &mut Frame, tree: &Tree, socket_path: &str, last_change: Option<Instant>) {
     let area = frame.area();
 
     // No outer border and no title bar — the Herdr popup window
@@ -95,7 +97,7 @@ pub fn draw(frame: &mut Frame, tree: &Tree) {
 
     draw_search_bar(frame, bands[0]);
     draw_rule(frame, bands[1]);
-    draw_body(frame, bands[2], tree);
+    draw_body(frame, bands[2], tree, socket_path, last_change);
     draw_rule(frame, bands[3]);
     draw_footer(frame, bands[4]);
 }
@@ -123,7 +125,13 @@ fn draw_search_bar(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_body(frame: &mut Frame, area: Rect, tree: &Tree) {
+fn draw_body(
+    frame: &mut Frame,
+    area: Rect,
+    tree: &Tree,
+    socket_path: &str,
+    last_change: Option<Instant>,
+) {
     // Body split: list 44% · vertical rule · preview 56% (spec §2).
     // Below 60 cols the preview is dropped and the list takes the full
     // width (spec §2; the toggle key lands in Phase 9).
@@ -149,7 +157,13 @@ fn draw_body(frame: &mut Frame, area: Rect, tree: &Tree) {
             .border_style(Style::default().fg(SURFACE2)),
         split[1],
     );
-    draw_preview_placeholder(frame, split[2]);
+    // Preview for the cursor node (spec §7). Look up the node via the
+    // cursor's visible-row path so the preview reads the live tree.
+    let node = tree
+        .cursor_row()
+        .and_then(|r| tree.node_at(&r.path))
+        .map(std::borrow::Cow::Borrowed);
+    crate::preview::draw(frame, split[2], node.as_deref(), socket_path, last_change);
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree) {
@@ -262,31 +276,6 @@ fn draw_row(_i: usize, row: &crate::nav::VisibleRow, selected: bool) -> Line<'st
         Style::default()
     };
     Line::from(spans).style(line_style)
-}
-
-fn draw_preview_placeholder(frame: &mut Frame, area: Rect) {
-    // Phase 2: per-kind preview (spec §7). Here a placeholder — no
-    // bordered box (spec §2 separates panes with a vertical rule only).
-    // Header line is a bar (mantle); body is transparent.
-    let header = Line::styled(
-        " preview ",
-        Style::default().fg(SUBTEXT0).add_modifier(Modifier::BOLD),
-    )
-    .style(Style::default().bg(MANTLE));
-    let body = vec![
-        Line::raw(""),
-        Line::styled(
-            "preview pane — per-kind content lands in Phase 2",
-            Style::default().fg(SURFACE2).add_modifier(Modifier::DIM),
-        ),
-    ];
-    let body_area = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .split(area);
-    frame.render_widget(Paragraph::new(header), body_area[0]);
-    // Body transparent — terminal theme shows through.
-    frame.render_widget(Paragraph::new(body), body_area[1]);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {

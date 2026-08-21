@@ -94,7 +94,7 @@ fn run() -> Result<(), String> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).map_err(|e| format!("Terminal::new: {e}"))?;
 
-    let result = event_loop(&mut terminal, &mut tree);
+    let result = event_loop(&mut terminal, &mut tree, &socket_path);
 
     // Restore terminal regardless of how the loop exited.
     disable_raw_mode().ok();
@@ -118,13 +118,18 @@ fn run() -> Result<(), String> {
 fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tree: &mut nav::Tree,
+    socket_path: &str,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
+    // Tracks when the cursor last moved, for the 60ms preview debounce
+    // (spec §7.4). Any cursor-moving key updates this; the preview
+    // stays stale-and-dimmed until the debounce window elapses.
+    let mut last_cursor_change: Option<std::time::Instant> = None;
 
     loop {
         tree.ensure_cursor_valid();
         terminal
-            .draw(|frame| render::draw(frame, tree))
+            .draw(|frame| render::draw(frame, tree, socket_path, last_cursor_change))
             .map_err(|e| format!("draw: {e}"))?;
 
         if !event::poll(Duration::from_millis(250)).map_err(|e| format!("poll: {e}"))? {
@@ -147,16 +152,22 @@ fn event_loop<B: ratatui::backend::Backend>(
         last_key = Some((key, std::time::Instant::now()));
 
         use KeyCode::*;
+        let before = tree.cursor;
         match key.code {
             Esc => break,
-            Down | Char('n')
+            // Bare arrows move the cursor (no modifier guard — the
+            // guard below would reject a plain Down/Up).
+            Down => tree.move_down(),
+            Up => tree.move_up(),
+            // ^n / ^p are the same motion (spec §8).
+            Char('n')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 tree.move_down()
             }
-            Up | Char('p')
+            Char('p')
                 if key
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
@@ -168,6 +179,9 @@ fn event_loop<B: ratatui::backend::Backend>(
             Enter => tree.toggle(),
             // Printable characters are inert in Phase 1 (search is Phase 4).
             _ => {}
+        }
+        if tree.cursor != before {
+            last_cursor_change = Some(std::time::Instant::now());
         }
     }
 
