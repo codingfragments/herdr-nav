@@ -23,7 +23,7 @@ use std::time::Instant;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use ratatui::Frame;
 
 use crate::nav::{Kind, Tree, Twisty};
@@ -123,6 +123,13 @@ pub fn draw(
     );
     draw_rule(frame, bands[3]);
     draw_footer(frame, bands[4], search, cursor_kind, name_prompt);
+
+    // Name-prompt dialog overlay (spec §8.2 amended): a centered
+    // bordered dialog on top of everything, asking for the workspace
+    // name. Rendered last so it sits above all bands.
+    if let Some((label, name)) = name_prompt {
+        draw_name_prompt(frame, area, label, name);
+    }
 }
 
 /// A thin full-width surface2 horizontal rule via a ratatui top
@@ -141,37 +148,24 @@ fn draw_search_bar(
     frame: &mut Frame,
     area: Rect,
     search: Option<&SearchView>,
-    name_prompt: Option<(&str, &str)>,
+    _name_prompt: Option<(&str, &str)>,
 ) {
     let prompt = Span::styled(
         "❯ ",
         Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
     );
-    let line = if let Some((label, name)) = name_prompt {
-        // Name prompt: show the label + editable name + caret.
-        Line::from(vec![
-            Span::styled(
-                format!(" {label}: "),
-                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(name.to_string()),
+    let line = match search {
+        Some(v) => Line::from(vec![
+            prompt,
+            Span::raw(v.query.clone()),
             Span::styled("▮", Style::default().fg(MAUVE)),
         ])
-        .style(Style::default().bg(MANTLE))
-    } else {
-        match search {
-            Some(v) => Line::from(vec![
-                prompt,
-                Span::raw(v.query.clone()),
-                Span::styled("▮", Style::default().fg(MAUVE)),
-            ])
-            .style(Style::default().bg(MANTLE)),
-            None => Line::from(vec![
-                prompt,
-                Span::styled("type to search…", Style::default().fg(SURFACE2)),
-            ])
-            .style(Style::default().bg(MANTLE)),
-        }
+        .style(Style::default().bg(MANTLE)),
+        None => Line::from(vec![
+            prompt,
+            Span::styled("type to search…", Style::default().fg(SURFACE2)),
+        ])
+        .style(Style::default().bg(MANTLE)),
     };
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -552,4 +546,64 @@ fn enter_action_label(kind: Option<Kind>, is_search: bool) -> &'static str {
         _ if !is_search => "expand",
         _ => "run action",
     }
+}
+
+/// Centered name-prompt dialog (spec §8.2 amended). A bordered
+/// dialog on top of the popup, asking for the new workspace's
+/// name. Prefilled with the default; Enter confirms, Esc cancels.
+fn draw_name_prompt(frame: &mut Frame, area: Rect, label: &str, name: &str) {
+    // Wipe the whole popup so the dialog renders on a clean slate
+    // (no bleed-through from the bands below).
+    Clear.render(area, frame.buffer_mut());
+
+    // Center a ~40-wide, 3-row dialog.
+    let w = 40u16;
+    let h = 3u16;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SURFACE2))
+        .title(Span::styled(
+            " Open workspace ",
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(MANTLE));
+    let inner = block.inner(dialog);
+    block.render(dialog, frame.buffer_mut());
+
+    // Row 0: the prompt label + editable name + caret.
+    let line = Line::from(vec![
+        Span::styled(
+            format!(" {label}: "),
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(name.to_string()),
+        Span::styled("▮", Style::default().fg(MAUVE)),
+    ])
+    .style(Style::default().bg(MANTLE));
+
+    // Row 1: hint.
+    let hint = Line::from(vec![
+        Span::styled(
+            " ⏎ ",
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("create   ", Style::default().fg(SUBTEXT0)),
+        Span::styled(
+            "esc ",
+            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("cancel", Style::default().fg(SUBTEXT0)),
+    ])
+    .style(Style::default().bg(MANTLE));
+
+    let body = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner);
+    frame.render_widget(Paragraph::new(line), body[0]);
+    frame.render_widget(Paragraph::new(hint), body[1]);
 }
