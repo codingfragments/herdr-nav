@@ -1,49 +1,156 @@
-# herdr-nav configuration
+# ──────────────────────────────────────────────────────────────────────────────
+# herdr-nav — default configuration
+# ──────────────────────────────────────────────────────────────────────────────
 #
-# Place this file at $HERDR_PLUGIN_CONFIG_DIR/config.toml and edit it.
-# Missing keys fall back to the built-in defaults shown below.
-# A missing or malformed config.toml never crashes the plugin — parse
-# errors are reported on stderr and built-in defaults are used.
+# This file is the complete, commented default for herdr-nav. Every key
+# shown here is the built-in default; copy this file to your plugin
+# config dir and edit the values you want to change:
 #
-# Schema: spec §13. The palette (§9) is fixed and not configurable.
+#   herdr plugin config-dir herdr-nav
+#   cp config.example.toml  $HERDR_PLUGIN_CONFIG_DIR/config.toml
+#
+# Then edit $HERDR_PLUGIN_CONFIG_DIR/config.toml.
+#
+# Rules:
+#   - Every key is optional. Omit a key (or the whole file) to keep the
+#     built-in default for that key. A missing or malformed config.toml
+#     never crashes the plugin — parse errors are reported on stderr and
+#     the defaults are used.
+#   - The palette (spec §9) is NOT configurable here. It auto-follows
+#     Herdr's [theme] setting in ~/.config/herdr/config.toml — see
+#     doc/config-reference.md.
+#   - Spec references (§N) point at the Herdr Switcher Spec rev 1.
+#
+# Schema: spec §13.  Last updated: Phase 10.
 
-# Log level for stderr diagnostics: "error", "warn", "info", "debug", "trace".
+# ── Top-level keys ────────────────────────────────────────────────────────────
+
+# Log level for stderr diagnostics. One of:
+#   "error", "warn", "info", "debug", "trace"
+# Default: "info" (empty string also means info).
 log_level = "info"
 
-# Root target groups, in display order. Any subset of the five; order is
-# the display order. Default: the spec §4 fixed order.
+# Root target groups, in display order (spec §4/§13).
+#
+# Any subset of the five built-in groups; the order here is the display
+# order in the popup. Unknown names are dropped (a warning is printed to
+# stderr). An empty list (or omitting the key) yields the spec §4 fixed
+# order shown below.
+#
+# Built-in groups:
+#   "session"  — live panes in the current Herdr session
+#   "agents"   — agent panes (AI coding agents), sorted by status
+#   "pinned"   — pinned directories from ~/.config/herdr/targets.toml
+#   "zoxide"   — zoxide frecency directories
+#   "plugins"  — installed Herdr plugins and their actions
 groups = ["session", "agents", "pinned", "zoxide", "plugins"]
 
-# The host keybind that opens the switcher (informational here; the real
-# binding lives in your ~/.config/herdr/config.toml as a plugin_action).
+# The host keybind that opens the switcher (spec §13). Informational
+# only here — the real binding lives in your ~/.config/herdr/config.toml
+# as a [[actions]] entry pointing at the "nav-open" command. Shown in
+# the popup's help overlay for reference.
 open_key = "ctrl-k"
 
-# zoxide: how many top entries to list (existing paths only).
+# zoxide: how many top entries to list (spec §5/§13). Only existing
+# paths are shown (gone directories are filtered). zoxide's own order
+# (frecency) is preserved.
 zoxide_limit = 50
 
-# Preview pane (spec §2/§7).
+# ── Preview pane (spec §2/§7) ────────────────────────────────────────────────
+#
+# The right-hand preview pane shows "what is the thing under the
+# cursor" for every node kind, in both browse and search mode. It is
+# read-only and never scrolls — it is clipped at the pane's height.
 [preview]
+# Whether the preview pane is shown at all. Set false to use the full
+# width for the list (rare — the preview is the whole point).
 enabled = true
+# Width of the preview pane as a percentage of the popup width (spec §2).
+# The list takes the rest. On narrow terminals (see min_cols below)
+# the preview is hidden and the list widens to full width.
 width_pct = 56
+# Minimum terminal width (in cells) below which the preview pane is
+# hidden (spec §7.4). The list widens to full width below this.
+# Toggle key brings it back (Phase 9).
 min_cols = 60
 
-# Browse-mode expansion (spec §3.1/§4).
+# ── Browse-mode expansion (spec §3.1/§4) ────────────────────────────────────
+#
+# Controls how the tree opens and how expansion state is remembered.
 [expand]
-session_default = "active"      # open Session to its active workspace + tab
-restore_ttl_secs = 600          # expire a restored expansion set after 10 min
+# How Session expands on open (spec §4). "active" opens Session to its
+# active workspace + that workspace's active tab; "all" expands every
+# workspace and tab; "none" leaves Session collapsed.
+session_default = "active"
+# How long (seconds) a restored expansion set is kept before it
+# expires (spec §3.1). After a side action or reopen, the tree tries
+# to restore the last expansion state; this caps how stale that can be.
+restore_ttl_secs = 600
 
-# Search scoring weights (spec §6.2).
+# ── Search scoring weights (spec §6.2) ──────────────────────────────────────
+#
+# The fuzzy matcher (nucleo) scores by character matches; these weights
+# control how much each match pattern contributes. Higher = that
+# pattern ranks the match higher. All are additive on top of the base
+# nucleo score. Tuning these is rarely needed — the defaults match the
+# spec and the sister plugins (herdr-flash, herdr-zextract).
 [scoring]
+# Bonus for consecutive matched characters (a run of "abc" in "abc"
+# scores higher than scattered a, b, c).
 consecutive = 8.0
+# Penalty (multiplier < 1) for gaps between matched characters. Lower
+# = gaps hurt more.
 gap = 0.4
+# Bonus for matching the first character of the needle at the start of
+# the haystack (prefix match).
 prefix = 0.6
+# Bonus for matching at a word boundary (after a /, -, _, or space).
 word_boundary = 4.0
 
-# Provider bias — flat additive nudge, not a dominate (spec §6.3).
+# ── Provider bias (spec §6.3) ────────────────────────────────────────────────
+#
+# A flat additive constant applied AFTER the fuzzy score, so it nudges
+# rather than dominates. Live and volatile things (panes, agents needing
+# input) rank ahead of stable things (pinned dirs, zoxide, plugins)
+# because they are the reason you opened the popup mid-task.
+#
+# These are added to the nucleo score of each leaf. A leaf's kind
+# determines which bias it gets:
+#
+#   Kind::Pane   → pane        (live panes in the session)
+#   Kind::Agent  → agent       (+agent_waiting when "needing input" is detectable)
+#   Kind::Dir     → pinned      (pinned directories)
+#   Kind::Zox     → zoxide      (zoxide frecency entries)
+#   Kind::Plugin  → plugin      (installed plugins)
 [bias]
+# Extra bias for an agent that is blocked / waiting for input (spec
+# §6.3). Added on top of `agent` when the agent's status is
+# "needing input". Phase 5 detects this; until then agents get the
+# plain `agent` bias.
 agent_waiting = 6
+# Live panes — the things you're actively working in.
 pane = 4
+# Pinned directories — explicitly chosen, stable.
 pinned = 3
+# Other agents (running, not waiting).
 agent = 2
+# zoxide entries — frecency, not explicitly chosen.
 zoxide = 0
+# Plugins — the group you rarely reach for mid-flow.
 plugin = -2
+
+# ──────────────────────────────────────────────────────────────────────────────
+# End of defaults. Keys below this point are not yet implemented and
+# are reserved for future phases. They are listed here so the schema
+# is documented upfront (spec §13).
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Query filters (spec §15 #2, Phase 11) ────────────────────────────────────
+# Reserved. The query-filter parser (group scope, kind:@, !negation)
+# is Phase 11. No config keys here yet — the syntax is documented in
+# doc/query-filters.md (Phase 11).
+
+# ── Narrow-terminal rules (spec §7.4/§9, Phase 9) ───────────────────────────
+# Reserved. The narrow-terminal behavior (drop preview < min_cols,
+# footer → ? < 20 rows) uses the [preview] keys above. Additional
+# narrow-terminal config keys may land here in Phase 9.

@@ -15,17 +15,18 @@ use serde::Deserialize;
 /// Build the five group subtrees in spec §4 fixed order, using the
 /// registered providers. A provider that fails leaves its group row in
 /// place with a red "unavailable" meta and an error preview (spec §5/§11).
-pub fn build_tree(socket_path: &str) -> Vec<Node> {
-    Group::ORDER
+pub fn build_tree(socket_path: &str, groups: &[String], cfg: &crate::config::Config) -> Vec<Node> {
+    groups
         .iter()
-        .map(|&g| group_node(socket_path, g))
+        .filter_map(|name| Group::from_provider_id(name))
+        .map(|g| group_node(socket_path, g, cfg))
         .collect()
 }
 
 /// Produce one root group node. For Session, run the real provider; for
 /// every other group, render an "unavailable" stub until its phase lands.
 #[allow(unreachable_patterns)]
-fn group_node(socket_path: &str, group: Group) -> Node {
+fn group_node(socket_path: &str, group: Group, cfg: &crate::config::Config) -> Node {
     match group {
         Group::Session => SessionProvider::new(socket_path.to_string())
             .enumerate()
@@ -36,7 +37,7 @@ fn group_node(socket_path: &str, group: Group) -> Node {
         Group::Pinned => PinnedProvider::new()
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
-        Group::Zoxide => ZoxideProvider::new()
+        Group::Zoxide => ZoxideProvider::with_limit(cfg.zoxide_limit)
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
         Group::Plugins => PluginsProvider::new(socket_path.to_string())
@@ -340,19 +341,30 @@ impl Provider for PinnedProvider {
 }
 
 /// The zoxide provider (spec §5): `zoxide query --list --score`,
-/// top 50, existing paths only. 30s cache (Phase 10 wires the cache;
+/// top `limit` existing paths only. 30s cache (Phase 10 wires the cache;
 /// Phase 6a re-runs on each open). Meta = frecency score.
-pub struct ZoxideProvider;
+pub struct ZoxideProvider {
+    limit: usize,
+}
 
 impl Default for ZoxideProvider {
     fn default() -> Self {
-        Self
+        Self {
+            limit: crate::config::DEFAULT_ZOXIDE_LIMIT as usize,
+        }
     }
 }
 
 impl ZoxideProvider {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Create with a custom limit (spec §13 `zoxide_limit`).
+    pub fn with_limit(limit: u32) -> Self {
+        Self {
+            limit: limit as usize,
+        }
     }
 }
 
@@ -362,7 +374,7 @@ impl Provider for ZoxideProvider {
     }
 
     fn enumerate(&self) -> Result<Node, String> {
-        Ok(build_zoxide_tree())
+        Ok(build_zoxide_tree(self.limit))
     }
 
     fn preview(&self, _id: &NodeId) -> Preview {
@@ -749,12 +761,12 @@ fn build_plugins_tree(plugins: &[serde_json::Value]) -> Node {
 }
 
 /// Build the zoxide group node (flat list of Zox leaves).
-/// `zoxide query --list --score`, top 50, existing paths only.
-fn build_zoxide_tree() -> Node {
+/// `zoxide query --list --score`, top `limit` existing paths only.
+fn build_zoxide_tree(limit: usize) -> Node {
     let entries = zoxide_query();
     let leaves: Vec<Node> = entries
         .into_iter()
-        .take(50)
+        .take(limit)
         .map(|(score, path)| Node {
             id: format!("zox:{path}"),
             kind: Kind::Zox,
@@ -1579,7 +1591,17 @@ mod tests {
         // No socket → every provider fails → 5 unavailable stubs, but
         // the root structure (5 groups, spec §4 order, Session first) is
         // intact. This is the dev/no-Herdr path.
-        let root = build_tree("");
+        let root = build_tree(
+            "",
+            &[
+                "session".to_string(),
+                "agents".to_string(),
+                "pinned".to_string(),
+                "zoxide".to_string(),
+                "plugins".to_string(),
+            ],
+            &crate::config::Config::default(),
+        );
         assert_eq!(root.len(), 5);
         assert_eq!(root[0].kind, Kind::Group);
         assert_eq!(root[0].label, "Session");

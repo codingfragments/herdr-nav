@@ -72,6 +72,18 @@ impl Group {
             Group::Plugins => "plugins",
         }
     }
+
+    /// Resolve a provider-id string to a `Group`. Unknown → None.
+    pub fn from_provider_id(id: &str) -> Option<Group> {
+        match id {
+            "session" => Some(Group::Session),
+            "agents" => Some(Group::Agents),
+            "pinned" => Some(Group::Pinned),
+            "zoxide" => Some(Group::Zoxide),
+            "plugins" => Some(Group::Plugins),
+            _ => None,
+        }
+    }
 }
 
 /// One node in the switcher tree (spec §4.1).
