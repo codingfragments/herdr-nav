@@ -7,6 +7,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 10 — Configuration
+
+- **`switcher.toml` schema wired** (spec §13): reads
+    `$HERDR_PLUGIN_CONFIG_DIR/config.toml` at launch. Missing/
+    malformed → stderr report + built-in defaults, no crash.
+- **`groups`** (spec §4/§13): controls root group display order.
+    Any subset of the five; unknown names dropped (stderr warning);
+    empty → spec default order. `Group::from_provider_id`
+    resolves config names to `Group` variants.
+- **`bias`** (spec §6.3): the 6 provider-bias values are now
+    configurable. `provider_bias` takes a `&BiasCfg`; `search`/`view`/
+    `requery` thread it through. Defaults match spec §6.3.
+- **`zoxide_limit`** (spec §13): caps the zoxide provider.
+    `ZoxideProvider::with_limit(n)`; default 50.
+- **`preview`/`expand`/`scoring`** parsed and available (take
+    effect in later phases — Phase 9 narrow-terminal, Phase 12
+    scoring).
+- 6 new unit tests (defaults match spec, full parse, empty
+    defaults, unknown groups dropped, partial preview, resolved
+    groups). 73 tests total.
+
 ### Phase 9 — Visual contract: auto-follow Herdr's theme
 
 - **Auto-follow Herdr's `[theme]` setting** (spec §9 amended):

@@ -181,13 +181,16 @@ fn walk(node: &Node, path: &[usize], parent_crumbs: &str, out: &mut Vec<Leaf>) {
 /// +3, other agents +2, zoxide +0, plugins −2. In Phase 4 only Session
 /// (panes) is live; other kinds get their bias when their providers
 /// land. `unavailable` groups contribute no leaves to the haystack.
-pub fn provider_bias(leaf: &Leaf) -> i32 {
+///
+/// Phase 10: the bias values are now configurable via `switcher.toml`
+/// `[bias]`; `cfg` overrides the spec defaults.
+pub fn provider_bias(leaf: &Leaf, cfg: &crate::config::BiasCfg) -> i32 {
     match leaf.kind {
-        Kind::Pane => 4,
-        Kind::Agent => 2, // +6 when "needing input" is detectable (Phase 5)
-        Kind::Dir => 3,
-        Kind::Zox => 0,
-        Kind::Plugin => -2,
+        Kind::Pane => cfg.pane as i32,
+        Kind::Agent => cfg.agent as i32, // +agent_waiting when detectable (Phase 5)
+        Kind::Dir => cfg.pinned as i32,
+        Kind::Zox => cfg.zoxide as i32,
+        Kind::Plugin => cfg.plugin as i32,
         _ => 0,
     }
 }
@@ -206,15 +209,20 @@ pub struct SearchView {
 }
 
 /// Run the fuzzy search against the haystack, returning ranked matches.
-pub fn search(haystack: &[Leaf], query: &str) -> Vec<ScoredMatch> {
+/// `bias_cfg` overrides the spec §6.3 defaults (Phase 10).
+pub fn search(
+    haystack: &[Leaf],
+    query: &str,
+    bias_cfg: &crate::config::BiasCfg,
+) -> Vec<ScoredMatch> {
     let mut engine = FuzzyEngine::new();
     let items: Vec<String> = haystack.iter().map(|l| l.match_text.clone()).collect();
-    engine.filter_with_bonus(query, &items, |i| provider_bias(&haystack[i]))
+    engine.filter_with_bonus(query, &items, |i| provider_bias(&haystack[i], bias_cfg))
 }
 
 /// Build a fresh `SearchView` from a query.
-pub fn view(haystack: &[Leaf], query: String) -> SearchView {
-    let matches = search(haystack, &query);
+pub fn view(haystack: &[Leaf], query: String, bias_cfg: &crate::config::BiasCfg) -> SearchView {
+    let matches = search(haystack, &query, bias_cfg);
     SearchView {
         query,
         matches,
@@ -225,8 +233,8 @@ pub fn view(haystack: &[Leaf], query: String) -> SearchView {
 impl SearchView {
     /// Re-run the search after a query mutation; reset cursor to 0
     /// (spec §3: "the cursor index resets to 0 on every query mutation").
-    pub fn requery(&mut self, haystack: &[Leaf]) {
-        self.matches = search(haystack, &self.query);
+    pub fn requery(&mut self, haystack: &[Leaf], bias_cfg: &crate::config::BiasCfg) {
+        self.matches = search(haystack, &self.query, bias_cfg);
         self.cursor = 0;
     }
 
@@ -322,7 +330,7 @@ mod tests {
             leaf("a", "alpha", Kind::Pane),
             leaf("b", "beta", Kind::Pane),
         ];
-        let m = search(&h, "");
+        let m = search(&h, "", &crate::config::BiasCfg::default());
         assert_eq!(m.len(), 2);
         assert!(m.iter().all(|r| r.indices.is_empty()));
     }
@@ -334,7 +342,7 @@ mod tests {
             leaf("b", "cargo", Kind::Pane),
             leaf("c", "zsh", Kind::Pane),
         ];
-        let m = search(&h, "nv");
+        let m = search(&h, "nv", &crate::config::BiasCfg::default());
         assert_eq!(m.len(), 1);
         assert_eq!(h[m[0].index].label, "nvim");
     }
@@ -346,7 +354,7 @@ mod tests {
             leaf("p", "nvim", Kind::Pane),
             leaf("pl", "nvim", Kind::Plugin),
         ];
-        let m = search(&h, "nvim");
+        let m = search(&h, "nvim", &crate::config::BiasCfg::default());
         assert_eq!(h[m[0].index].kind, Kind::Pane);
         assert_eq!(h[m[1].index].kind, Kind::Plugin);
     }
@@ -354,7 +362,7 @@ mod tests {
     #[test]
     fn cursor_wraps() {
         let h = vec![leaf("a", "a", Kind::Pane), leaf("b", "b", Kind::Pane)];
-        let mut v = view(&h, "a".into());
+        let mut v = view(&h, "a".into(), &crate::config::BiasCfg::default());
         // "a" matches both (subsequence), cursor on 0.
         assert!(!v.matches.is_empty());
         v.move_down();
@@ -369,9 +377,9 @@ mod tests {
             leaf("a", "alpha", Kind::Pane),
             leaf("b", "beta", Kind::Pane),
         ];
-        let mut v = view(&h, "al".into());
+        let mut v = view(&h, "al".into(), &crate::config::BiasCfg::default());
         v.cursor = 5; // out of range
-        v.requery(&h);
+        v.requery(&h, &crate::config::BiasCfg::default());
         assert_eq!(v.cursor, 0);
     }
 }

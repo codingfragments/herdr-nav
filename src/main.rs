@@ -126,14 +126,15 @@ fn run() -> Result<(), String> {
     // always has both set (see doc/env-vars.md).
     let _ctx = launch_context().ok();
     let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
-    let _config = config::Config::load();
+    let config = config::Config::load();
+    let group_order = config.resolved_groups();
     // Auto-follow Herdr's theme (spec §9 amended): read
     // ~/.config/herdr/config.toml, resolve the theme name, apply
     // [theme.custom] overrides. Falls back to catppuccin (Herdr's
     // default) if the file is missing or malformed.
     let palette = theme::load();
 
-    let mut tree = nav::Tree::new(source::build_tree(&socket_path));
+    let mut tree = nav::Tree::new(source::build_tree(&socket_path, &group_order, &config));
 
     // Terminal setup — same contract as the sister ports: enter raw mode,
     // hide the cursor, enter the alternate screen, then restore on exit.
@@ -145,7 +146,14 @@ fn run() -> Result<(), String> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).map_err(|e| format!("Terminal::new: {e}"))?;
 
-    let result = event_loop(&mut terminal, &mut tree, &socket_path, &palette);
+    let result = event_loop(
+        &mut terminal,
+        &mut tree,
+        &socket_path,
+        &palette,
+        &group_order,
+        &config,
+    );
 
     // Restore terminal regardless of how the loop exited.
     disable_raw_mode().ok();
@@ -171,6 +179,8 @@ fn event_loop<B: ratatui::backend::Backend>(
     tree: &mut nav::Tree,
     socket_path: &str,
     palette: &theme::Palette,
+    group_order: &[String],
+    cfg: &config::Config,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
     let mut last_cursor_change: Option<std::time::Instant> = None;
@@ -347,7 +357,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 // Rebuild the tree so the new pin
                                 // appears in the Pinned group; keep the
                                 // cursor on the same node.
-                                refresh(tree, &mut search_view, &mut haystack, socket_path);
+                                refresh(
+                                    tree,
+                                    &mut search_view,
+                                    &mut haystack,
+                                    socket_path,
+                                    group_order,
+                                    &cfg.bias,
+                                    cfg,
+                                );
                             }
                             Err(e) => {
                                 flash_error = Some((node.id.clone(), e));
@@ -370,7 +388,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                         match source::unpin(path) {
                             Ok(true) => {
                                 flash_error = Some((node.id.clone(), "unpinned".to_string()));
-                                refresh(tree, &mut search_view, &mut haystack, socket_path);
+                                refresh(
+                                    tree,
+                                    &mut search_view,
+                                    &mut haystack,
+                                    socket_path,
+                                    group_order,
+                                    &cfg.bias,
+                                    cfg,
+                                );
                             }
                             Ok(false) => {
                                 flash_error = Some((node.id.clone(), "not pinned".to_string()));
@@ -392,7 +418,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     if v.query.is_empty() {
                         search_view = None;
                     } else {
-                        v.requery(&haystack);
+                        v.requery(&haystack, &cfg.bias);
                     }
                 }
             }
@@ -403,7 +429,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     if let Some(v) = search_view.as_mut() {
                         if key.code == Char(' ') {
                             v.query.push(' ');
-                            v.requery(&haystack);
+                            v.requery(&haystack, &cfg.bias);
                         }
                     }
                 } else {
@@ -478,7 +504,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                                         // Rebuild the tree: the killed
                                         // node is gone; the cursor
                                         // clamps to the nearest valid row.
-                                        refresh(tree, &mut search_view, &mut haystack, socket_path);
+                                        refresh(
+                                            tree,
+                                            &mut search_view,
+                                            &mut haystack,
+                                            socket_path,
+                                            group_order,
+                                            &cfg.bias,
+                                            cfg,
+                                        );
                                     }
                                     Err(e) => {
                                         flash_error = Some((node.id.clone(), e));
@@ -513,7 +547,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                             flash_error = Some((node.id.clone(), "interrupted".to_string()));
                             // Refresh so the pane's status meta
                             // updates (e.g. foreground process).
-                            refresh(tree, &mut search_view, &mut haystack, socket_path);
+                            refresh(
+                                tree,
+                                &mut search_view,
+                                &mut haystack,
+                                socket_path,
+                                group_order,
+                                &cfg.bias,
+                                cfg,
+                            );
                         }
                     }
                 }
@@ -539,7 +581,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                             flash_error = Some((node.id.clone(), "interrupted".to_string()));
                             // Refresh so the agent's status meta
                             // updates (waiting → running, etc.).
-                            refresh(tree, &mut search_view, &mut haystack, socket_path);
+                            refresh(
+                                tree,
+                                &mut search_view,
+                                &mut haystack,
+                                socket_path,
+                                group_order,
+                                &cfg.bias,
+                                cfg,
+                            );
                         }
                     }
                 }
@@ -562,7 +612,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                             flash_error = Some((node.id.clone(), "detached".to_string()));
                             // Rebuild: the detached agent leaves
                             // the Agents list; cursor clamps.
-                            refresh(tree, &mut search_view, &mut haystack, socket_path);
+                            refresh(
+                                tree,
+                                &mut search_view,
+                                &mut haystack,
+                                socket_path,
+                                group_order,
+                                &cfg.bias,
+                                cfg,
+                            );
                         }
                     }
                 }
@@ -678,10 +736,10 @@ fn event_loop<B: ratatui::backend::Backend>(
                     match search_view.as_mut() {
                         Some(v) => {
                             v.query.push(c);
-                            v.requery(&haystack);
+                            v.requery(&haystack, &cfg.bias);
                         }
                         None => {
-                            let mut v = search::view(&haystack, c.to_string());
+                            let mut v = search::view(&haystack, c.to_string(), &cfg.bias);
                             v.cursor = 0;
                             search_view = Some(v);
                         }
@@ -720,12 +778,15 @@ fn refresh(
     search_view: &mut Option<search::SearchView>,
     haystack: &mut Vec<search::Leaf>,
     socket_path: &str,
+    groups: &[String],
+    bias_cfg: &config::BiasCfg,
+    cfg: &config::Config,
 ) {
-    let new_root = source::build_tree(socket_path);
+    let new_root = source::build_tree(socket_path, groups, cfg);
     tree.reload(new_root);
     *haystack = search::build_haystack(tree);
     if let Some(v) = search_view.as_mut() {
-        v.requery(haystack);
+        v.requery(haystack, bias_cfg);
     }
 }
 
