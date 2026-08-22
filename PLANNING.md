@@ -724,6 +724,32 @@ space-separated AND-tokens. Both add a second matcher path / scoring-model
 change and a UX affordance (how does `"` echo?); ship the cheap high-pain
 trio first.
 
+**Future enhancement — predefined queries (user request 2026-08-22):**
+let the user define named queries in `switcher.toml` and invoke them
+with `#<name>`. E.g.:
+
+```toml
+[queries]
+jump-pane = "@pane"
+code = "session @pane @dir"
+no-plugins = "!plugin"
+```
+
+Then typing `#jump-pane` in the search bar expands to `@pane` (the
+filter runs as if the user typed it). `#` is the trigger prefix; tab
+completion of `#` lists the available named queries. This is sugar
+on top of the Phase 11 parser — no new matcher, just a lookup +
+expansion before `ParsedQuery::parse`.
+
+**Future enhancement — search-box completion (user request 2026-08-22):**
+some level of completion/autocomplete in the search box. Candidates:
+- `@` / `kind:` / `!` trigger a kind/group completion popup
+- `#` triggers a named-query completion popup (see above)
+- plain-text prefix completion against the haystack (like a shell)
+This is a UX affordance on top of the existing parser; the ranking
+contract is unchanged. Needs a UX design pass (popup vs inline ghost
+text, how it interacts with the block caret).
+
 **Cut from v0.1:** field targets (`path:herdr name:nvim`) — drifts toward
 the command palette §1 disclaims as a non-goal.
 
