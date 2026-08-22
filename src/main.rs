@@ -202,6 +202,9 @@ fn event_loop<B: ratatui::backend::Backend>(
     // Kill confirm (spec §8: `^d`): first press shows an inline
     // footer confirm; second `^d` confirms, any other key cancels.
     let mut kill_confirm: Option<(String, String)> = None;
+    // Help dialog (spec §13): `?` opens a centered overlay with the
+    // full keymap + query-filter syntax summary.
+    let mut help_open = false;
 
     // Haystack built once per invocation (spec §6.1): DFS, leaves
     // only, group order. Stable for the whole popup (providers
@@ -238,6 +241,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         .as_ref()
                         .map(|(id, label)| (id.as_str(), label.as_str())),
                     palette,
+                    help_open,
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -276,6 +280,11 @@ fn event_loop<B: ratatui::backend::Backend>(
         use KeyCode::*;
         match key.code {
             Esc => {
+                // Close the help dialog first.
+                if help_open {
+                    help_open = false;
+                    continue;
+                }
                 // Cancel any pending kill confirm.
                 kill_confirm = None;
                 // Cancel the plugin action picker first (don't run, stay open).
@@ -625,6 +634,10 @@ fn event_loop<B: ratatui::backend::Backend>(
                         }
                     }
                 }
+            }
+            Char('?') if key.modifiers.is_empty() => {
+                // `?` opens the in-popup help dialog (spec §13).
+                help_open = !help_open;
             }
             Enter => {
                 // If a plugin action picker is active, confirm: run the action

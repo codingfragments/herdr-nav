@@ -100,6 +100,7 @@ pub fn draw(
     plugin_action_picker: Option<(&str, &[(String, String)], usize)>,
     kill_confirm: Option<(&str, &str)>,
     palette: &Palette,
+    help_open: bool,
 ) {
     let area = frame.area();
     let c = Colors::from(palette);
@@ -144,7 +145,11 @@ pub fn draw(
     // When the name-prompt dialog is active, suppress the footer —
     // the dialog carries its own ⏎/esc hints, so the overall footer
     // would duplicate them.
-    if name_prompt.is_none() && template_picker.is_none() && plugin_action_picker.is_none() {
+    if name_prompt.is_none()
+        && template_picker.is_none()
+        && plugin_action_picker.is_none()
+        && !help_open
+    {
         draw_footer(
             frame,
             bands[4],
@@ -175,6 +180,12 @@ pub fn draw(
     // Rendered last so it sits above all.
     if let Some((plugin_id, actions, cursor)) = plugin_action_picker {
         draw_plugin_action_picker(frame, area, plugin_id, actions, cursor, &c);
+    }
+
+    // Help dialog overlay (spec §13): `?` opens a centered
+    // overlay with the full keymap + query-filter syntax.
+    if help_open {
+        draw_help_dialog(frame, area, &c);
     }
 }
 
@@ -730,6 +741,12 @@ fn draw_footer(
             _ => {}
         }
     }
+    // `?` help hint (spec §13): always shown, both modes.
+    hints.push(Span::styled(
+        "   ? ",
+        Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
+    ));
+    hints.push(Span::styled("help", Style::default().fg(c.subtext0)));
     frame.render_widget(
         Paragraph::new(Line::from(hints).style(Style::default().bg(c.mantle))),
         area,
@@ -893,6 +910,119 @@ fn draw_template_picker(
         ])
         .style(Style::default().bg(c.mantle)),
     );
+
+    frame.render_widget(Paragraph::new(rows), inner);
+}
+
+/// Centered help dialog (spec §13): `?` opens an overlay with the
+/// full keymap + query-filter syntax summary. Esc closes.
+fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
+    let w = 56u16;
+    let h = 18u16;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(c.surface2))
+        .title(Span::styled(
+            " herdr-nav · help ",
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(c.mantle));
+    let inner = block.inner(dialog);
+    Clear.render(dialog, frame.buffer_mut());
+    block.render(dialog, frame.buffer_mut());
+
+    let ks = Style::default().fg(c.peach).add_modifier(Modifier::BOLD);
+    let ds = Style::default().fg(c.subtext0);
+    let sep = Span::raw("  ");
+
+    let rows = vec![
+        Line::from(vec![
+            Span::styled("↑↓", ks),
+            sep.clone(),
+            Span::styled("move cursor (wraps)", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("→/Space/Tab", ks),
+            sep.clone(),
+            Span::styled("expand / step into", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("←", ks),
+            sep.clone(),
+            Span::styled("collapse / jump to parent", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("Enter", ks),
+            sep.clone(),
+            Span::styled("default action (jump / open / pick)", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("Esc", ks),
+            sep.clone(),
+            Span::styled("close / clear query (two-stage)", ds),
+        ]),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("^p", ks),
+            sep.clone(),
+            Span::styled("pin selected dir or pane cwd", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("^u", ks),
+            sep.clone(),
+            Span::styled("unpin selected pinned dir", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("^d", ks),
+            sep.clone(),
+            Span::styled("kill pane / tab / workspace (confirm)", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("^t", ks),
+            sep.clone(),
+            Span::styled("open with template (dir/zox)", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("^r ^c ^x", ks),
+            sep.clone(),
+            Span::styled("interrupt / detach (pane/agent)", ds),
+        ]),
+        Line::raw(""),
+        Line::from(vec![Span::styled("Query filters:", ds), Span::raw("  ")]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("agents nvim", ks),
+            sep.clone(),
+            Span::styled("group scope (leading)", ds),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("@pane", ks),
+            sep.clone(),
+            Span::styled("kind filter (kind:pane = @pane)", ds),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("@dir", ks),
+            sep.clone(),
+            Span::styled("union: pinned + zoxide", ds),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("!plugin", ks),
+            sep.clone(),
+            Span::styled("negation: exclude kind/group", ds),
+        ]),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("See doc/query-filters.md for full syntax.", ds),
+            Span::raw("  "),
+        ]),
+    ];
 
     frame.render_widget(Paragraph::new(rows), inner);
 }

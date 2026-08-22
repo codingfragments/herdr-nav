@@ -16,8 +16,10 @@ Mode is `if query.is_empty() { Browse } else { Search }`. There is no
 mode key.
 
 - **Browse** — a single-selection tree of the five target groups. Groups
-  expand; `Enter` on a branch toggles it, on a leaf runs its default
-  action. Typing any printable character flips to Search.
+  expand; `Enter` on a branch expands/steps into it, on a leaf runs its
+  default action. Typing any printable character flips to Search.
+  Expand/collapse is `→`/`←`/`Space`/`Tab` only — `Enter` is the
+  main action verb on every row (spec §8 amended).
 - **Search** — the tree is replaced by the fully rolled-out set of leaves
   only, each row showing its path as a dimmed breadcrumb prefix. The
   query fuzzy-filters and re-ranks this list. `Backspace` to empty

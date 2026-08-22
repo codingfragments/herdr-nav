@@ -10,9 +10,10 @@ reported on stderr and built-in defaults are used. Copy
 herdr plugin config-dir herdr-nav   # prints the target directory
 ```
 
-The Catppuccin Macchiato palette (spec §9) is **fixed** and not
-configurable. Config covers group order, zoxide limit, preview, browse
-expansion, search scoring, and provider bias (spec §13).
+The palette auto-follows Herdr's `[theme]` setting (spec §9 amended) —
+it is **not** configurable here. See [`doc/env-vars.md`](env-vars.md) for
+how the theme is resolved. Config covers group order, zoxide limit,
+preview, browse expansion, search scoring, and provider bias (spec §13).
 
 ## Top-level keys
 
@@ -77,5 +78,6 @@ path = "~/work/infra"
 slot = 2
 ```
 
-`^p` in the popup adds a pin (the selected dir, or the selected pane's
-cwd) and writes this file.
+`^p` in the popup adds a pin (the selected dir, or the selected
+pane's cwd) and writes this file. `^u` removes a pin and renumbers
+remaining slots.
