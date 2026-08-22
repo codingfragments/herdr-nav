@@ -7,7 +7,8 @@ A [Herdr](https://herdr.dev) plugin — a popup target switcher: one
 keystroke opens it, you aim, Enter moves you, it closes. Two derived
 modes (Browse = tree, Search = flat fuzzy-ranked leaves), five target
 groups (Session, Agents, Pinned dirs, zoxide, Plugins), a single-shape
-live preview for every kind. Catppuccin Macchiato.
+live preview for every kind. The palette auto-follows Herdr's `[theme]`
+setting — no per-plugin color config needed.
 
 ## What it does
 

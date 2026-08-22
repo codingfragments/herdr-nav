@@ -7,6 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 13 — Docs refinement + public-facing elements
+
+- **`?` in-popup help dialog**: `?` opens a centered overlay with
+    the full keymap + query-filter syntax summary. `Esc` closes.
+    Footer suppressed while help is open.
+- **Docs finalized against shipped behavior**:
+    - `README.md`: updated from "Catppuccin Macchiato" to
+      "auto-follows Herdr's `[theme]` setting".
+    - `doc/navigation.md`: Enter on a branch now reads
+      "expand/step" (spec §8 amended — Enter is the main action
+      verb on every row, not a toggle).
+    - `doc/keybinding.md`: `^p` is now pin only (up is `↑` arrow);
+      added `^u` unpin; added `?` help; added query-filter
+      cross-reference. `Enter` branch action corrected.
+    - `doc/config-reference.md`: palette section updated from
+      "fixed Catppuccin Macchiato" to "auto-follows Herdr's
+      `[theme]"; added `^u` unpin to the `targets.toml` section.
+- 111 tests (no new tests — docs + UI dialog). clippy, fmt green.
+
 ### Phase 12 — Edge cases + performance budgets
 
 - **No matches** (spec §11): search list shows a dim centred

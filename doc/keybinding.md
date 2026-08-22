@@ -34,19 +34,29 @@ Mode is derived from the query: empty → Browse, non-empty → Search.
 
 | Key | Browse | Search |
 | --- | --- | --- |
+| `↑` | previous visible row (wraps) | previous match (wraps) |
 | `↓` / `^n` | next visible row (wraps) | next match (wraps) |
 | `↑` / `^p` | previous visible row (wraps) | previous match (wraps) |
 | `→` / `Space` / `Tab` | expand; if open, step to first child | `→`/`Tab` inert; `Space` types a space |
 | `←` | collapse; if closed, jump to parent | inert |
-| `Enter` | branch → toggle; leaf → default action, close | default action, close |
+| `Enter` | branch → expand/step; leaf → default action, close | default action, close |
 | `a–z 0–9 …` | enter search with that char | append, re-rank, cursor → 0 |
 | `Backspace` | — | delete last char; empty → browse |
 | `Esc` | close popup | clear query → browse |
-| `^p` | pin selected dir (or selected pane's cwd) into Pinned dirs; toast, stay open | |
+| `^p` | pin selected dir (or selected pane's cwd) into Pinned dirs; stay open | |
+| `^u` | unpin selected pinned dir; stay open | |
 | `^d` | kill selected pane / tab / workspace; confirm inline; stay open | |
 | `^t` | on a dir/zox entry: open the workspace-template picker (optional) | |
 | `^r` `^c` `^x` | context alternates, named per item in the preview footer | |
+| `?` | open the in-popup help dialog | |
 
 Footer hints are mode-aware: `⏎ open / expand` and `esc close` in Browse
 become `⏎ run default action` and `esc clear` in Search. Press `?` for
 the full in-popup dialog.
+
+## Query filters
+
+In search mode, the query supports filter tokens: group scope
+(`agents nvim`), kind filters (`@pane`, `kind:dir`), and negation
+(`!plugin`). See [`doc/query-filters.md`](query-filters.md) for the
+full syntax, composition rules, and worked examples.
