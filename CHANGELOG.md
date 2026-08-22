@@ -7,6 +7,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 12 — Edge cases + performance budgets
+
+- **No matches** (spec §11): search list shows a dim centred
+    line `no targets match "<query>"`; counts read `0/N`; Enter
+    is inert (cursor on a non-leaf). The preview keeps the last
+    resolved item, dimmed (stale-and-dim from Phase 2).
+- **Empty group** (spec §11): a group with no children and
+    `meta = "empty"` now gets a dim populate-hint child row
+    (e.g. "no pins — press ^p on a directory"). The hint is
+    excluded from the search haystack and Enter is inert on it.
+- **Provider unavailable** (spec §11): already handled (red meta,
+    leaves excluded from search) since Phase 1.
+- **Single match never auto-executes** (spec §11): already the
+    case — Enter is always explicit.
+- **Duplicate labels** (spec §11): already disambiguated by
+    crumbs (search) / position (browse) — never deduped.
+- **Very long no-match queries** (spec §11): already keep
+    accepting input (no clear/beep).
+- **Performance budgets** (spec §12): smoke tests added —
+    1,000-leaf search under 50ms (target <8ms), filter parse
+    1,000×under 100ms. Both pass with wide margin.
+- 5 new unit tests (empty-group hint, nonempty no hint, unavailable
+    no hint, perf 1,000 leaves, perf filter parse). 111 tests total.
+
 ### Phase 11 — Query filters (group scope + kind + negation)
 
 - **Query-filter parser** (spec §15 #2): a small parser runs

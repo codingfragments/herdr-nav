@@ -142,6 +142,11 @@ pub fn build_haystack(tree: &Tree) -> Vec<Leaf> {
 
 fn walk(node: &Node, path: &[usize], parent_crumbs: &str, group: Group, out: &mut Vec<Leaf>) {
     if node.is_leaf() {
+        // Exclude populate-hint children (spec §11) from the haystack —
+        // they're not real targets.
+        if node.id.ends_with(":hint") {
+            return;
+        }
         let crumbs = parent_crumbs.to_string();
         let crumb_prefix_len = if crumbs.is_empty() {
             0
@@ -415,5 +420,60 @@ mod tests {
         v.cursor = 5; // out of range
         v.requery(&h, &crate::config::BiasCfg::default());
         assert_eq!(v.cursor, 0);
+    }
+
+    /// Performance budget (spec §12): keystroke → re-ranked < 8ms
+    /// for 1,000 leaves. This is a smoke test, not a hard CI gate —
+    /// it measures the actual time and asserts it stays under 50ms
+    /// (a generous margin over the 8ms target to avoid CI flakiness on
+    /// slow runners; the real budget is 8ms).
+    #[test]
+    fn perf_1000_leaves_under_budget() {
+        let h: Vec<Leaf> = (0..1000)
+            .map(|i| Leaf {
+                path: vec![0],
+                kind: if i % 2 == 0 { Kind::Pane } else { Kind::Agent },
+                group: Group::Session,
+                id: format!("id{i}"),
+                label: format!("item-{i}-nvim-cargo"),
+                meta: String::new(),
+                crumbs: String::new(),
+                crumb_prefix_len: 0,
+                match_text: format!("item-{i}-nvim-cargo"),
+            })
+            .collect();
+
+        let start = std::time::Instant::now();
+        let m = search(&h, "nvim", &crate::config::BiasCfg::default());
+        let elapsed = start.elapsed();
+
+        assert!(!m.is_empty(), "should have matches");
+        assert!(
+            elapsed.as_millis() < 50,
+            "search of 1000 leaves took {:?} (budget: <8ms target, <50ms gate)",
+            elapsed
+        );
+    }
+
+    /// Query-filter parse must be negligible (spec §12).
+    #[test]
+    fn perf_filter_parse_negligible() {
+        let queries = [
+            "@pane nvim",
+            "session @pane @dir !plugin !zox nvim",
+            "!plugin !zox !agents !session @workspace @tab",
+        ];
+        for q in &queries {
+            let start = std::time::Instant::now();
+            for _ in 0..1000 {
+                let _ = crate::query::ParsedQuery::parse(q);
+            }
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed.as_millis() < 100,
+                "1000 parses of '{q}' took {:?}",
+                elapsed
+            );
+        }
     }
 }
