@@ -412,8 +412,15 @@ fn draw_search_list(
         .collect();
     frame.render_widget(Paragraph::new(visible), list_area);
 
-    // Status strip: scope left, matches/total right (spec §2).
-    let scope = Span::styled(" flat leaves · fuzzy ", Style::default().fg(c.surface2));
+    // Status strip: active filters left, matches/total right (spec §2/§15).
+    // Phase 11: shows the parsed filter label (e.g. "agents · pane · !zox")
+    // or "flat leaves · fuzzy" when no filters are active.
+    let scope_text = if view.parsed.has_filters() {
+        format!(" {} · fuzzy ", view.parsed.status_label())
+    } else {
+        " flat leaves · fuzzy ".to_string()
+    };
+    let scope = Span::styled(scope_text, Style::default().fg(c.surface2));
     let pos = Span::styled(
         format!(" {}/{} ", view.matches.len(), haystack.len()),
         Style::default().fg(c.subtext0),

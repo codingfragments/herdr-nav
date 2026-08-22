@@ -84,6 +84,15 @@ impl Group {
             _ => None,
         }
     }
+
+    /// Resolve a node id like "group:session" to a `Group`.
+    /// Falls back to `Session` for unknown ids (never panics).
+    pub fn from_node_id(node_id: &str) -> Group {
+        node_id
+            .strip_prefix("group:")
+            .and_then(Self::from_provider_id)
+            .unwrap_or(Group::Session)
+    }
 }
 
 /// One node in the switcher tree (spec §4.1).
