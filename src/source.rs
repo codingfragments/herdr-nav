@@ -20,7 +20,35 @@ pub fn build_tree(socket_path: &str, groups: &[String], cfg: &crate::config::Con
         .iter()
         .filter_map(|name| Group::from_provider_id(name))
         .map(|g| group_node(socket_path, g, cfg))
+        .map(populate_hint_if_empty)
         .collect()
+}
+
+/// Spec §11: an empty group stays visible with `empty` in the meta
+/// column; expanding it shows one dim child row explaining how to
+/// populate it. This adds that hint child when a group has no children
+/// and its meta is already `empty`.
+fn populate_hint_if_empty(mut node: Node) -> Node {
+    if node.children.is_empty() && node.meta == "empty" {
+        let hint = match Group::from_node_id(&node.id) {
+            Group::Pinned => "no pins — press ^p on a directory",
+            Group::Zoxide => "no frecency dirs — use `z` to cd, then reopen",
+            Group::Agents => "no agents running",
+            Group::Plugins => "no plugins installed",
+            Group::Session => "no session — is Herdr running?",
+        };
+        node.children.push(Node {
+            id: format!("{}:hint", node.id),
+            kind: Kind::Group, // not a real leaf; rendered dim
+            label: hint.to_string(),
+            meta: String::new(),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        });
+    }
+    node
 }
 
 /// Produce one root group node. For Session, run the real provider; for
@@ -2091,5 +2119,72 @@ mod unpin_tests {
         let before = pins.len();
         let kept: Vec<(String, u32)> = pins.into_iter().filter(|(p, _)| p != expanded).collect();
         assert_eq!(kept.len(), before); // unchanged → no-op
+    }
+}
+
+#[cfg(test)]
+mod edge_case_tests {
+    use super::*;
+
+    #[test]
+    fn empty_group_gets_populate_hint() {
+        let empty_pinned = Node {
+            id: "group:pinned".to_string(),
+            kind: Kind::Group,
+            label: "Pinned dirs".to_string(),
+            meta: "empty".to_string(),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        let result = populate_hint_if_empty(empty_pinned);
+        assert_eq!(result.children.len(), 1);
+        assert!(result.children[0].id.ends_with(":hint"));
+        assert!(result.children[0].label.contains("^p"));
+    }
+
+    #[test]
+    fn nonempty_group_gets_no_hint() {
+        let with_child = Node {
+            id: "group:pinned".to_string(),
+            kind: Kind::Group,
+            label: "Pinned dirs".to_string(),
+            meta: "2 pins".to_string(),
+            crumbs: None,
+            children: vec![Node {
+                id: "pinned:/foo".to_string(),
+                kind: Kind::Dir,
+                label: "foo".to_string(),
+                meta: String::new(),
+                crumbs: None,
+                children: Vec::new(),
+                preview: Preview::default(),
+                actions: crate::nav::Actions::default(),
+            }],
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        let result = populate_hint_if_empty(with_child);
+        assert_eq!(result.children.len(), 1); // unchanged
+        assert!(!result.children[0].id.ends_with(":hint"));
+    }
+
+    #[test]
+    fn unavailable_group_gets_no_hint() {
+        // "unavailable" meta should NOT get a populate-hint (it's an
+        // error state, not an empty state).
+        let unavail = Node {
+            id: "group:zoxide".to_string(),
+            kind: Kind::Group,
+            label: "zoxide".to_string(),
+            meta: "unavailable".to_string(),
+            crumbs: None,
+            children: Vec::new(),
+            preview: Preview::default(),
+            actions: crate::nav::Actions::default(),
+        };
+        let result = populate_hint_if_empty(unavail);
+        assert_eq!(result.children.len(), 0); // no hint added
     }
 }

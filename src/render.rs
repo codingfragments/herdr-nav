@@ -399,17 +399,24 @@ fn draw_search_list(
         start = view.cursor + 1 - list_h;
     }
 
-    let visible: Vec<Line> = view
-        .matches
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(list_h)
-        .map(|(i, m)| {
-            let leaf = &haystack[m.index];
-            draw_search_row(leaf, m, i == view.cursor, flash_error, palette, c)
-        })
-        .collect();
+    let visible: Vec<Line> = if view.matches.is_empty() {
+        // No matches (spec §11): one dim centred line.
+        vec![Line::styled(
+            format!(" no targets match \"{}\" ", view.parsed.needle),
+            Style::default().fg(c.surface2),
+        )]
+    } else {
+        view.matches
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(list_h)
+            .map(|(i, m)| {
+                let leaf = &haystack[m.index];
+                draw_search_row(leaf, m, i == view.cursor, flash_error, palette, c)
+            })
+            .collect()
+    };
     frame.render_widget(Paragraph::new(visible), list_area);
 
     // Status strip: active filters left, matches/total right (spec §2/§15).
@@ -541,6 +548,12 @@ fn draw_row(
     // Selection: a 2px left bar in the row's kind colour (spec §9). In a
     // cell TUI we render the first cell as a kind-coloured background
     // (a space with bg=kind_color), which reads as a solid left bar.
+    let is_hint = row.id.ends_with(":hint");
+    let dim_style = if is_hint {
+        Style::default().fg(c.surface2)
+    } else {
+        Style::default()
+    };
     let bar = if selected {
         Span::styled(" ", Style::default().bg(glyph_color))
     } else {
@@ -550,13 +563,21 @@ fn draw_row(
     let mut spans = vec![bar, Span::raw(indent)];
     spans.push(Span::styled(
         format!("{twisty}{glyph} "),
-        Style::default()
-            .fg(glyph_color)
-            .add_modifier(Modifier::BOLD),
+        if is_hint {
+            dim_style
+        } else {
+            Style::default()
+                .fg(glyph_color)
+                .add_modifier(Modifier::BOLD)
+        },
     ));
     spans.push(Span::styled(
         row.label.clone(),
-        Style::default().fg(label_color),
+        if is_hint {
+            dim_style
+        } else {
+            Style::default().fg(label_color)
+        },
     ));
     if !row.meta.is_empty() {
         spans.push(Span::raw("  "));

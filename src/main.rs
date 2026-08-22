@@ -690,7 +690,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                     .or_else(|| tree.cursor_row().map(|r| r.id.clone()));
                 let is_leaf = match &search_view {
                     Some(v) => v.cursor_leaf(&haystack).is_some(),
-                    None => tree.cursor_row().is_some_and(|r| r.is_leaf),
+                    None => tree
+                        .cursor_row()
+                        .is_some_and(|r| r.is_leaf && !r.id.ends_with(":hint")),
                 };
                 if is_leaf {
                     if let Some(id) = leaf_id {
