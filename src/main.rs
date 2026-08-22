@@ -15,6 +15,7 @@
 mod config;
 mod nav;
 mod preview;
+mod query;
 mod render;
 mod search;
 mod socket_client;

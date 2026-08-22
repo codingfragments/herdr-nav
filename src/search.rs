@@ -13,7 +13,8 @@
 //! `Cargo.lock`. The spec's §6.2 formula stays advisory/optional.
 //! Provider bias (§6.3) is added via `filter_with_bonus`.
 
-use crate::nav::{Kind, Node, Tree};
+use crate::nav::{Group, Kind, Node, Tree};
+use crate::query;
 
 /// Fuzzy matching wrapper over `nucleo-matcher` (ported from
 /// `herdr-zextract/src/picker/fuzzy.rs`). Smart-case: query containing
@@ -111,6 +112,8 @@ pub struct Leaf {
     /// Child indices from root to this leaf (for node_at lookup).
     pub path: Vec<usize>,
     pub kind: Kind,
+    /// Which root group this leaf belongs to (for `!group` filters).
+    pub group: Group,
     pub id: String,
     pub label: String,
     pub meta: String,
@@ -130,12 +133,14 @@ pub struct Leaf {
 pub fn build_haystack(tree: &Tree) -> Vec<Leaf> {
     let mut out = Vec::new();
     for (i, node) in tree.root.iter().enumerate() {
-        walk(node, &[i], "", &mut out);
+        // Resolve the root group from its id ("group:session" → Session).
+        let group = Group::from_node_id(&node.id);
+        walk(node, &[i], "", group, &mut out);
     }
     out
 }
 
-fn walk(node: &Node, path: &[usize], parent_crumbs: &str, out: &mut Vec<Leaf>) {
+fn walk(node: &Node, path: &[usize], parent_crumbs: &str, group: Group, out: &mut Vec<Leaf>) {
     if node.is_leaf() {
         let crumbs = parent_crumbs.to_string();
         let crumb_prefix_len = if crumbs.is_empty() {
@@ -151,6 +156,7 @@ fn walk(node: &Node, path: &[usize], parent_crumbs: &str, out: &mut Vec<Leaf>) {
         out.push(Leaf {
             path: path.to_vec(),
             kind: node.kind,
+            group,
             id: node.id.clone(),
             label: node.label.clone(),
             meta: node.meta.clone(),
@@ -170,7 +176,7 @@ fn walk(node: &Node, path: &[usize], parent_crumbs: &str, out: &mut Vec<Leaf>) {
     for (i, child) in node.children.iter().enumerate() {
         let mut child_path = path.to_vec();
         child_path.push(i);
-        walk(child, &child_path, &crumb, out);
+        walk(child, &child_path, &crumb, group, out);
     }
 }
 
@@ -202,6 +208,8 @@ pub fn provider_bias(leaf: &Leaf, cfg: &crate::config::BiasCfg) -> i32 {
 #[derive(Debug, Clone)]
 pub struct SearchView {
     pub query: String,
+    /// The parsed query filters (Phase 11).
+    pub parsed: query::ParsedQuery,
     /// Ranked matches, indices into the haystack.
     pub matches: Vec<ScoredMatch>,
     /// Cursor into `matches`.
@@ -210,21 +218,45 @@ pub struct SearchView {
 
 /// Run the fuzzy search against the haystack, returning ranked matches.
 /// `bias_cfg` overrides the spec §6.3 defaults (Phase 10).
+///
+/// Phase 11: the query is first parsed for filters (group scope,
+/// `kind:`/`@`, `!` negation). The haystack is filtered to the
+/// matching indices, then nucleo runs only on those. No second
+/// matcher, no scoring-model change.
 pub fn search(
     haystack: &[Leaf],
-    query: &str,
+    raw_query: &str,
     bias_cfg: &crate::config::BiasCfg,
 ) -> Vec<ScoredMatch> {
+    let parsed = query::ParsedQuery::parse(raw_query);
+    let filtered = parsed.filter_haystack(haystack);
+
     let mut engine = FuzzyEngine::new();
-    let items: Vec<String> = haystack.iter().map(|l| l.match_text.clone()).collect();
-    engine.filter_with_bonus(query, &items, |i| provider_bias(&haystack[i], bias_cfg))
+    let items: Vec<String> = filtered
+        .iter()
+        .map(|&i| haystack[i].match_text.clone())
+        .collect();
+    let bonus_fn = |j: usize| provider_bias(&haystack[filtered[j]], bias_cfg);
+    let scored = engine.filter_with_bonus(&parsed.needle, &items, bonus_fn);
+
+    // Remap from filtered-index back to haystack-index.
+    scored
+        .into_iter()
+        .map(|m| ScoredMatch {
+            index: filtered[m.index],
+            score: m.score,
+            indices: m.indices,
+        })
+        .collect()
 }
 
 /// Build a fresh `SearchView` from a query.
 pub fn view(haystack: &[Leaf], query: String, bias_cfg: &crate::config::BiasCfg) -> SearchView {
+    let parsed = query::ParsedQuery::parse(&query);
     let matches = search(haystack, &query, bias_cfg);
     SearchView {
         query,
+        parsed,
         matches,
         cursor: 0,
     }
@@ -234,6 +266,7 @@ impl SearchView {
     /// Re-run the search after a query mutation; reset cursor to 0
     /// (spec §3: "the cursor index resets to 0 on every query mutation").
     pub fn requery(&mut self, haystack: &[Leaf], bias_cfg: &crate::config::BiasCfg) {
+        self.parsed = query::ParsedQuery::parse(&self.query);
         self.matches = search(haystack, &self.query, bias_cfg);
         self.cursor = 0;
     }
@@ -270,6 +303,7 @@ mod tests {
         Leaf {
             path: vec![0],
             kind,
+            group: Group::Session,
             id: id.into(),
             label: label.into(),
             meta: String::new(),

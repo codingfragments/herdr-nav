@@ -7,6 +7,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 11 — Query filters (group scope + kind + negation)
+
+- **Query-filter parser** (spec §15 #2): a small parser runs
+    before the existing nucleo scorer, splitting the query into
+    filter tokens + a fuzzy needle. No second matcher, no
+    scoring-model change.
+- **Group scope** (leading token): `agents nvim` → only Agents
+    leaves, then fuzzy `nvim`. Groups: `session`, `agents`,
+    `pinned`, `zoxide`, `plugins`. Only one scope allowed.
+- **Kind filter** `kind:X` / `@X` (position-independent): `@pane`,
+    `@agent`, `@dir`, `@zox`, `@plugin`, `@tab`, `@workspace`.
+    `@` is sugar for `kind:`. `dir` is a union alias (Dir + Zox).
+    Multiple positive kinds are OR.
+- **Negation** `!X`: excludes a kind or group. `!plugin`, `!zox`,
+    `!agents`, `!session`, etc. `!dir` = exclude both Dir + Zox.
+- **Composition**: `result = group_scope ∩ union(positive_kinds) −
+    union(negations) |› nucleo(needle)`. Contradictions → no-match,
+    not errors. Unrecognised tokens → fuzzy text. Dedup silently.
+- **Status strip** shows active filters: `agents · pane · !zox · fuzzy`.
+- New `src/query.rs` module (31 unit tests). `Leaf` gains a `group`
+    field for group-based filtering. `Group::from_node_id` helper.
+- `doc/query-filters.md` — user-facing syntax doc.
+- 105 tests total (31 new). clippy, fmt green.
+
 ### Phase 10 — Configuration
 
 - **`switcher.toml` schema wired** (spec §13): reads
