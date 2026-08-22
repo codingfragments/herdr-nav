@@ -19,6 +19,7 @@ mod render;
 mod search;
 mod socket_client;
 pub mod source;
+mod theme;
 
 use std::time::Duration;
 
@@ -126,6 +127,11 @@ fn run() -> Result<(), String> {
     let _ctx = launch_context().ok();
     let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
     let _config = config::Config::load();
+    // Auto-follow Herdr's theme (spec §9 amended): read
+    // ~/.config/herdr/config.toml, resolve the theme name, apply
+    // [theme.custom] overrides. Falls back to catppuccin (Herdr's
+    // default) if the file is missing or malformed.
+    let palette = theme::load();
 
     let mut tree = nav::Tree::new(source::build_tree(&socket_path));
 
@@ -139,7 +145,7 @@ fn run() -> Result<(), String> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).map_err(|e| format!("Terminal::new: {e}"))?;
 
-    let result = event_loop(&mut terminal, &mut tree, &socket_path);
+    let result = event_loop(&mut terminal, &mut tree, &socket_path, &palette);
 
     // Restore terminal regardless of how the loop exited.
     disable_raw_mode().ok();
@@ -164,6 +170,7 @@ fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tree: &mut nav::Tree,
     socket_path: &str,
+    palette: &theme::Palette,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
     let mut last_cursor_change: Option<std::time::Instant> = None;
@@ -219,6 +226,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     kill_confirm
                         .as_ref()
                         .map(|(id, label)| (id.as_str(), label.as_str())),
+                    palette,
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;

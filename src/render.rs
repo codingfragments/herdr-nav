@@ -29,24 +29,43 @@ use ratatui::Frame;
 use crate::nav::{Kind, Tree, Twisty};
 use crate::search::{Leaf, SearchView};
 use crate::source;
+use crate::theme::Palette;
 
-// ── Minimal palette (spec §9, finalized in Phase 9) ───────────────────────────
+// ── Resolved colours (from the active Palette, spec §9 amended) ──────────────
+//
+// The palette is auto-followed from Herdr's `[theme]` setting (see
+// `theme.rs`). These aliases are derived once per draw from the
+// palette so the rest of the module reads like the original consts.
 
-// BASE is intentionally unused for fills: the body is transparent so the
-// terminal theme shows through. Kept only for reference / future use.
-#[allow(dead_code)]
-const BASE: Color = Color::Rgb(0x24, 0x27, 0x3a);
-const MANTLE: Color = Color::Rgb(0x1e, 0x20, 0x30);
-const SURFACE0: Color = Color::Rgb(0x36, 0x3a, 0x4f);
-const TEXT: Color = Color::Rgb(0xca, 0xd3, 0xf5);
-const SUBTEXT0: Color = Color::Rgb(0xa5, 0xad, 0xcb);
-const SURFACE2: Color = Color::Rgb(0x5b, 0x60, 0x78);
-const MAUVE: Color = Color::Rgb(0xc6, 0xa0, 0xf6);
-const RED: Color = Color::Rgb(0xed, 0x87, 0x96);
-const PEACH: Color = Color::Rgb(0xf5, 0xa9, 0x7f);
+/// Resolved colour set — built from the active `Palette` once per
+/// `draw` call, passed by reference to the helpers.
+struct Colors {
+    mantle: Color,
+    surface0: Color,
+    surface2: Color,
+    text: Color,
+    subtext0: Color,
+    mauve: Color,
+    red: Color,
+    peach: Color,
+}
 
-/// Kind glyph (spec §9). Finalized in Phase 9; here only the kinds
-/// Phase 1 renders (Group/Workspace/Tab/Pane) are exercised.
+impl Colors {
+    fn from(p: &Palette) -> Self {
+        Self {
+            mantle: p.panel_bg,
+            surface0: p.selection_bg,
+            surface2: p.overlay0,
+            text: p.text,
+            subtext0: p.subtext0,
+            mauve: p.mauve,
+            red: p.red,
+            peach: p.peach,
+        }
+    }
+}
+
+/// Kind glyph (spec §9).
 fn kind_glyph(kind: Kind) -> char {
     match kind {
         Kind::Group => '❯',
@@ -59,18 +78,9 @@ fn kind_glyph(kind: Kind) -> char {
     }
 }
 
-/// Kind colour (spec §9).
-fn kind_color(kind: Kind) -> Color {
-    match kind {
-        Kind::Group => MAUVE,
-        Kind::Workspace => Color::Rgb(0xb7, 0xbd, 0xf8),
-        Kind::Tab => Color::Rgb(0x91, 0xd7, 0xe3),
-        Kind::Pane => Color::Rgb(0x8a, 0xad, 0xf4),
-        Kind::Dir => Color::Rgb(0xee, 0xd4, 0x9f),
-        Kind::Zox => Color::Rgb(0x8b, 0xd5, 0xca),
-        Kind::Plugin => Color::Rgb(0xf5, 0xbd, 0xe6),
-        Kind::Agent => Color::Rgb(0xa6, 0xda, 0x95),
-    }
+/// Kind colour (spec §9), derived from the active palette.
+fn kind_color(p: &Palette, kind: Kind) -> Color {
+    crate::theme::kind_color(p, kind)
 }
 
 /// Draw the whole popup (spec §2): four bands inside a bordered frame,
@@ -89,8 +99,10 @@ pub fn draw(
     templates_exist: bool,
     plugin_action_picker: Option<(&str, &[(String, String)], usize)>,
     kill_confirm: Option<(&str, &str)>,
+    palette: &Palette,
 ) {
     let area = frame.area();
+    let c = Colors::from(palette);
 
     // The cursor node's kind, for the dynamic footer (spec §8: the Enter
     // hint names the action Enter will perform). In browse, the tree
@@ -114,8 +126,8 @@ pub fn draw(
         ])
         .split(area);
 
-    draw_search_bar(frame, bands[0], search, name_prompt);
-    draw_rule(frame, bands[1]);
+    draw_search_bar(frame, bands[0], search, name_prompt, &c);
+    draw_rule(frame, bands[1], &c);
     draw_body(
         frame,
         bands[2],
@@ -125,8 +137,10 @@ pub fn draw(
         socket_path,
         last_change,
         flash_error,
+        palette,
+        &c,
     );
-    draw_rule(frame, bands[3]);
+    draw_rule(frame, bands[3], &c);
     // When the name-prompt dialog is active, suppress the footer —
     // the dialog carries its own ⏎/esc hints, so the overall footer
     // would duplicate them.
@@ -139,6 +153,7 @@ pub fn draw(
             name_prompt,
             templates_exist,
             kill_confirm,
+            &c,
         );
     }
 
@@ -146,31 +161,31 @@ pub fn draw(
     // bordered dialog on top of everything, asking for the workspace
     // name. Rendered last so it sits above all bands.
     if let Some((label, name)) = name_prompt {
-        draw_name_prompt(frame, area, label, name);
+        draw_name_prompt(frame, area, label, name, &c);
     }
 
     // Template-picker overlay (spec §8.4): a centered bordered
     // dialog listing templates. Rendered last so it sits above all.
     if let Some((templates, cursor)) = template_picker {
-        draw_template_picker(frame, area, templates, cursor);
+        draw_template_picker(frame, area, templates, cursor, &c);
     }
 
     // Plugin-action-picker overlay (spec §8.3): a centered
     // bordered dialog listing a plugin's declared actions.
     // Rendered last so it sits above all.
     if let Some((plugin_id, actions, cursor)) = plugin_action_picker {
-        draw_plugin_action_picker(frame, area, plugin_id, actions, cursor);
+        draw_plugin_action_picker(frame, area, plugin_id, actions, cursor, &c);
     }
 }
 
 /// A thin full-width surface2 horizontal rule via a ratatui top
 /// border (spec §2 band separation). A 1-row `Block` with
 /// `Borders::TOP` — the border line occupies the row, no fill.
-fn draw_rule(frame: &mut Frame, area: Rect) {
+fn draw_rule(frame: &mut Frame, area: Rect, c: &Colors) {
     frame.render_widget(
         Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(SURFACE2)),
+            .border_style(Style::default().fg(c.surface2)),
         area,
     );
 }
@@ -180,23 +195,24 @@ fn draw_search_bar(
     area: Rect,
     search: Option<&SearchView>,
     _name_prompt: Option<(&str, &str)>,
+    c: &Colors,
 ) {
     let prompt = Span::styled(
         "❯ ",
-        Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
+        Style::default().fg(c.mauve).add_modifier(Modifier::BOLD),
     );
     let line = match search {
         Some(v) => Line::from(vec![
             prompt,
             Span::raw(v.query.clone()),
-            Span::styled("▮", Style::default().fg(MAUVE)),
+            Span::styled("▮", Style::default().fg(c.mauve)),
         ])
-        .style(Style::default().bg(MANTLE)),
+        .style(Style::default().bg(c.mantle)),
         None => Line::from(vec![
             prompt,
-            Span::styled("type to search…", Style::default().fg(SURFACE2)),
+            Span::styled("type to search…", Style::default().fg(c.surface2)),
         ])
-        .style(Style::default().bg(MANTLE)),
+        .style(Style::default().bg(c.mantle)),
     };
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -211,12 +227,14 @@ fn draw_body(
     socket_path: &str,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
+    palette: &Palette,
+    c: &Colors,
 ) {
     // Body split: list 44% · vertical rule · preview 56% (spec §2).
     // Below 60 cols the preview is dropped and the list takes the full
     // width (spec §2; the toggle key lands in Phase 9).
     if area.width < 60 {
-        draw_list_or_search(frame, area, tree, haystack, search, flash_error);
+        draw_list_or_search(frame, area, tree, haystack, search, flash_error, palette, c);
         return;
     }
     let split = Layout::default()
@@ -228,13 +246,22 @@ fn draw_body(
         ])
         .split(area);
 
-    draw_list_or_search(frame, split[0], tree, haystack, search, flash_error);
+    draw_list_or_search(
+        frame,
+        split[0],
+        tree,
+        haystack,
+        search,
+        flash_error,
+        palette,
+        c,
+    );
     // Vertical rule — a thin `│` line via a ratatui LEFT border on
     // the 1-cell column (spec §2), not a filled surface2 bar.
     frame.render_widget(
         Block::default()
             .borders(Borders::LEFT)
-            .border_style(Style::default().fg(SURFACE2)),
+            .border_style(Style::default().fg(c.surface2)),
         split[1],
     );
     // Preview for the cursor node (spec §7). In browse, the tree
@@ -249,10 +276,18 @@ fn draw_body(
             .and_then(|r| tree.node_at(&r.path))
             .map(std::borrow::Cow::Borrowed),
     };
-    crate::preview::draw(frame, split[2], node.as_deref(), socket_path, last_change);
+    crate::preview::draw(
+        frame,
+        split[2],
+        node.as_deref(),
+        socket_path,
+        last_change,
+        palette,
+    );
 }
 
 /// Dispatch to the browse tree list or the search flat list.
+#[allow(clippy::too_many_arguments)]
 fn draw_list_or_search(
     frame: &mut Frame,
     area: Rect,
@@ -260,14 +295,23 @@ fn draw_list_or_search(
     haystack: &[Leaf],
     search: Option<&SearchView>,
     flash_error: Option<&(String, String)>,
+    palette: &Palette,
+    c: &Colors,
 ) {
     match search {
-        Some(v) => draw_search_list(frame, area, haystack, v, flash_error),
-        None => draw_list(frame, area, tree, flash_error),
+        Some(v) => draw_search_list(frame, area, haystack, v, flash_error, palette, c),
+        None => draw_list(frame, area, tree, flash_error, palette, c),
     }
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree, flash_error: Option<&(String, String)>) {
+fn draw_list(
+    frame: &mut Frame,
+    area: Rect,
+    tree: &Tree,
+    flash_error: Option<&(String, String)>,
+    palette: &Palette,
+    c: &Colors,
+) {
     let rows = tree.visible_rows();
     let h = area.height as usize;
 
@@ -300,26 +344,26 @@ fn draw_list(frame: &mut Frame, area: Rect, tree: &Tree, flash_error: Option<&(S
         .enumerate()
         .skip(start)
         .take(list_h)
-        .map(|(i, row)| draw_row(i, row, i == tree.cursor, flash_error))
+        .map(|(i, row)| draw_row(i, row, i == tree.cursor, flash_error, palette, c))
         .collect();
 
     // No bg on the list paragraph — transparent so the terminal theme
-    // shows through; selected rows carry their own SURFACE0 bg.
+    // shows through; selected rows carry their own c.surface0 bg.
     frame.render_widget(Paragraph::new(visible), list_area);
 
     // Status strip: scope left, position right (spec §2). A bar → mantle.
-    let scope = Span::styled(" tree · target groups ", Style::default().fg(SURFACE2));
+    let scope = Span::styled(" tree · target groups ", Style::default().fg(c.surface2));
     let pos = Span::styled(
         format!(
             " {}/{} ",
             tree.cursor.saturating_add(1).min(rows.len()),
             rows.len()
         ),
-        Style::default().fg(SUBTEXT0),
+        Style::default().fg(c.subtext0),
     );
     frame.render_widget(
         Paragraph::new(
-            Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(MANTLE)),
+            Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(c.mantle)),
         ),
         strip_area,
     );
@@ -335,6 +379,8 @@ fn draw_search_list(
     haystack: &[Leaf],
     view: &SearchView,
     flash_error: Option<&(String, String)>,
+    palette: &Palette,
+    c: &Colors,
 ) {
     let h = area.height as usize;
     let (list_area, strip_area) = if h > 1 {
@@ -361,20 +407,20 @@ fn draw_search_list(
         .take(list_h)
         .map(|(i, m)| {
             let leaf = &haystack[m.index];
-            draw_search_row(leaf, m, i == view.cursor, flash_error)
+            draw_search_row(leaf, m, i == view.cursor, flash_error, palette, c)
         })
         .collect();
     frame.render_widget(Paragraph::new(visible), list_area);
 
     // Status strip: scope left, matches/total right (spec §2).
-    let scope = Span::styled(" flat leaves · fuzzy ", Style::default().fg(SURFACE2));
+    let scope = Span::styled(" flat leaves · fuzzy ", Style::default().fg(c.surface2));
     let pos = Span::styled(
         format!(" {}/{} ", view.matches.len(), haystack.len()),
-        Style::default().fg(SUBTEXT0),
+        Style::default().fg(c.subtext0),
     );
     frame.render_widget(
         Paragraph::new(
-            Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(MANTLE)),
+            Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(c.mantle)),
         ),
         strip_area,
     );
@@ -388,17 +434,19 @@ fn draw_search_row(
     m: &crate::search::ScoredMatch,
     selected: bool,
     flash_error: Option<&(String, String)>,
+    palette: &Palette,
+    c: &Colors,
 ) -> Line<'static> {
     let is_error = flash_error.is_some_and(|(id, _)| id == &leaf.id);
     let glyph = kind_glyph(leaf.kind);
-    let glyph_color = kind_color(leaf.kind);
+    let glyph_color = kind_color(palette, leaf.kind);
 
     let label_color = if is_error {
-        RED
+        c.red
     } else if selected {
-        TEXT
+        c.text
     } else {
-        SUBTEXT0
+        c.subtext0
     };
     let bar = if selected {
         Span::styled(" ", Style::default().bg(glyph_color))
@@ -433,9 +481,9 @@ fn draw_search_row(
         let is_matched = matched.contains(&(i as u32));
         let is_crumb = i < crumb_end;
         let style = if is_matched {
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD)
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD)
         } else if is_crumb {
-            Style::default().fg(SURFACE2)
+            Style::default().fg(c.surface2)
         } else {
             Style::default().fg(label_color)
         };
@@ -449,7 +497,7 @@ fn draw_search_row(
     flush(&mut run, run_style, &mut spans);
 
     let line_style = if selected {
-        Style::default().bg(SURFACE0)
+        Style::default().bg(c.surface0)
     } else {
         Style::default()
     };
@@ -461,6 +509,8 @@ fn draw_row(
     row: &crate::nav::VisibleRow,
     selected: bool,
     flash_error: Option<&(String, String)>,
+    palette: &Palette,
+    c: &Colors,
 ) -> Line<'static> {
     let indent = "  ".repeat(row.depth);
     let twisty = match row.twisty {
@@ -469,16 +519,16 @@ fn draw_row(
         Twisty::Leaf => "  ",
     };
     let glyph = kind_glyph(row.kind);
-    let glyph_color = kind_color(row.kind);
+    let glyph_color = kind_color(palette, row.kind);
 
     // Error flash (spec §11): a row whose Enter failed flashes red.
     let is_error = flash_error.is_some_and(|(id, _)| id == &row.id);
     let label_color = if is_error {
-        RED
+        c.red
     } else if selected {
-        TEXT
+        c.text
     } else {
-        SUBTEXT0
+        c.subtext0
     };
 
     // Selection: a 2px left bar in the row's kind colour (spec §9). In a
@@ -504,25 +554,26 @@ fn draw_row(
     if !row.meta.is_empty() {
         spans.push(Span::raw("  "));
         let meta_color = if row.meta == "unavailable" || row.meta == "empty" {
-            RED
+            c.red
         } else {
-            SURFACE2
+            c.surface2
         };
         spans.push(Span::styled(
             row.meta.clone(),
             Style::default().fg(meta_color),
         ));
     }
-    // Line-level bg only when selected (SURFACE0); non-selected rows are
+    // Line-level bg only when selected (c.surface0); non-selected rows are
     // transparent so the terminal theme shows through.
     let line_style = if selected {
-        Style::default().bg(SURFACE0)
+        Style::default().bg(c.surface0)
     } else {
         Style::default()
     };
     Line::from(spans).style(line_style)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_footer(
     frame: &mut Frame,
     area: Rect,
@@ -531,14 +582,18 @@ fn draw_footer(
     name_prompt: Option<(&str, &str)>,
     templates_exist: bool,
     kill_confirm: Option<(&str, &str)>,
+    c: &Colors,
 ) {
     // Kill confirm active: show the inline confirm prompt (spec §8).
     if let Some((_id, label)) = kill_confirm {
         let line = Line::from(vec![
-            Span::styled(" ⏎ ", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ⏎ ",
+                Style::default().fg(c.red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 format!("kill {label}? ^d confirm · any key cancel"),
-                Style::default().fg(PEACH),
+                Style::default().fg(c.peach),
             ),
         ]);
         frame.render_widget(line, area);
@@ -556,19 +611,19 @@ fn draw_footer(
     let mut hints = vec![
         Span::styled(
             " ⏎ ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(enter_hint, Style::default().fg(SUBTEXT0)),
+        Span::styled(enter_hint, Style::default().fg(c.subtext0)),
         Span::styled(
             "   ↑↓ ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("move", Style::default().fg(SUBTEXT0)),
+        Span::styled("move", Style::default().fg(c.subtext0)),
         Span::styled(
             "   esc ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(esc_hint, Style::default().fg(SUBTEXT0)),
+        Span::styled(esc_hint, Style::default().fg(c.subtext0)),
     ];
     // ^t hint (spec §8.4): show only when templates exist AND the
     // cursor is on a dir/zox (the kinds that support templates).
@@ -577,9 +632,9 @@ fn draw_footer(
     if templates_exist && is_dir && name_prompt.is_none() {
         hints.push(Span::styled(
             "   ^t ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ));
-        hints.push(Span::styled("template", Style::default().fg(SUBTEXT0)));
+        hints.push(Span::styled("template", Style::default().fg(c.subtext0)));
     }
     // Side-action hints (spec §8): ^p pin, ^d kill, ^r/^c/^x alternates.
     // Shown per kind, only in browse mode (search mode keeps the footer
@@ -589,63 +644,66 @@ fn draw_footer(
             Some(Kind::Dir) => {
                 hints.push(Span::styled(
                     "   ^p ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("pin   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("pin   ", Style::default().fg(c.subtext0)));
                 hints.push(Span::styled(
                     "^u ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("unpin", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("unpin", Style::default().fg(c.subtext0)));
             }
             Some(Kind::Zox) => {
                 hints.push(Span::styled(
                     "   ^p ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("pin", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("pin", Style::default().fg(c.subtext0)));
             }
             Some(Kind::Pane) => {
                 hints.push(Span::styled(
                     "   ^p ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("pin   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("pin   ", Style::default().fg(c.subtext0)));
                 hints.push(Span::styled(
                     "^d ",
-                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.red).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("kill   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("kill   ", Style::default().fg(c.subtext0)));
                 hints.push(Span::styled(
                     "^r ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("interrupt", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("interrupt", Style::default().fg(c.subtext0)));
             }
             Some(Kind::Agent) => {
                 hints.push(Span::styled(
                     "   ^c ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("interrupt   ", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled(
+                    "interrupt   ",
+                    Style::default().fg(c.subtext0),
+                ));
                 hints.push(Span::styled(
                     "^x ",
-                    Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("detach", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("detach", Style::default().fg(c.subtext0)));
             }
             Some(Kind::Workspace) | Some(Kind::Tab) => {
                 hints.push(Span::styled(
                     "   ^d ",
-                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                    Style::default().fg(c.red).add_modifier(Modifier::BOLD),
                 ));
-                hints.push(Span::styled("kill", Style::default().fg(SUBTEXT0)));
+                hints.push(Span::styled("kill", Style::default().fg(c.subtext0)));
             }
             _ => {}
         }
     }
     frame.render_widget(
-        Paragraph::new(Line::from(hints).style(Style::default().bg(MANTLE))),
+        Paragraph::new(Line::from(hints).style(Style::default().bg(c.mantle))),
         area,
     );
 }
@@ -670,7 +728,7 @@ fn enter_action_label(kind: Option<Kind>, is_search: bool) -> &'static str {
 /// Centered name-prompt dialog (spec §8.2 amended). A bordered
 /// dialog on top of the popup, asking for the new workspace's
 /// name. Prefilled with the default; Enter confirms, Esc cancels.
-fn draw_name_prompt(frame: &mut Frame, area: Rect, _label: &str, name: &str) {
+fn draw_name_prompt(frame: &mut Frame, area: Rect, _label: &str, name: &str, c: &Colors) {
     // Center a ~50-wide, 5-row dialog: title border, label, name,
     // hints, bottom border. Don't clear the whole popup — render
     // the dialog on top of the bands so the popup stays visible
@@ -683,12 +741,12 @@ fn draw_name_prompt(frame: &mut Frame, area: Rect, _label: &str, name: &str) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(SURFACE2))
+        .border_style(Style::default().fg(c.surface2))
         .title(Span::styled(
             " Open workspace ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(MANTLE));
+        .style(Style::default().bg(c.mantle));
     let inner = block.inner(dialog);
     // Clear only the dialog rect (so the bands behind the dialog
     // don't bleed through the dialog's content), not the whole
@@ -697,34 +755,34 @@ fn draw_name_prompt(frame: &mut Frame, area: Rect, _label: &str, name: &str) {
     block.render(dialog, frame.buffer_mut());
 
     // Row 0: explanatory label.
-    let label_line = Line::styled(" Name the new workspace:", Style::default().fg(SUBTEXT0))
-        .style(Style::default().bg(MANTLE));
+    let label_line = Line::styled(" Name the new workspace:", Style::default().fg(c.subtext0))
+        .style(Style::default().bg(c.mantle));
 
     // Row 1: the editable name + caret.
     let name_line = Line::from(vec![
         Span::styled(
             " ❯ ",
-            Style::default().fg(MAUVE).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.mauve).add_modifier(Modifier::BOLD),
         ),
         Span::raw(name.to_string()),
-        Span::styled("▮", Style::default().fg(MAUVE)),
+        Span::styled("▮", Style::default().fg(c.mauve)),
     ])
-    .style(Style::default().bg(MANTLE));
+    .style(Style::default().bg(c.mantle));
 
     // Row 2: hints inside the dialog.
     let hint = Line::from(vec![
         Span::styled(
             " ⏎ ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("create   ", Style::default().fg(SUBTEXT0)),
+        Span::styled("create   ", Style::default().fg(c.subtext0)),
         Span::styled(
             "esc ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("cancel", Style::default().fg(SUBTEXT0)),
+        Span::styled("cancel", Style::default().fg(c.subtext0)),
     ])
-    .style(Style::default().bg(MANTLE));
+    .style(Style::default().bg(c.mantle));
 
     let body = Layout::default()
         .direction(Direction::Vertical)
@@ -747,6 +805,7 @@ fn draw_template_picker(
     area: Rect,
     templates: &[source::Template],
     cursor: usize,
+    c: &Colors,
 ) {
     let n = templates.len() as u16;
     // title border + one row per template + hint row + bottom border.
@@ -758,12 +817,12 @@ fn draw_template_picker(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(SURFACE2))
+        .border_style(Style::default().fg(c.surface2))
         .title(Span::styled(
             " Open with template ",
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(MANTLE));
+        .style(Style::default().bg(c.mantle));
     let inner = block.inner(dialog);
     Clear.render(dialog, frame.buffer_mut());
     block.render(dialog, frame.buffer_mut());
@@ -774,9 +833,9 @@ fn draw_template_picker(
         let mark = if selected { "▸ " } else { "  " };
         let default_tag = if t.default { " (default)" } else { "" };
         let style = if selected {
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+            Style::default().fg(c.text).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(SUBTEXT0)
+            Style::default().fg(c.subtext0)
         };
         rows.push(
             Line::from(vec![
@@ -784,9 +843,9 @@ fn draw_template_picker(
                 Span::styled(format!("{}{}", t.name, default_tag), style),
             ])
             .style(if selected {
-                Style::default().bg(SURFACE0)
+                Style::default().bg(c.surface0)
             } else {
-                Style::default().bg(MANTLE)
+                Style::default().bg(c.mantle)
             }),
         );
     }
@@ -795,16 +854,16 @@ fn draw_template_picker(
         Line::from(vec![
             Span::styled(
                 " ⏎ ",
-                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("build   ", Style::default().fg(SUBTEXT0)),
+            Span::styled("build   ", Style::default().fg(c.subtext0)),
             Span::styled(
                 "esc ",
-                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("back", Style::default().fg(SUBTEXT0)),
+            Span::styled("back", Style::default().fg(c.subtext0)),
         ])
-        .style(Style::default().bg(MANTLE)),
+        .style(Style::default().bg(c.mantle)),
     );
 
     frame.render_widget(Paragraph::new(rows), inner);
@@ -819,6 +878,7 @@ fn draw_plugin_action_picker(
     plugin_id: &str,
     actions: &[(String, String)],
     cursor: usize,
+    c: &Colors,
 ) {
     let n = actions.len() as u16;
     let h = (n + 3).min(area.height);
@@ -829,12 +889,12 @@ fn draw_plugin_action_picker(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(SURFACE2))
+        .border_style(Style::default().fg(c.surface2))
         .title(Span::styled(
             format!(" {plugin_id} ▸ ACTION "),
-            Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(MANTLE));
+        .style(Style::default().bg(c.mantle));
     let inner = block.inner(dialog);
     Clear.render(dialog, frame.buffer_mut());
     block.render(dialog, frame.buffer_mut());
@@ -844,9 +904,9 @@ fn draw_plugin_action_picker(
         let selected = i == cursor;
         let mark = if selected { "▸ " } else { "  " };
         let style = if selected {
-            Style::default().fg(TEXT).add_modifier(Modifier::BOLD)
+            Style::default().fg(c.text).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(SUBTEXT0)
+            Style::default().fg(c.subtext0)
         };
         let label = if selected { title.clone() } else { aid.clone() };
         rows.push(
@@ -855,9 +915,9 @@ fn draw_plugin_action_picker(
                 Span::styled(label, style),
             ])
             .style(if selected {
-                Style::default().bg(SURFACE0)
+                Style::default().bg(c.surface0)
             } else {
-                Style::default().bg(MANTLE)
+                Style::default().bg(c.mantle)
             }),
         );
     }
@@ -866,16 +926,16 @@ fn draw_plugin_action_picker(
         Line::from(vec![
             Span::styled(
                 " ⏎ ",
-                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("run   ", Style::default().fg(SUBTEXT0)),
+            Span::styled("run   ", Style::default().fg(c.subtext0)),
             Span::styled(
                 "esc ",
-                Style::default().fg(PEACH).add_modifier(Modifier::BOLD),
+                Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("back", Style::default().fg(SUBTEXT0)),
+            Span::styled("back", Style::default().fg(c.subtext0)),
         ])
-        .style(Style::default().bg(MANTLE)),
+        .style(Style::default().bg(c.mantle)),
     );
 
     frame.render_widget(Paragraph::new(rows), inner);

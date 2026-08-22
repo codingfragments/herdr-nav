@@ -7,6 +7,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 9 — Visual contract: auto-follow Herdr's theme
+
+- **Auto-follow Herdr's `[theme]` setting** (spec §9 amended):
+    reads `~/.config/herdr/config.toml` at launch, resolves the
+    theme name to one of the 18 built-in palettes Herdr ships
+    (catppuccin, catppuccin-latte, terminal, tokyo-night,
+    tokyo-night-day, dracula, nord, gruvbox, gruvbox-light,
+    one-dark, one-light, solarized, solarized-light, kanagawa,
+    kanagawa-lotus, rose-pine, rose-pine-dawn, vesper), and
+    applies `[theme.custom]` overrides. Falls back to catppuccin
+    (Herdr's default) if the file is missing or malformed — never
+    crashes.
+- **"terminal" theme** uses ANSI named colors (Color::Blue,
+    Color::Green, etc.) so the terminal resolves them — the popup
+    automatically matches whatever the terminal is themed to.
+- New `src/theme.rs` module: `Palette` struct (mirrors Herdr's
+    own `Palette`), 18 built-in theme functions, `canonical_theme_name`
+    alias resolver, `parse_color` (hex/rgb/named/reset), `load()`
+    from config, `kind_color()` mapping (workspace/group → mauve,
+    tab/zox → teal, pane → blue, dir → yellow, plugin → accent,
+    agent → green).
+- `render.rs` + `preview.rs`: all hardcoded Catppuccin Macchiato
+    hex consts replaced with palette-driven colors via a `Colors`
+    struct built from the active `Palette` once per `draw`.
+- Kind-glyph color mapping: workspace/group share mauve, tab/zox
+    share teal — disambiguated by glyph + label, never colour alone
+    (§9).
+- 11 new unit tests (theme resolution, overrides, color parser,
+    kind-color mapping, config parsing, fallback). 67 tests total.
+
 ### Phase 8 — Side actions (pin, kill, context alternates)
 
 - `^p` pin (spec §8): pin the selected dir (or the selected
