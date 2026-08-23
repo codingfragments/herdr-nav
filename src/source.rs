@@ -363,8 +363,10 @@ impl Provider for PinnedProvider {
     }
 
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
-        // Open a new workspace at the pinned path.
-        open_dir_workspace(id)
+        // Open a new workspace at the pinned path, built from the
+        // auto-resolved default template (spec §8.2 amended).
+        let (outcome, _first_pane) = open_dir_workspace_template(id, None)?;
+        Ok(outcome)
     }
 }
 
@@ -410,81 +412,83 @@ impl Provider for ZoxideProvider {
     }
 
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
-        open_dir_workspace(id)
+        // Open a new workspace at the zoxide path, built from the
+        // auto-resolved default template (spec §8.2 amended).
+        let (outcome, _first_pane) = open_dir_workspace_template(id, None)?;
+        Ok(outcome)
     }
 }
 
-/// Open a new workspace at a directory path (spec §8.2): a
-/// worktree-space if the path is inside a git repo, a plain
-/// workspace otherwise. Never reuses the current workspace.
-/// `id` is the node id (`pinned:<path>` or `zox:<path>`); the
-/// path is the part after the colon.
-pub fn open_dir_workspace(id: &str) -> Result<crate::nav::Outcome, String> {
-    open_dir_workspace_named(id, None)
-}
-
-/// Create a new workspace at the path, optionally named. `name` is
-/// the user-edited workspace label (None = let herdr pick).
-pub fn open_dir_workspace_named(
+/// Open a new workspace at a directory path (spec §8.2 amended):
+/// always a plain `workspace.create` built from a template — never a
+/// `worktree.create`. The previous worktree-space path was removed
+/// because `worktree.create` creates a worktree *child of the current
+/// workspace* whenever the target path is inside *any* git repo, even
+/// one unrelated to the current ws. Building every dir open through the
+/// template path (Enter and ^t unified) fixes that and makes the two
+/// keys behave identically modulo which template they use.
+///
+/// `id` is the node id (`pinned:<path>` or `zox:<path>`); the path is
+/// the part after the colon. `name` is the workspace label (None =
+/// derive a default from the path). The template is the auto-resolved
+/// default for `path` (match-glob → `default: true` → hardcoded
+/// 1-tab/1-pane). Returns the first pane's id so the caller can focus
+/// it (the build itself restores focus to the previously-focused pane).
+pub fn open_dir_workspace_template(
     id: &str,
     name: Option<&str>,
-) -> Result<crate::nav::Outcome, String> {
+) -> Result<(crate::nav::Outcome, Option<String>), String> {
     let path = id.split_once(':').map(|(_, p)| p).unwrap_or(id);
     let expanded = expand_path(path);
-    let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
-
-    let result = create_dir_workspace(&socket, &expanded, name)?;
-    if let Some(pane_id) = result {
-        let _ = crate::socket_client::request(
-            &socket,
-            "pane.focus",
-            serde_json::json!({"pane_id": pane_id}),
-        );
-    }
-    Ok(crate::nav::Outcome::Close {
-        toast: format!("opened workspace at {path}"),
-    })
+    let label = name
+        .map(str::to_string)
+        .unwrap_or_else(|| workspace_name_default(path));
+    let template = default_template_for(&expanded);
+    let first_pane = build_workspace_from_template(&expanded, &label, &template)?;
+    Ok((
+        crate::nav::Outcome::Close {
+            toast: format!("opened workspace at {path}"),
+        },
+        first_pane,
+    ))
 }
 
-/// Create a new workspace at `expanded` (worktree-space inside a
-/// git repo, plain otherwise) and return the first pane's id so
-/// the caller can focus it. Returns None if the create succeeded
-/// but no pane id was in the response (best-effort focus).
-fn create_dir_workspace(
-    socket: &str,
-    expanded: &str,
-    name: Option<&str>,
-) -> Result<Option<String>, String> {
-    // Worktree-space if inside a git repo, else plain workspace.
-    if is_inside_git_repo(expanded) {
-        // Try worktree.create; fall back to workspace.create if
-        // the path is already a worktree (spec §8.2: always a NEW ws).
-        let r = crate::socket_client::request(
-            socket,
-            "worktree.create",
-            serde_json::json!({"path": expanded}),
-        );
-        if let Ok(resp) = r {
-            return Ok(resp
-                .get("root_pane")
-                .and_then(|v| v.get("pane_id"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string));
-        }
+/// Resolve the template to use for `Enter` on a dir (spec §8.2
+/// amended): the match-glob or `default: true` template if any
+/// templates exist, else the hardcoded 1-tab/1-pane default. Uses
+/// the same resolution as `preselect_template` so `Enter` builds
+/// exactly what `^t` would have pre-highlighted.
+pub fn default_template_for(path: &str) -> Template {
+    let templates = read_templates();
+    if templates.is_empty() {
+        return hardcoded_default_template();
     }
-    // Plain workspace (or worktree fallback). Pass the name as
-    // `label` if provided.
-    let mut params = serde_json::json!({"cwd": expanded});
-    if let Some(name) = name {
-        params["label"] = serde_json::Value::String(name.to_string());
+    let i = preselect_template(&templates, path);
+    templates[i].clone()
+}
+
+/// The hardcoded fallback template (spec §8.2 amended): one tab,
+/// one pane, no command — a plain login shell at the workspace
+/// cwd. Used when no templates are configured.
+pub fn hardcoded_default_template() -> Template {
+    Template {
+        name: "default".to_string(),
+        match_globs: Vec::new(),
+        default: true,
+        tabs: vec![TemplateTab {
+            name: "main".to_string(),
+            cwd: None,
+            layout: Layout {
+                direction: default_direction(),
+                ratio: 0,
+                panes: vec![PaneNode::Pane {
+                    command: None,
+                    cwd: None,
+                    name: None,
+                }],
+            },
+        }],
     }
-    let resp = crate::socket_client::request(socket, "workspace.create", params)
-        .map_err(|e| e.to_string())?;
-    Ok(resp
-        .get("root_pane")
-        .and_then(|v| v.get("pane_id"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string))
 }
 
 /// Expand `~` and `$HOME` in a path.
@@ -522,17 +526,6 @@ pub fn resolve_cwd(base: &str, cwd: &str) -> String {
     let base = base.trim_end_matches('/');
     let rel = cwd.strip_prefix("./").unwrap_or(cwd);
     format!("{base}/{rel}")
-}
-
-/// Is `path` inside a git work tree? (decides worktree-space vs plain.)
-fn is_inside_git_repo(path: &str) -> bool {
-    let Ok(out) = std::process::Command::new("git")
-        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
-        .output()
-    else {
-        return false;
-    };
-    out.status.success() && out.stdout.starts_with(b"true")
 }
 
 /// Build the Pinned dirs group node (flat list of Dir leaves).
@@ -1985,6 +1978,23 @@ tabs:
         ];
         assert_eq!(preselect_template(&templates, "/Users/foo/Cargo.toml"), 0);
         assert_eq!(preselect_template(&templates, "/Users/foo/notes"), 1);
+    }
+
+    #[test]
+    fn hardcoded_default_template_is_one_tab_one_pane() {
+        let t = hardcoded_default_template();
+        assert_eq!(t.tabs.len(), 1);
+        let tab = &t.tabs[0];
+        assert_eq!(tab.layout.panes.len(), 1);
+        assert!(tab.cwd.is_none(), "default tab cwd = workspace cwd");
+        match &tab.layout.panes[0] {
+            PaneNode::Pane { command, cwd, name } => {
+                assert!(command.is_none(), "default pane has no command");
+                assert!(cwd.is_none());
+                assert!(name.is_none());
+            }
+            PaneNode::Nested { .. } => panic!("default pane must be a leaf, not a nested split"),
+        }
     }
 }
 

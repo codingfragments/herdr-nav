@@ -64,7 +64,7 @@ one-line toast in the host terminal). Side actions (`^p` pin, `^d` kill,
 | --- | --- | --- |
 | pane / agent | jump to the pane (switch workspace + tab + focus) | `^d` kill · `^r` restart / `^c` interrupt / `^x` detach |
 | workspace / tab | switch to it, keeping its active pane | `^p` pin · `^d` kill |
-| dir / zox | **always** open a new workspace at that path (a worktree-space inside a git repo) | `^t` open with template · `^p` pin |
+| dir / zox | **always** open a new workspace at that path, built from the auto-resolved default template (match-glob → `default: true` → hardcoded 1-tab/1-pane) | `^t` pick template then name · `^p` pin |
 | plugin | open the plugin's action picker (secondary selector) | — |
 
 The default action is always named in the preview footer before you

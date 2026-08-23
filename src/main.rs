@@ -49,15 +49,20 @@ const KEY_DEBOUNCE: Duration = Duration::from_millis(40);
 /// An inline prompt for naming a new workspace (spec §8.2 amended).
 /// Prefilled with a good default derived from the path; the user
 /// confirms (Enter) to create + enter, or cancels (Esc) to abort
-/// without creating and stay in the popup.
+/// without creating and stay in the popup. Carries the template to
+/// build from: for `Enter` it's the auto-resolved default, for `^t`
+/// it's the user-selected template (spec §8.4 amended — ^t now asks
+/// for a name after template selection, so both keys share one build
+/// path).
 struct NamePrompt {
     /// The node id being acted on (`pinned:<path>` / `zox:<path>`).
     node_id: String,
     /// The expanded path (for the workspace.create call).
-    #[allow(dead_code)] // used by open_dir_workspace_named via node_id
     path: String,
     /// The editable name (prefilled with the default).
     name: String,
+    /// The template to build the workspace from.
+    template: source::Template,
 }
 
 /// Template picker state (spec §8.4): `^t` on a dir/zox
@@ -433,6 +438,14 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Right | Tab | Char(' ') if key.modifiers.is_empty() => {
+                // Name prompt: Space types a space into the name.
+                // →/Tab are inert while the prompt is open.
+                if let Some(prompt) = name_prompt.as_mut() {
+                    if key.code == Char(' ') {
+                        prompt.name.push(' ');
+                    }
+                    continue;
+                }
                 // In search mode, →/Tab are inert; Space types a
                 // space (spec §8). In browse, expand/step.
                 if is_search {
@@ -654,14 +667,29 @@ fn event_loop<B: ratatui::backend::Backend>(
                     );
                     break;
                 }
-                // If a template picker is active, confirm: build the workspace
-                // from the selected template (spec §8.4).
+                // If a template picker is active, confirm: open a name
+                // prompt carrying the selected template (spec §8.4 amended
+                // — ^t now asks for a name after template selection, so it
+                // shares the one build path with Enter).
                 if let Some(picker) = template_picker.take() {
-                    let template = &picker.templates[picker.cursor.min(picker.templates.len() - 1)];
-                    match source::build_workspace_from_template(
-                        &picker.path,
-                        &picker.name,
+                    let template =
+                        picker.templates[picker.cursor.min(picker.templates.len() - 1)].clone();
+                    name_prompt = Some(NamePrompt {
+                        node_id: picker.node_id,
+                        path: picker.path,
+                        name: picker.name,
                         template,
+                    });
+                    continue;
+                }
+                // If a name prompt is active, confirm: build the workspace
+                // from the prompt's template (Enter = auto-resolved default,
+                // ^t = user-selected) and close (spec §8.2/§8.4 amended).
+                if let Some(prompt) = name_prompt.take() {
+                    match source::build_workspace_from_template(
+                        &prompt.path,
+                        &prompt.name,
+                        &prompt.template,
                     ) {
                         Ok(Some(pane_id)) => {
                             // Focus the first pane so the user lands in it.
@@ -673,21 +701,6 @@ fn event_loop<B: ratatui::backend::Backend>(
                             break;
                         }
                         Ok(None) => break,
-                        Err(e) => {
-                            flash_error = Some((picker.node_id, e));
-                        }
-                    }
-                    continue;
-                }
-                // If a name prompt is active, confirm it.
-                if let Some(prompt) = name_prompt.take() {
-                    match source::open_dir_workspace_named(&prompt.node_id, Some(&prompt.name)) {
-                        Ok(nav::Outcome::Close { .. }) => {
-                            // Create + focus the first pane (done in
-                            // open_dir_workspace), then close the popup.
-                            break;
-                        }
-                        Ok(nav::Outcome::Stay { .. }) => {}
                         Err(e) => {
                             flash_error = Some((prompt.node_id, e));
                         }
@@ -710,13 +723,17 @@ fn event_loop<B: ratatui::backend::Backend>(
                 if is_leaf {
                     if let Some(id) = leaf_id {
                         // Dir/zox: prompt for a workspace name (spec §8.2
-                        // amended) instead of creating immediately.
+                        // amended). Enter builds from the auto-resolved
+                        // default template (match-glob → default → hardcoded
+                        // 1-tab/1-pane); ^t lets the user pick the template.
                         if id.starts_with("pinned:") || id.starts_with("zox:") {
                             let path = id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
+                            let expanded = source::expand_path(path);
                             name_prompt = Some(NamePrompt {
                                 node_id: id.clone(),
-                                path: source::expand_path(path),
+                                path: expanded.clone(),
                                 name: source::workspace_name_default(path),
+                                template: source::default_template_for(&expanded),
                             });
                         } else if id.starts_with("plugin:") {
                             // Plugin: open the action picker (spec §8.3),

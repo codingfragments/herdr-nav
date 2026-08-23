@@ -46,7 +46,7 @@ Mode is derived from the query: empty → Browse, non-empty → Search.
 | `^p` | pin selected dir (or selected pane's cwd) into Pinned dirs; stay open | |
 | `^u` | unpin selected pinned dir; stay open | |
 | `^d` | kill selected pane / tab / workspace; confirm inline; stay open | |
-| `^t` | on a dir/zox entry: open the workspace-template picker (optional) | |
+| `^t` | on a dir/zox entry: pick a workspace template, then name the workspace (Enter uses the auto-resolved default template with no picker) | |
 | `^r` `^c` `^x` | context alternates, named per item in the preview footer | |
 | `?` | open the in-popup help dialog | |
 
