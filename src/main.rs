@@ -438,6 +438,14 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Right | Tab | Char(' ') if key.modifiers.is_empty() => {
+                // Name prompt: Space types a space into the name.
+                // →/Tab are inert while the prompt is open.
+                if let Some(prompt) = name_prompt.as_mut() {
+                    if key.code == Char(' ') {
+                        prompt.name.push(' ');
+                    }
+                    continue;
+                }
                 // In search mode, →/Tab are inert; Space types a
                 // space (spec §8). In browse, expand/step.
                 if is_search {
@@ -719,8 +727,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         // default template (match-glob → default → hardcoded
                         // 1-tab/1-pane); ^t lets the user pick the template.
                         if id.starts_with("pinned:") || id.starts_with("zox:") {
-                            let path =
-                                id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
+                            let path = id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
                             let expanded = source::expand_path(path);
                             name_prompt = Some(NamePrompt {
                                 node_id: id.clone(),
