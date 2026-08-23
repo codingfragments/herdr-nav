@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`Enter` on a dir/zox no longer creates a stray git worktree child of
+  the current workspace.** The previous `worktree.create` path fired
+  whenever the target path was inside *any* git repo, even one unrelated
+  to the current workspace, producing a worktree child of the current
+  ws instead of a fresh workspace. The worktree path is removed; every
+  dir open now goes through the template-build path (`workspace.create`).
+
+### Changed
+
+- **`Enter` and `^t` on a dir/zox now share one build path.** Both prompt
+  for a workspace name, then build via `build_workspace_from_template`.
+  `Enter` uses the auto-resolved default template (match-glob →
+  `default: true` → hardcoded 1-tab/1-pane); `^t` lets you pick the
+  template first, then asks for the name. With no templates configured,
+  `Enter` builds from the hardcoded 1-tab/1-pane default; `^t` is inert.
+
+
 ## [0.1.0] — 2026-08-22
 
 ### Phase 13 — Docs refinement + public-facing elements

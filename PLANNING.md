@@ -262,7 +262,7 @@ actions (pin) keep the popup open and toast in place.
 | pane | jump to pane (switch workspace + tab + focus) | `^d` kill · `^r` restart command |
 | agent | jump to the pane the agent runs in (same as a pane jump) | `^c` interrupt · `^x` detach |
 | workspace / tab | switch to it, keeping its active pane | `^p` pin · `^d` kill |
-| dir / zox | **always** open a new workspace at that path — a worktree-space inside a git repo, a plain workspace otherwise; never reuse the current one | `^t` open with template · `^p` pin |
+| dir / zox | **always** open a new workspace at that path, built from the auto-resolved default template (match-glob → `default: true` → hardcoded 1-tab/1-pane); never reuse the current one | `^t` pick template then name · `^p` pin |
 | plugin | open the plugin's action picker (§8.3); "view error" if failed to load | — |
 
 ### Secondary selector — plugins (§8.3)
@@ -278,7 +278,7 @@ description and, where provided, a dry-run summary.
 workspace templates (`~/.config/herdr/templates/*.yaml`, one YAML file per
   template), one preselected
 (the template whose `match` pattern fits the path, else the configured
-default). Enter opens a new workspace/worktree-space at that path built
+default). Enter asks for a workspace name, then opens a new workspace at that path built
 from the highlighted template; Esc returns. **Optional:** with no
 `templates/` dir (or an empty one), `^t` is unbound and the footer omits the hint.
 
@@ -389,8 +389,10 @@ slot = 1
 - Enter on a leaf performs that action, closes, toasts; Enter on a branch
   in Browse only toggles it.
 - Enter on a pane/agent lands the user in that pane. Enter on a dir/zox
-  always creates a new workspace (worktree-space inside a git repo) and
-  never reuses the current one.
+  always creates a new workspace built from the auto-resolved default
+  template (match-glob → `default: true` → hardcoded 1-tab/1-pane) and
+  never reuses the current one. `^t` lets the user pick the template
+  first, then asks for a name; both keys share one build path.
 - Enter on a plugin opens its action picker with the default preselected;
   Esc from the picker returns to the switcher with that plugin selected.
 - Esc clears the query in Search and closes the popup in Browse.
@@ -551,13 +553,14 @@ host toast. The product's core verb.
   30s cache). Meta: slot / frecency score.
 - Preview (dir/zox): first ~8 entries (dirs first), last-visit recency +
   hit count; chips: git branch + dirty, entry count.
-- Action: `Enter` **always** opens a new workspace at the path — a
-  worktree-space if the path is inside a git repo, a plain workspace
-  otherwise; never reuses the current workspace. No template picker yet.
+- Action: `Enter` **always** opens a new workspace at the path, built
+  from the auto-resolved default template (match-glob → `default: true`
+  → hardcoded 1-tab/1-pane); never reuses the current workspace. No
+  template picker yet (`^t` lands in Phase 6b).
 - Both groups drop their "unavailable" stubs and enter the haystack.
 - **Exit criteria:** pins + zoxide entries list with git/dir previews;
-  Enter opens a fresh workspace/worktree-space at the path; `dir …` /
-  `zox …` queries work in Search.
+  Enter opens a fresh workspace at the path built from the default
+  template; `dir …` / `zox …` queries work in Search.
 
 ### Phase 6b — Templates (open-with-template picker, §8.4)
 **Aspect:** the `^t` open-with-template feature for dirs and zoxide.
@@ -567,11 +570,13 @@ host toast. The product's core verb.
 - `^t` on a dir/zox entry opens the secondary-selector shape listing
   configured templates, one preselected: the template whose `match`
   pattern fits the path, else the configured `default`.
-- `Enter` opens a new workspace (or worktree-space) at that path built
-  from the highlighted template; `Esc` returns to the switcher.
+- `Enter` opens a new workspace at that path built from the highlighted
+  template (after a name prompt — spec §8.4 amended: `^t` now asks for
+  a name after template selection, sharing the one build path with
+  `Enter`); `Esc` returns to the switcher.
 - With no `templates/` dir: `^t` is unbound and the preview footer omits
-  the hint (spec §8.4). Plain `Enter` never consults templates beyond the
-  default one.
+  the hint (spec §8.4). Plain `Enter` builds from the hardcoded
+  1-tab/1-pane default in that case.
 - **Exit criteria:** `^t` on a dir/zox opens the template picker with the
   right one preselected; Enter builds the workspace from it; Esc returns;
   with no templates/ dir the key is inert and the hint is gone.
@@ -840,7 +845,7 @@ filter tokens behaves exactly as Phase 4.
   keymap (8), visual conformance (9), config (10), hardening (11), docs
   (12), release (13).
 - **Not too large:** the riskiest phase was 6 (Pinned+zoxide + the
-  "always new workspace / worktree-space" action + templates); it's now
+  "always new workspace" action + templates); it's now
   split into 6a (providers + previews + the basic open-new-workspace
   action) and 6b (templates). If 6a still grows, split providers (6a)
   from the workspace-creation action (6a′). Phase 8 is the other

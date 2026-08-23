@@ -44,9 +44,7 @@ An agent is waiting on a confirmation:
 
 1. `Ctrl k` → expand Pinned dirs (or zoxide). Preview shows the dir
    listing + git branch/dirty.
-2. `Enter` → a **new** workspace opens at that path — a worktree-space
-   if it's inside a git repo, a plain workspace otherwise. The current
-   workspace is never reused.
+2. `Enter` → a **new** workspace opens at that path, built from the auto-resolved default template (match-glob → `default: true` → hardcoded 1-tab/1-pane). You're prompted for the workspace name first. The current workspace is never reused. Use `^t` to pick a specific template first.
 
 ## Run a plugin action
 
