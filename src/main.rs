@@ -404,9 +404,30 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('p')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    && !is_dirnav =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
+                // Phase 19 DirNav `^p`: pin the selected directory (or
+                // cwd if the cursor is out of range) into Pinned dirs;
+                // stay in DirNav (no toast — dropped per user request).
+                if let Some(d) = dirnav.as_ref() {
+                    let path = d
+                        .cursor_entry()
+                        .map(|e| e.path.clone())
+                        .unwrap_or_else(|| d.cwd.clone());
+                    let path_str = path.display().to_string();
+                    match source::write_pin(&path_str) {
+                        Ok(slot) => {
+                            flash_error = Some((
+                                format!("dirnav:{}", path_str),
+                                format!("pinned → slot {slot}"),
+                            ));
+                        }
+                        Err(e) => {
+                            flash_error = Some((format!("dirnav:{}", path_str), e));
+                        }
+                    }
+                    continue;
+                }
                 // `^p` pin (spec §8): pin the selected dir (or the
                 // selected pane's cwd) into Pinned dirs; writes
                 // `targets.toml`; stay open (no toast — dropped per
@@ -579,9 +600,32 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('t')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    && !is_dirnav =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
+                // Phase 19 DirNav `^t`: open the template picker for the
+                // selected directory (or cwd), mirroring dir/zox `^t`.
+                // Inert if no templates are configured.
+                if let Some(d) = dirnav.as_ref() {
+                    if template_picker.is_none() && name_prompt.is_none() {
+                        let templates = source::read_templates();
+                        if !templates.is_empty() {
+                            let path = d
+                                .cursor_entry()
+                                .map(|e| e.path.clone())
+                                .unwrap_or_else(|| d.cwd.clone());
+                            let path_str = path.display().to_string();
+                            let cursor = source::preselect_template(&templates, &path_str);
+                            template_picker = Some(TemplatePicker {
+                                node_id: format!("dirnav:{}", path_str),
+                                path: source::expand_path(&path_str),
+                                name: source::workspace_name_default(&path_str),
+                                templates,
+                                cursor,
+                            });
+                        }
+                    }
+                    continue;
+                }
                 // `^t` on a dir/zox: open the template picker (spec §8.4).
                 // Inert on non-dir leaves and in search mode (no group
                 // context for the path). Unbound if no templates.toml.
@@ -795,7 +839,25 @@ fn event_loop<B: ratatui::backend::Backend>(
                     });
                 }
             }
-            Enter if !is_dirnav => {
+            Enter => {
+                // Phase 19 DirNav commit: Enter opens a new workspace at
+                // the selected directory (or cwd if the cursor is out of
+                // range / on a non-dir), reusing the existing template-
+                // build path + name prompt — identical to dir/zox Enter.
+                if let Some(d) = dirnav.as_ref() {
+                    let path = d
+                        .cursor_entry()
+                        .map(|e| e.path.clone())
+                        .unwrap_or_else(|| d.cwd.clone());
+                    let expanded = source::expand_path(&path.display().to_string());
+                    name_prompt = Some(NamePrompt {
+                        node_id: format!("dirnav:{}", path.display()),
+                        path: expanded.clone(),
+                        name: source::workspace_name_default(&path.display().to_string()),
+                        template: source::default_template_for(&expanded),
+                    });
+                    continue;
+                }
                 // If a plugin action picker is active, confirm: run the action
                 // (spec §8.3) via plugin.action.invoke, then close.
                 if let Some(picker) = plugin_action_picker.take() {
@@ -900,6 +962,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                 } else if !is_search {
                     // Branch in browse → step into it.
                     tree.expand_or_step();
+                }
+            }
+            Char('.') if key.modifiers.is_empty() && is_dirnav => {
+                // Phase 19 DirNav: `.` toggles hidden entries (dotfiles).
+                // Refresh the listing in place; the cursor clamps and the
+                // in-level search re-runs against the new entry set.
+                if let Some(d) = dirnav.as_mut() {
+                    d.show_hidden = !d.show_hidden;
+                    d.refresh_entries();
                 }
             }
             Char(c)

@@ -963,21 +963,21 @@ fn draw_footer(
         frame.render_widget(line, area);
         return;
     }
-    // Phase 17 DirNav footer: a dedicated hint row for the directory
-    // walker. Enter/^t/^p land in Phase 19; here we show navigation +
-    // help + back.
+    // Phase 17/19 DirNav footer: a dedicated hint row for the directory
+    // walker. Enter opens a workspace at the selected dir; ^t picks a
+    // template first; ^p pins the cwd; `.` toggles hidden entries.
     if is_dirnav {
         let ks = Style::default().fg(c.peach).add_modifier(Modifier::BOLD);
         let ds = Style::default().fg(c.subtext0);
         let line = Line::from(vec![
-            Span::styled(" ↑↓ ", ks),
-            Span::styled("move   ", ds),
-            Span::styled("← ", ks),
-            Span::styled("up   ", ds),
-            Span::styled("→ ", ks),
-            Span::styled("in   ", ds),
-            Span::styled("? ", ks),
-            Span::styled("help   ", ds),
+            Span::styled(" ⏎ ", ks),
+            Span::styled("open   ", ds),
+            Span::styled("^t ", ks),
+            Span::styled("template   ", ds),
+            Span::styled("^p ", ks),
+            Span::styled("pin   ", ds),
+            Span::styled(". ", ks),
+            Span::styled("hidden   ", ds),
             Span::styled("esc ", ks),
             Span::styled("back", ds),
         ])
@@ -1279,7 +1279,7 @@ fn draw_template_picker(
 /// full keymap + query-filter syntax summary. Esc closes.
 fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
     let w = 56u16;
-    let h = 21u16;
+    let h = 22u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
@@ -1343,6 +1343,21 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
             Span::styled("type", ks),
             Span::raw(" "),
             Span::styled("fuzzy-search this level", ds),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("⏎", ks),
+            Span::raw(" "),
+            Span::styled("open workspace   ", ds),
+            Span::styled("^t", ks),
+            Span::raw(" "),
+            Span::styled("template   ", ds),
+            Span::styled("^p", ks),
+            Span::raw(" "),
+            Span::styled("pin   ", ds),
+            Span::styled(".", ks),
+            Span::raw(" "),
+            Span::styled("toggle hidden", ds),
         ]),
         Line::raw(""),
         Line::from(vec![

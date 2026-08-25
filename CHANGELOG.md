@@ -7,6 +7,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 19 — DirNav: commit verb + hardening (Feature B, part 3)
+
+- **`Enter` in DirNav opens a new workspace at the selected directory**
+    (or cwd if the cursor is out of range), reusing the existing
+    template-build path + `NamePrompt` — identical to dir/zox `Enter`.
+    The default template is auto-resolved (match-glob → `default: true`
+    → hardcoded 1-tab/1-pane); the name prompt prefills a default derived
+    from the path. Confirm builds + focuses the first pane + closes.
+- **`^t` in DirNav opens the template picker** for the selected dir
+    (or cwd), mirroring dir/zox `^t`: preselect by `match` glob, then the
+    name prompt, then build. Inert if no templates are configured.
+- **`^p` in DirNav pins the selected dir (or cwd)** into Pinned dirs
+    via `write_pin`; toast `pinned → slot N`; stay in DirNav.
+- **`.` toggles hidden entries** (dotfiles): the listing refreshes in
+    place via `refresh_entries`, the cursor clamps, and the in-level
+    search re-runs against the new entry set. Default hidden.
+- **Edge cases:** permission-denied dirs are skipped (already handled by
+    `read_dir_entries` returning `None` → `$HOME` fallback on entry);
+    symlinks render with a link glyph and `→` follows only those
+    resolving to a dir; an empty dir shows no rows (`0/0` status strip);
+    a non-existent/unreadable cwd falls back to `$HOME` on `^f` entry.
+    Very-large-dir scroll/soft-cap remains a future hardening item.
+- **Footer:** DirNav footer now shows the commit hints (`⏎ open · ^t
+    template · ^p pin · . hidden · esc back`). `?` help dialog gains a
+    DirNav commit row (height 21 → 22).
+- `DirNavView` gains `show_hidden`; `read_dir_entries` takes a
+    `show_hidden` param; new `refresh_entries` method.
+- 2 new unit tests (show_hidden includes dotfiles, refresh picks up the
+    toggle + clamps cursor). 139 tests total. clippy/fmt green.
+
 ### Phase 18 — DirNav: in-level fuzzy search + find navigation (Feature B, part 2)
 
 - **Typing in DirNav fuzzy-filters the current level's entry names**

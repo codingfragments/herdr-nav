@@ -48,8 +48,17 @@ phases").
   deletes the last char (empty → clear); `Esc` clears the search first,
   then exits DirNav. The search bar shows the cwd as a breadcrumb path
   (direct parent kept full, earlier segments shortened) with the query.
-- **Commit:** `Enter` opens a new workspace at the selected dir; `^t`
-  picks a template first; `^p` pins the cwd. *(Lands in Phase 19.)*
+- **Commit:** `Enter` opens a new workspace at the selected dir (or
+  cwd if the cursor is out of range), reusing the existing template-
+  build path + name prompt — identical to dir/zox `Enter`. `^t` picks a
+  template first (then the name prompt); `^p` pins the cwd (or selected
+  dir). Both keep the popup open until the name prompt confirms.
+- **Hidden entries:** dotfiles are hidden by default; `.` toggles them
+  (the listing refreshes in place, cursor clamped, search re-runs).
+- **Edge cases:** permission-denied dirs are skipped; symlinks render with
+  a link glyph and `→` follows only those resolving to a dir; an empty
+  dir shows no rows (the status strip reads `0/0`); a non-existent or
+  unreadable cwd falls back to `$HOME` on entry.
 - **Esc:** two-stage — active in-level search → clear; no search → exit
   DirNav and restore the prior switcher state (Browse expansion or
   Search query intact).

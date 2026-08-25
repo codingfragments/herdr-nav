@@ -85,12 +85,12 @@ full syntax, composition rules, and worked examples.
 | `→` | descend into the cursor directory (inert on non-dirs); clears the search |
 | `a–z 0–9 …` | fuzzy-search this level's entry names; cursor → first match |
 | `Backspace` | delete last search char; empty → clear search |
+| `Enter` | open a new workspace at the selected dir (name prompt) |
+| `^t` | pick a workspace template, then name the workspace |
+| `^p` | pin the selected dir (or cwd) into Pinned dirs |
+| `.` | toggle hidden entries (dotfiles) |
 | `Esc` | clear search → exit DirNav (two-stage) |
-| `?` | help dialog |
 
-The in-level fuzzy search narrows the listing to matches and lands on
-the first; `↑↓` then jump between matches (find). The search bar shows
-the cwd as a breadcrumb path (direct parent kept full, earlier segments
-shortened) with the query. The commit verb `Enter`/`^t`/`^p` (Phase 19)
-lands later. See
+The commit verb `Enter`/`^t`/`^p` and the `.` hidden-toggle are now
+shipped. See
 [navigation.md](navigation.md#directory-navigation-mode-dirnav--v02).
