@@ -7,6 +7,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 17 — DirNav mode: entry + single-level navigation (Feature B, part 1)
+
+- **`^f` enters directory navigation mode (DirNav)** — a toggled third
+    mode: a filesystem directory walker starting at the focused pane's
+    cwd (fetched via `pane.get`, falling back to `$HOME` if missing or
+    unreadable). The switcher's `Tree` + `SearchView` are preserved
+    off-screen so Esc restores them exactly.
+- **Listing:** directories + symlinks that resolve to a directory only
+    (files and links-to-files are excluded); hidden entries (dotfiles)
+    hidden by default; sorted by name.
+- **Navigation:** `↑↓`/`^n`/`^p` move the cursor (wraps); `←` ascends
+    to the parent, landing on the entry you came from (`came_from`);
+    `→` descends into the cursor directory (inert on non-dirs). Each
+    left/right resets `came_from`.
+- **Preview:** the selected directory reuses the existing dir preview
+    (built from a synthetic `Kind::Dir` node), so the preview pane works
+    unchanged in DirNav.
+- **Footer:** a DirNav-specific hint row (`↑↓ move · ← up · → in · ?
+    help · esc back`). The in-level search (Phase 18) and commit verb
+    `Enter`/`^t`/`^p` (Phase 19) land later; they are inert in Phase 17.
+- **Esc:** exits DirNav and restores the prior switcher state (Browse
+    expansion intact, or Search query intact). The two-stage "active
+    query → clear" first stage lands with Phase 18's search.
+- New `src/dirnav.rs` module (`DirNavView`, `DirEntry`, `read_dir_entries`).
+- Spec departure (§1 non-goal "not a file browser") documented in
+    `doc/navigation.md` and the `?` help dialog.
+- 10 new unit tests (entry listing, dotfile hiding, sort, unreadable cwd,
+    cursor wrap, parent/child resolution, root parent, out-of-range
+    child, unreadable `at`). 125 tests total.
+
 ### Phase 16 — "Extend zoxide" keybind (Feature A)
 
 - **`Tab` in Search mode extends the zoxide list** when the result list
