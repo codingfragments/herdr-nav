@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-25
+
+**Two new features:** `Tab` extends the zoxide list in Search mode when no directory results match; `^f` opens a directory navigation mode (DirNav) — a filesystem directory walker with in-level fuzzy search, a path display, and commit verbs (`Enter`/`^t`/`^p`).
+
 ### Phase 19 — DirNav: commit verb + hardening (Feature B, part 3)
 
 - **`Enter` in DirNav opens a new workspace at the selected directory**
