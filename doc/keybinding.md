@@ -81,11 +81,16 @@ full syntax, composition rules, and worked examples.
 | Key | Action |
 | --- | --- |
 | `↑` / `↓` | move cursor (wraps) |
-| `←` | ascend to parent (lands on the entry you came from) |
-| `→` | descend into the cursor directory (inert on non-dirs) |
-| `Esc` | exit DirNav, restore prior switcher state |
+| `←` | ascend to parent (lands on the entry you came from); clears the search |
+| `→` | descend into the cursor directory (inert on non-dirs); clears the search |
+| `a–z 0–9 …` | fuzzy-search this level's entry names; cursor → first match |
+| `Backspace` | delete last search char; empty → clear search |
+| `Esc` | clear search → exit DirNav (two-stage) |
 | `?` | help dialog |
 
-The in-level fuzzy search (Phase 18) and the commit verb `Enter`/`^t`/`^p`
-(Phase 19) land in later phases. See
+The in-level fuzzy search narrows the listing to matches and lands on
+the first; `↑↓` then jump between matches (find). The search bar shows
+the cwd as a breadcrumb path (direct parent kept full, earlier segments
+shortened) with the query. The commit verb `Enter`/`^t`/`^p` (Phase 19)
+lands later. See
 [navigation.md](navigation.md#directory-navigation-mode-dirnav--v02).

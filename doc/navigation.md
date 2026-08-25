@@ -44,12 +44,15 @@ phases").
   into the cursor directory. Each left/right resets the in-level search.
 - **In-level search:** typing fuzzy-filters the current level's entry
   names and lands on the first match; `↑↓` then jump between matches
-  (find). *(Lands in Phase 18.)*
+  (find). `←`/`→` change the cwd and reset the search; `Backspace`
+  deletes the last char (empty → clear); `Esc` clears the search first,
+  then exits DirNav. The search bar shows the cwd as a breadcrumb path
+  (direct parent kept full, earlier segments shortened) with the query.
 - **Commit:** `Enter` opens a new workspace at the selected dir; `^t`
   picks a template first; `^p` pins the cwd. *(Lands in Phase 19.)*
 - **Esc:** two-stage — active in-level search → clear; no search → exit
   DirNav and restore the prior switcher state (Browse expansion or
-  Search query intact). *(Phase 17: single-stage — exits DirNav.)*
+  Search query intact).
 
 The switcher's tree and search state are preserved off-screen while
 DirNav is active, so Esc always returns you to exactly where you were.

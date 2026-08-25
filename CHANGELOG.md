@@ -7,6 +7,38 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 18 — DirNav: in-level fuzzy search + find navigation (Feature B, part 2)
+
+- **Typing in DirNav fuzzy-filters the current level's entry names**
+    (reusing the `FuzzyEngine`, no provider bias — pure name match) and
+    lands on the first match; the list narrows to matches. `↑↓` then
+    jump between matches (find); with no search they move to the next
+    entry. Cursor wraps within the match set while searching.
+- **`←`/`→` reset the search** ("reseat"): each directory change
+    rebuilds the view with an empty query, so the full level re-shows.
+- **`Backspace`** deletes the last search char; empty → clear the search
+    (stay in DirNav, full level).
+- **`Esc` is now two-stage in DirNav:** active in-level search → clear
+    it; no search → exit DirNav and restore the prior switcher state.
+- **Path display:** the search bar shows the cwd as a breadcrumb path —
+    the direct parent (the directory currently listed) is never
+    shortened; earlier segments shorten to their first character, then
+    drop from the front with a `…/` prefix. `$HOME` is shown as `~`.
+    The query is shown after the path when searching.
+- **Status strip** shows `matches/total` while searching (else
+    `cursor/total`). Matched chars in row names are highlighted
+    peach+bold (coalesced into runs, mirroring the main search).
+- `DirNavView` gains `query` + `matches` fields; `visible_len`/
+    `visible_entry_idx`/`requery`/`cursor_entry` resolve through the
+    match set when searching. New `display_path`/`shorten_path` helpers.
+- `?` help dialog gains an "in DirNav: type fuzzy-search this level"
+    note (height 20 → 21).
+- 12 new unit tests (requery narrows + resets, empty query full level,
+    match wrap, cursor resolves through matches, child descends into
+    matched entry, 7 path-shortening cases). 137 tests total (136 pass;
+    1 pre-existing env-dependent `pinned_empty_when_no_targets_toml`
+    failure, also failing on `main`).
+
 ### Phase 17 — DirNav mode: entry + single-level navigation (Feature B, part 1)
 
 - **`^f` enters directory navigation mode (DirNav)** — a toggled third

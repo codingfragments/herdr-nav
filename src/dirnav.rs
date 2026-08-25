@@ -1,10 +1,12 @@
-//! Directory navigation mode (DirNav) — Phase 17 (Feature B, part 1).
+//! Directory navigation mode (DirNav) — Phase 17 + Phase 18.
 //!
 //! A toggled third mode: a filesystem directory walker starting at the
 //! focused pane's cwd. `←` ascends to the parent directory; `→` descends
 //! into the cursor entry (directories + dir-symlinks only); `↑↓` move
-//! the cursor (wraps). The in-level fuzzy search + find navigation
-//! lands in Phase 18; the commit verb (`Enter`/`^t`/`^p`) in Phase 19.
+//! the cursor (wraps). Phase 18 adds an in-level fuzzy search: typing
+//! filters the current level's entry names and lands on the first
+//! match; `↑↓` then jump between matches (find). The commit verb
+//! (`Enter`/`^t`/`^p`) lands in Phase 19.
 //!
 //! **Spec departure (§1 non-goal):** DirNav is path-by-path directory
 //! navigation, which §1 lists as a non-goal ("not a file browser").
@@ -31,6 +33,17 @@ pub struct DirEntry {
     pub is_symlink: bool,
 }
 
+/// One ranked in-level search match (Phase 18): an index into `entries`
+/// plus the character positions in the entry name that matched the
+/// query (for highlight rendering).
+#[derive(Debug, Clone)]
+pub struct DirNavMatch {
+    /// Index into `DirNavView::entries`.
+    pub entry_idx: usize,
+    /// Matched character positions in the entry's `name`.
+    pub indices: Vec<u32>,
+}
+
 /// The DirNav view's mutable state. Held as `Option<DirNavView>` in the
 /// event loop alongside `search_view`; `None` = not in DirNav mode.
 #[derive(Debug, Clone)]
@@ -39,13 +52,19 @@ pub struct DirNavView {
     pub cwd: PathBuf,
     /// Sorted directory entries (dirs + dir-symlinks only).
     pub entries: Vec<DirEntry>,
-    /// Cursor into `entries`.
+    /// Cursor into the **visible** rows: when `query` is empty this
+    /// indexes `entries`; when non-empty it indexes `matches`.
     pub cursor: usize,
     /// Vertical scroll (kept for Phase 19 large-dir handling).
     pub scroll: usize,
     /// The entry we ascended from — `←` lands the cursor here on the
     /// parent level so you can re-descend. Cleared on `→`.
     pub came_from: Option<PathBuf>,
+    /// Phase 18 in-level fuzzy query. Empty → full level shown.
+    pub query: String,
+    /// Phase 18 ranked matches (indices into `entries`). Empty when
+    /// `query` is empty.
+    pub matches: Vec<DirNavMatch>,
 }
 
 impl DirNavView {
@@ -60,23 +79,70 @@ impl DirNavView {
             cursor: 0,
             scroll: 0,
             came_from: None,
+            query: String::new(),
+            matches: Vec::new(),
         })
     }
 
-    /// Move the cursor down one entry, wrapping.
+    /// Number of visible rows: all entries when the query is empty,
+    /// else the match count (Phase 18).
+    pub fn visible_len(&self) -> usize {
+        if self.query.is_empty() {
+            self.entries.len()
+        } else {
+            self.matches.len()
+        }
+    }
+
+    /// The `entries` index of the visible row at `cursor`, or `None` if
+    /// out of range. When the query is empty, the cursor *is* the entry
+    /// index; when searching, it indexes `matches`.
+    pub fn visible_entry_idx(&self, cursor: usize) -> Option<usize> {
+        if self.query.is_empty() {
+            Some(cursor)
+        } else {
+            self.matches.get(cursor).map(|m| m.entry_idx)
+        }
+    }
+
+    /// Move the cursor down one visible row, wrapping (Phase 18:
+    /// wraps within the match set when searching).
     pub fn move_down(&mut self) {
-        let n = self.entries.len();
+        let n = self.visible_len();
         if n > 0 {
             self.cursor = (self.cursor + 1) % n;
         }
     }
 
-    /// Move the cursor up one entry, wrapping.
+    /// Move the cursor up one visible row, wrapping.
     pub fn move_up(&mut self) {
-        let n = self.entries.len();
+        let n = self.visible_len();
         if n > 0 {
             self.cursor = (self.cursor + n - 1) % n;
         }
+    }
+
+    /// Phase 18: re-run the in-level fuzzy search against the current
+    /// entries' names and reset the cursor to the first match (spec:
+    /// "select the first entry that fuzzy-matches"). No provider bias —
+    /// pure name match. An empty query clears the matches and shows the
+    /// full level (cursor stays where it was, clamped by callers).
+    pub fn requery(&mut self) {
+        if self.query.is_empty() {
+            self.matches.clear();
+            return;
+        }
+        let items: Vec<String> = self.entries.iter().map(|e| e.name.clone()).collect();
+        let mut engine = crate::search::FuzzyEngine::new();
+        let scored = engine.filter_with_bonus(&self.query, &items, |_| 0);
+        self.matches = scored
+            .into_iter()
+            .map(|m| DirNavMatch {
+                entry_idx: m.index,
+                indices: m.indices,
+            })
+            .collect();
+        self.cursor = 0;
     }
 
     /// `←`: the parent directory to ascend to. `None` at the filesystem
@@ -95,7 +161,7 @@ impl DirNavView {
     /// readable directory (inert). Re-checks the filesystem in case it
     /// changed since the listing was built.
     pub fn child(&self) -> Option<PathBuf> {
-        let entry = self.entries.get(self.cursor)?;
+        let entry = self.cursor_entry()?;
         let meta = std::fs::metadata(&entry.path).ok()?;
         if meta.is_dir() {
             Some(entry.path.clone())
@@ -104,9 +170,11 @@ impl DirNavView {
         }
     }
 
-    /// The cursor entry, if any.
+    /// The cursor entry, if any (Phase 18: resolves through `matches`
+    /// when the query is active).
     pub fn cursor_entry(&self) -> Option<&DirEntry> {
-        self.entries.get(self.cursor)
+        let idx = self.visible_entry_idx(self.cursor)?;
+        self.entries.get(idx)
     }
 }
 
@@ -142,6 +210,91 @@ pub fn read_dir_entries(dir: &Path) -> Option<Vec<DirEntry>> {
         .collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Some(entries)
+}
+
+// ── Path display (Phase 18) ───────────────────────────────────────────────────
+//
+// The DirNav search bar shows the cwd as a breadcrumb path so the user
+// always knows where they are in the filesystem. Long paths are shortened
+// to fit the bar, but the **direct parent** (the last segment = the
+// directory currently listed) is never shortened — it's the most
+// important context. Earlier segments are reduced to their first
+// character, then dropped from the front with a `…/` prefix, before the
+// direct parent is ever touched.
+
+/// Convert an absolute path to a display form: `$HOME` → `~` prefix,
+/// then shortened to fit `max_chars` with the direct parent kept full.
+pub fn display_path(path: &Path, max_chars: usize) -> String {
+    let display = home_tilde(path);
+    shorten_path(&display, max_chars)
+}
+
+/// Replace a leading `$HOME` with `~` for display.
+fn home_tilde(path: &Path) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        if let Ok(rest) = path.strip_prefix(&home) {
+            if rest.as_os_str().is_empty() {
+                return "~".to_string();
+            }
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
+}
+
+/// Shorten `path` to fit within `max_chars` (character count), keeping
+/// the **last segment** (direct parent) full at all times. Stages:
+///   1. If the full path fits, return it as-is.
+///   2. Reduce every earlier segment to its first character (`/U/s/p/last`).
+///   3. Drop leading early segments from the front, prefixing `…/`,
+///      keeping trailing first-char segments + the full last segment.
+///   4. Last resort: `…/last` (last segment still full; the terminal
+///      clips on overflow — the direct parent is never shortened).
+///
+/// `max_chars == 0` returns the full path (caller guards).
+pub fn shorten_path(path: &str, max_chars: usize) -> String {
+    let n = path.chars().count();
+    if max_chars == 0 || n <= max_chars {
+        return path.to_string();
+    }
+    // Split into non-empty segments, preserving the leading slash.
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return path.to_string(); // just "/"
+    }
+    let last = parts.last().unwrap().to_string();
+    let early = &parts[..parts.len() - 1];
+
+    // Stage 2: first char of each early segment.
+    let first_chars: Vec<String> = early
+        .iter()
+        .map(|s| s.chars().next().unwrap_or(' ').to_string())
+        .collect();
+    let stage2 = format!("/{}/{}", first_chars.join("/"), last);
+    if stage2.chars().count() <= max_chars {
+        return stage2;
+    }
+
+    // Stage 3: drop leading early segments, keep trailing first-char
+    // segments + full last, with a `…/` prefix.
+    for k in (0..early.len()).rev() {
+        let kept: String = first_chars[early.len() - k..].to_vec().join("/");
+        let prefix = if kept.is_empty() {
+            String::new()
+        } else {
+            format!("/{kept}")
+        };
+        let cand = format!("/…{prefix}/{last}");
+        if cand.chars().count() <= max_chars {
+            return cand;
+        }
+    }
+
+    // Stage 4: only the direct parent, with a `…/` prefix. The last
+    // segment stays full; if it still overflows, the terminal clips it
+    // (we never shorten the direct parent).
+    format!("…/{last}")
 }
 
 #[cfg(test)]
@@ -240,6 +393,8 @@ mod tests {
             cursor: 0,
             scroll: 0,
             came_from: None,
+            query: String::new(),
+            matches: Vec::new(),
         };
         assert_eq!(v.parent(), Some(PathBuf::from("/a/b")));
     }
@@ -252,6 +407,8 @@ mod tests {
             cursor: 0,
             scroll: 0,
             came_from: None,
+            query: String::new(),
+            matches: Vec::new(),
         };
         assert_eq!(v.parent(), None);
     }
@@ -276,6 +433,8 @@ mod tests {
             cursor: 5,
             scroll: 0,
             came_from: None,
+            query: String::new(),
+            matches: Vec::new(),
         };
         assert_eq!(v.child(), None);
     }
@@ -284,5 +443,139 @@ mod tests {
     fn at_returns_none_for_unreadable_cwd() {
         let p = PathBuf::from("/this/does/not/exist");
         assert!(DirNavView::at(p).is_none());
+    }
+
+    // ── Phase 18: in-level search ───────────────────────────────────────────
+
+    #[test]
+    fn requery_narrows_to_matches_and_resets_cursor() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-rq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join("alpha"));
+        mkdir(&tmp.join("beta"));
+        mkdir(&tmp.join("gamma"));
+        let mut v = DirNavView::at(tmp.clone()).unwrap();
+        v.query = "al".to_string();
+        v.requery();
+        assert_eq!(v.matches.len(), 1);
+        assert_eq!(v.entries[v.matches[0].entry_idx].name, "alpha");
+        assert_eq!(v.cursor, 0);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn empty_query_shows_full_level() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join("alpha"));
+        mkdir(&tmp.join("beta"));
+        let mut v = DirNavView::at(tmp.clone()).unwrap();
+        v.query = "al".to_string();
+        v.requery();
+        assert_eq!(v.visible_len(), 1);
+        v.query.clear();
+        v.requery();
+        assert_eq!(v.visible_len(), 2); // full level
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn move_down_wraps_within_matches_when_searching() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-wrapm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join("src"));
+        mkdir(&tmp.join("test-src"));
+        let mut v = DirNavView::at(tmp.clone()).unwrap();
+        v.query = "src".to_string();
+        v.requery();
+        assert_eq!(v.matches.len(), 2);
+        v.move_down();
+        assert_eq!(v.cursor, 1);
+        v.move_down(); // wraps to 0
+        assert_eq!(v.cursor, 0);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn cursor_entry_resolves_through_matches_when_searching() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-cem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join("alpha"));
+        mkdir(&tmp.join("zeta"));
+        let mut v = DirNavView::at(tmp.clone()).unwrap();
+        v.cursor = 1; // on "zeta"
+        v.query = "al".to_string();
+        v.requery(); // cursor → 0, first match "alpha"
+        let entry = v.cursor_entry().unwrap();
+        assert_eq!(entry.name, "alpha");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn child_descends_into_matched_entry_when_searching() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-childm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join("alpha"));
+        mkdir(&tmp.join("zeta"));
+        let mut v = DirNavView::at(tmp.clone()).unwrap();
+        v.query = "al".to_string();
+        v.requery();
+        assert_eq!(v.child(), Some(tmp.join("alpha")));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Phase 18: path shortening ────────────────────────────────────────────
+
+    #[test]
+    fn shorten_path_returns_full_when_it_fits() {
+        assert_eq!(shorten_path("/a/b/c", 10), "/a/b/c");
+    }
+
+    #[test]
+    fn shorten_path_first_char_of_early_segments() {
+        // /Users/stefan/projekte/herdr-nav, max 20 → /U/s/p/herdr-nav
+        assert_eq!(
+            shorten_path("/Users/stefan/projekte/herdr-nav", 20),
+            "/U/s/p/herdr-nav"
+        );
+    }
+
+    #[test]
+    fn shorten_path_drops_leading_segments_with_ellipsis() {
+        // Force stage 3: keep only the last early first-char segment.
+        let s = shorten_path("/Users/stefan/projekte/herdr-nav", 14);
+        assert!(s.ends_with("/herdr-nav"));
+        assert!(s.starts_with("/…"));
+        assert!(s.chars().count() <= 14);
+    }
+
+    #[test]
+    fn shorten_path_keeps_direct_parent_full_at_all_stages() {
+        // Even at tiny budgets the last segment is never shortened.
+        let s = shorten_path("/Users/stefan/projekte/herdr-nav", 12);
+        assert!(s.contains("herdr-nav"));
+        // never a truncated last segment like "herdr…" or "herdr-n"
+        assert!(!s.ends_with("…") || s == "…/herdr-nav");
+    }
+
+    #[test]
+    fn shorten_path_last_resort_ellipsis_slash_last() {
+        let s = shorten_path("/a/b/c/very-long-direct-parent-name", 10);
+        assert_eq!(s, "…/very-long-direct-parent-name");
+    }
+
+    #[test]
+    fn shorten_path_root_only() {
+        assert_eq!(shorten_path("/", 5), "/");
+    }
+
+    #[test]
+    fn shorten_path_zero_max_returns_full() {
+        assert_eq!(shorten_path("/a/b/c", 0), "/a/b/c");
     }
 }
