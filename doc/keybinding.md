@@ -47,6 +47,7 @@ Mode is derived from the query: empty → Browse, non-empty → Search.
 | `^u` | unpin selected pinned dir; stay open | |
 | `^d` | kill selected pane / tab / workspace; confirm inline; stay open | |
 | `^t` | on a dir/zox entry: pick a workspace template, then name the workspace (Enter uses the auto-resolved default template with no picker) | |
+| `^f` | enter directory navigation mode (DirNav) — see [navigation.md](navigation.md#directory-navigation-mode-dirnav--v02) | |
 | `^r` `^c` `^x` | context alternates, named per item in the preview footer | |
 | `?` | open the in-popup help dialog | |
 
@@ -72,3 +73,19 @@ In search mode, the query supports filter tokens: group scope
 (`agents nvim`), kind filters (`@pane`, `kind:dir`), and negation
 (`!plugin`). See [`doc/query-filters.md`](query-filters.md) for the
 full syntax, composition rules, and worked examples.
+
+## Directory navigation mode (DirNav)
+
+`^f` opens a filesystem directory walker at the focused pane's cwd.
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | move cursor (wraps) |
+| `←` | ascend to parent (lands on the entry you came from) |
+| `→` | descend into the cursor directory (inert on non-dirs) |
+| `Esc` | exit DirNav, restore prior switcher state |
+| `?` | help dialog |
+
+The in-level fuzzy search (Phase 18) and the commit verb `Enter`/`^t`/`^p`
+(Phase 19) land in later phases. See
+[navigation.md](navigation.md#directory-navigation-mode-dirnav--v02).

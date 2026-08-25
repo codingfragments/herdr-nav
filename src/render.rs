@@ -26,6 +26,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use ratatui::Frame;
 
+use crate::dirnav::DirNavView;
 use crate::nav::{Kind, Tree, Twisty};
 use crate::search::{Leaf, SearchView};
 use crate::source;
@@ -102,19 +103,25 @@ pub fn draw(
     palette: &Palette,
     help_open: bool,
     extend_hint: bool,
+    dirnav: Option<&DirNavView>,
 ) {
     let area = frame.area();
     let c = Colors::from(palette);
 
     // The cursor node's kind, for the dynamic footer (spec §8: the Enter
     // hint names the action Enter will perform). In browse, the tree
-    // cursor row; in search, the search cursor leaf.
-    let cursor_kind = match search {
-        Some(v) => v.cursor_leaf(haystack).map(|l| l.kind),
-        None => tree
-            .cursor_row()
-            .and_then(|r| tree.node_at(&r.path))
-            .map(|n| n.kind),
+    // cursor row; in search, the search cursor leaf; in DirNav, always
+    // a directory (Phase 17 — the listing is dirs + dir-symlinks only).
+    let cursor_kind = if dirnav.is_some() {
+        Some(Kind::Dir)
+    } else {
+        match search {
+            Some(v) => v.cursor_leaf(haystack).map(|l| l.kind),
+            None => tree
+                .cursor_row()
+                .and_then(|r| tree.node_at(&r.path))
+                .map(|n| n.kind),
+        }
     };
 
     let bands = Layout::default()
@@ -136,6 +143,7 @@ pub fn draw(
         tree,
         haystack,
         search,
+        dirnav,
         socket_path,
         last_change,
         flash_error,
@@ -160,6 +168,7 @@ pub fn draw(
             templates_exist,
             kill_confirm,
             extend_hint,
+            dirnav.is_some(),
             &c,
         );
     }
@@ -237,12 +246,20 @@ fn draw_body(
     tree: &Tree,
     haystack: &[Leaf],
     search: Option<&SearchView>,
+    dirnav: Option<&DirNavView>,
     socket_path: &str,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
     palette: &Palette,
     c: &Colors,
 ) {
+    // Phase 17 DirNav: the body becomes a single-column directory walker.
+    // The preview pane reuses the existing dir preview for the selected
+    // entry (built from a synthetic Kind::Dir node).
+    if let Some(d) = dirnav {
+        draw_dirnav_body(frame, area, d, socket_path, last_change, palette, c);
+        return;
+    }
     // Body split: list 44% · vertical rule · preview 56% (spec §2).
     // Below 60 cols the preview is dropped and the list takes the full
     // width (spec §2; the toggle key lands in Phase 9).
@@ -315,6 +332,165 @@ fn draw_list_or_search(
         Some(v) => draw_search_list(frame, area, haystack, v, flash_error, palette, c),
         None => draw_list(frame, area, tree, flash_error, palette, c),
     }
+}
+
+/// Phase 17 DirNav body: a single-column directory listing (dirs +
+/// dir-symlinks only) with a status strip, plus the preview pane showing
+/// the selected directory's contents (reusing the existing dir preview
+/// via a synthetic `Kind::Dir` node). Below 60 cols the preview is
+/// dropped, mirroring `draw_body`.
+#[allow(clippy::too_many_arguments)]
+fn draw_dirnav_body(
+    frame: &mut Frame,
+    area: Rect,
+    d: &DirNavView,
+    socket_path: &str,
+    last_change: Option<Instant>,
+    palette: &Palette,
+    c: &Colors,
+) {
+    if area.width < 60 {
+        draw_dirnav_list(frame, area, d, palette, c);
+        return;
+    }
+    let split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(44),
+            Constraint::Length(1),
+            Constraint::Percentage(56),
+        ])
+        .split(area);
+    draw_dirnav_list(frame, split[0], d, palette, c);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(c.surface2)),
+        split[1],
+    );
+    // Preview for the selected dir: build a synthetic Kind::Dir node so
+    // the existing `dir_preview` resolver (which reads the path from
+    // `node.id` after the colon) works unchanged.
+    let node = d.cursor_entry().map(|e| crate::nav::Node {
+        id: format!("dirnav:{}", e.path.display()),
+        kind: Kind::Dir,
+        label: e.name.clone(),
+        meta: String::new(),
+        crumbs: None,
+        children: Vec::new(),
+        preview: crate::nav::Preview::default(),
+        actions: crate::nav::Actions::default(),
+    });
+    crate::preview::draw(
+        frame,
+        split[2],
+        node.as_ref(),
+        socket_path,
+        last_change,
+        palette,
+    );
+}
+
+/// The DirNav single-column listing + status strip (Phase 17). One row
+/// per entry: dir glyph (or link glyph for symlinks), name, and a
+/// right-aligned meta (`<dir>` or `→ target`). The selected row gets the
+/// surface0 background + a 2px kind-colour left bar, matching the main
+/// list's selection grammar (spec §10).
+fn draw_dirnav_list(frame: &mut Frame, area: Rect, d: &DirNavView, palette: &Palette, c: &Colors) {
+    let h = area.height as usize;
+    let (list_area, strip_area) = if h > 1 {
+        let s = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        (s[0], s[1])
+    } else {
+        (area, Rect::ZERO)
+    };
+
+    let list_h = list_area.height as usize;
+    let mut start = d.scroll;
+    if list_h > 0 {
+        if d.cursor < start {
+            start = d.cursor;
+        } else if d.cursor >= start + list_h {
+            start = d.cursor + 1 - list_h;
+        }
+    }
+    let start = start.min(d.entries.len().saturating_sub(1));
+
+    let dir_color = crate::theme::kind_color(palette, Kind::Dir);
+    let visible: Vec<Line> = d
+        .entries
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(list_h)
+        .map(|(i, e)| draw_dirnav_row(i, e, i == d.cursor, dir_color, c))
+        .collect();
+    frame.render_widget(Paragraph::new(visible), list_area);
+
+    // Status strip: `dirnav · <basename(cwd)>` left, `cursor/total` right.
+    let cwd_label = d
+        .cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| d.cwd.display().to_string());
+    let scope = Span::styled(
+        format!(" dirnav · {cwd_label} "),
+        Style::default().fg(c.surface2),
+    );
+    let pos = Span::styled(
+        format!(
+            " {}/{} ",
+            d.cursor.saturating_add(1).min(d.entries.len()),
+            d.entries.len()
+        ),
+        Style::default().fg(c.subtext0),
+    );
+    frame.render_widget(
+        Paragraph::new(
+            Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(c.mantle)),
+        ),
+        strip_area,
+    );
+}
+
+/// One DirNav row (Phase 17): glyph + name (left), meta (right).
+fn draw_dirnav_row(
+    _i: usize,
+    e: &crate::dirnav::DirEntry,
+    selected: bool,
+    dir_color: Color,
+    c: &Colors,
+) -> Line<'static> {
+    let glyph = if e.is_symlink { '↪' } else { '▤' };
+    let label_color = if selected { c.text } else { c.subtext0 };
+    let bar = if selected {
+        Span::styled(" ", Style::default().bg(dir_color))
+    } else {
+        Span::raw(" ")
+    };
+    let meta = if e.is_symlink {
+        // Show the resolved target for symlinks.
+        let target = std::fs::canonicalize(&e.path)
+            .ok()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        format!("→ {} ", target)
+    } else {
+        "<dir> ".to_string()
+    };
+    Line::from(vec![
+        bar,
+        Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(dir_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(e.name.clone(), Style::default().fg(label_color)),
+        Span::raw(" "),
+        Span::styled(meta, Style::default().fg(c.surface2)),
+    ])
 }
 
 fn draw_list(
@@ -624,6 +800,7 @@ fn draw_footer(
     templates_exist: bool,
     kill_confirm: Option<(&str, &str)>,
     extend_hint: bool,
+    is_dirnav: bool,
     c: &Colors,
 ) {
     // Kill confirm active: show the inline confirm prompt (spec §8).
@@ -638,6 +815,28 @@ fn draw_footer(
                 Style::default().fg(c.peach),
             ),
         ]);
+        frame.render_widget(line, area);
+        return;
+    }
+    // Phase 17 DirNav footer: a dedicated hint row for the directory
+    // walker. Enter/^t/^p land in Phase 19; here we show navigation +
+    // help + back.
+    if is_dirnav {
+        let ks = Style::default().fg(c.peach).add_modifier(Modifier::BOLD);
+        let ds = Style::default().fg(c.subtext0);
+        let line = Line::from(vec![
+            Span::styled(" ↑↓ ", ks),
+            Span::styled("move   ", ds),
+            Span::styled("← ", ks),
+            Span::styled("up   ", ds),
+            Span::styled("→ ", ks),
+            Span::styled("in   ", ds),
+            Span::styled("? ", ks),
+            Span::styled("help   ", ds),
+            Span::styled("esc ", ks),
+            Span::styled("back", ds),
+        ])
+        .style(Style::default().bg(c.mantle));
         frame.render_widget(line, area);
         return;
     }
@@ -935,7 +1134,7 @@ fn draw_template_picker(
 /// full keymap + query-filter syntax summary. Esc closes.
 fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
     let w = 56u16;
-    let h = 19u16;
+    let h = 20u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
@@ -986,6 +1185,11 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
             Span::styled("Tab", ks),
             sep.clone(),
             Span::styled("extend zoxide (search, no dir hits)", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("^f", ks),
+            sep.clone(),
+            Span::styled("directory navigation mode (DirNav)", ds),
         ]),
         Line::raw(""),
         Line::from(vec![

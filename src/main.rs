@@ -13,6 +13,7 @@
 //! (Phase 3) land in later phases.
 
 mod config;
+mod dirnav;
 mod nav;
 mod preview;
 mod query;
@@ -96,7 +97,6 @@ struct PluginActionPicker {
 // ── Launch context ────────────────────────────────────────────────────────────
 
 /// Launch context: which pane this popup was opened relative to.
-#[allow(dead_code)] // focused_pane_id used in Phase 3 (pin-cwd / active ordering)
 struct LaunchContext {
     focused_pane_id: String,
 }
@@ -130,7 +130,7 @@ fn run() -> Result<(), String> {
     // isn't running, the Session provider degrades to an "unavailable"
     // stub and the popup still opens (useful for dev). The real plugin
     // always has both set (see doc/env-vars.md).
-    let _ctx = launch_context().ok();
+    let ctx = launch_context().ok();
     let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
     let config = config::Config::load();
     let group_order = config.resolved_groups();
@@ -159,6 +159,7 @@ fn run() -> Result<(), String> {
         &palette,
         &group_order,
         &config,
+        ctx.as_ref(),
     );
 
     // Restore terminal regardless of how the loop exited.
@@ -187,6 +188,7 @@ fn event_loop<B: ratatui::backend::Backend>(
     palette: &theme::Palette,
     group_order: &[String],
     cfg: &config::Config,
+    ctx: Option<&LaunchContext>,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
     let mut last_cursor_change: Option<std::time::Instant> = None;
@@ -225,15 +227,22 @@ fn event_loop<B: ratatui::backend::Backend>(
     // subprocess on every keystroke. The haystack is rebuilt once with
     // the extended zox leaves and stays extended.
     let mut extended_zox = false;
+    // Phase 17 DirNav mode: `None` = not active (browse/search as
+    // before); `Some` = the body shows the directory walker. The
+    // switcher's `Tree` + `search_view` are preserved off-screen so Esc
+    // restores them exactly (expansion intact).
+    let mut dirnav: Option<dirnav::DirNavView> = None;
 
     loop {
         tree.ensure_cursor_valid();
+        let is_dirnav = dirnav.is_some();
         // Phase 16: the `Tab extend` hint shows in search mode when the
         // match list has no Dir/Zox leaves and zoxide hasn't been extended
-        // yet this invocation.
-        let extend_hint = search_view
-            .as_ref()
-            .is_some_and(|v| !extended_zox && search::has_no_dir_matches(&haystack, &v.matches));
+        // yet this invocation. Suppressed while DirNav is active.
+        let extend_hint = !is_dirnav
+            && search_view.as_ref().is_some_and(|v| {
+                !extended_zox && search::has_no_dir_matches(&haystack, &v.matches)
+            });
         terminal
             .draw(|frame| {
                 render::draw(
@@ -260,6 +269,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     palette,
                     help_open,
                     extend_hint,
+                    dirnav.as_ref(),
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -283,7 +293,13 @@ fn event_loop<B: ratatui::backend::Backend>(
         }
         last_key = Some((key, std::time::Instant::now()));
 
-        let cursor_before = search_view.as_ref().map_or(tree.cursor, |v| v.cursor);
+        let cursor_before = if let Some(d) = dirnav.as_ref() {
+            d.cursor
+        } else if let Some(v) = search_view.as_ref() {
+            v.cursor
+        } else {
+            tree.cursor
+        };
         let is_search = search_view.is_some();
         // Shift-only (no Ctrl/Alt) is how uppercase letters arrive in most
         // terminals — accept it for printable chars (sister-port contract).
@@ -317,6 +333,14 @@ fn event_loop<B: ratatui::backend::Backend>(
                 if name_prompt.take().is_some() {
                     continue;
                 }
+                // Phase 17 DirNav: Esc exits DirNav and restores the
+                // prior switcher state (Tree + SearchView were preserved
+                // off-screen). Phase 18 adds the "active query → clear"
+                // first stage; in Phase 17 there's no query yet.
+                if is_dirnav {
+                    dirnav = None;
+                    continue;
+                }
                 // Two-stage Esc (spec §3): search → clear query
                 // (back to browse); browse → close.
                 if is_search {
@@ -326,7 +350,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Down => {
-                if let Some(p) = plugin_action_picker.as_mut() {
+                if let Some(d) = dirnav.as_mut() {
+                    d.move_down();
+                } else if let Some(p) = plugin_action_picker.as_mut() {
                     if p.cursor + 1 < p.actions.len() {
                         p.cursor += 1;
                     }
@@ -341,7 +367,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Up => {
-                if let Some(p) = plugin_action_picker.as_mut() {
+                if let Some(d) = dirnav.as_mut() {
+                    d.move_up();
+                } else if let Some(p) = plugin_action_picker.as_mut() {
                     if p.cursor > 0 {
                         p.cursor -= 1;
                     }
@@ -360,7 +388,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                if let Some(v) = search_view.as_mut() {
+                if let Some(d) = dirnav.as_mut() {
+                    d.move_down();
+                } else if let Some(v) = search_view.as_mut() {
                     v.move_down();
                 } else {
                     tree.move_down();
@@ -369,7 +399,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('p')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^p` pin (spec §8): pin the selected dir (or the
                 // selected pane's cwd) into Pinned dirs; writes
@@ -405,7 +436,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('u')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^u` unpin (spec §8 amended): on a pinned dir,
                 // remove it from `targets.toml`; stay open. Inert on
@@ -451,6 +483,18 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Right | Tab | Char(' ') if key.modifiers.is_empty() => {
+                // Phase 17 DirNav: `→` descends into the cursor dir;
+                // `Tab`/`Space` are inert here (Phase 18 wires typing).
+                if let Some(d) = dirnav.as_mut() {
+                    if key.code == Right {
+                        if let Some(child) = d.child() {
+                            if let Some(next) = dirnav::DirNavView::at(child) {
+                                *d = next; // came_from cleared, cursor 0
+                            }
+                        }
+                    }
+                    continue;
+                }
                 // Name prompt: Space types a space into the name.
                 // →/Tab are inert while the prompt is open.
                 if let Some(prompt) = name_prompt.as_mut() {
@@ -499,6 +543,22 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Left => {
+                // Phase 17 DirNav: `←` ascends to the parent, landing
+                // the cursor on the entry we came from (if any).
+                if let Some(d) = dirnav.as_mut() {
+                    if let Some(parent) = d.parent() {
+                        let came_from = d.cwd.clone();
+                        if let Some(mut next) = dirnav::DirNavView::at(parent) {
+                            next.came_from = Some(came_from.clone());
+                            if let Some(pos) = next.entries.iter().position(|e| e.path == came_from)
+                            {
+                                next.cursor = pos;
+                            }
+                            *d = next;
+                        }
+                    }
+                    continue;
+                }
                 // Inert in search (spec §8).
                 if !is_search {
                     tree.collapse_or_parent();
@@ -507,7 +567,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('t')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^t` on a dir/zox: open the template picker (spec §8.4).
                 // Inert on non-dir leaves and in search mode (no group
@@ -549,7 +610,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('d')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^d` kill (spec §8): kill the selected pane / tab /
                 // workspace. First press shows an inline footer confirm;
@@ -591,7 +653,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('r')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^r` restart command (spec §8.2): on a pane, send
                 // Ctrl+C to interrupt the foreground process. Stay open.
@@ -625,7 +688,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('c')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^c` interrupt agent (spec §8.2): on an agent, send
                 // Ctrl+C to the agent's pane. Stay open.
@@ -659,7 +723,8 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char('x')
                 if key
                     .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                    && !is_dirnav =>
             {
                 // `^x` detach agent (spec §8.2): on an agent, release
                 // the agent from its pane. Stay open.
@@ -691,7 +756,34 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // `?` opens the in-popup help dialog (spec §13).
                 help_open = !help_open;
             }
-            Enter => {
+            Char('f')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                // `^f` enters DirNav mode (Phase 17): a filesystem
+                // directory walker starting at the focused pane's cwd.
+                // Inert if a dialog/prompt is open or DirNav is already
+                // active. The in-level search (Phase 18) and commit
+                // verb (Phase 19) land later.
+                if dirnav.is_none()
+                    && name_prompt.is_none()
+                    && template_picker.is_none()
+                    && plugin_action_picker.is_none()
+                    && !help_open
+                {
+                    let cwd = focused_cwd(ctx, socket_path);
+                    // Fall back to $HOME if the pane cwd is missing or
+                    // unreadable (Phase 17 edge case).
+                    dirnav = cwd.and_then(dirnav::DirNavView::at).or_else(|| {
+                        std::env::var("HOME")
+                            .ok()
+                            .map(std::path::PathBuf::from)
+                            .and_then(dirnav::DirNavView::at)
+                    });
+                }
+            }
+            Enter if !is_dirnav => {
                 // If a plugin action picker is active, confirm: run the action
                 // (spec §8.3) via plugin.action.invoke, then close.
                 if let Some(picker) = plugin_action_picker.take() {
@@ -798,7 +890,11 @@ fn event_loop<B: ratatui::backend::Backend>(
                     tree.expand_or_step();
                 }
             }
-            Char(c) if c.is_ascii_graphic() && (key.modifiers.is_empty() || only_shift) => {
+            Char(c)
+                if c.is_ascii_graphic()
+                    && (key.modifiers.is_empty() || only_shift)
+                    && !is_dirnav =>
+            {
                 // Name prompt: append to the name.
                 if let Some(prompt) = name_prompt.as_mut() {
                     prompt.name.push(c);
@@ -824,7 +920,13 @@ fn event_loop<B: ratatui::backend::Backend>(
             }
         }
 
-        let cursor_after = search_view.as_ref().map_or(tree.cursor, |v| v.cursor);
+        let cursor_after = if let Some(d) = dirnav.as_ref() {
+            d.cursor
+        } else if let Some(v) = search_view.as_ref() {
+            v.cursor
+        } else {
+            tree.cursor
+        };
         if cursor_after != cursor_before {
             last_cursor_change = Some(std::time::Instant::now());
             flash_error = None;
@@ -886,6 +988,25 @@ fn current_cursor(
 /// Resolve a pin path for `^p` (spec §8): for a dir/zox leaf, the
 /// path; for a pane, the pane's cwd (fetched via `pane.get`); for
 /// an agent, the agent's cwd. None for non-pinnable kinds.
+/// Fetch the focused pane's cwd (Phase 17 DirNav entry): reads
+/// `pane.get` for the launch context's `focused_pane_id`. Returns None
+/// if the context is missing, the socket call fails, or the pane has
+/// no cwd — the caller falls back to `$HOME`.
+fn focused_cwd(ctx: Option<&LaunchContext>, socket_path: &str) -> Option<std::path::PathBuf> {
+    let pane_id = ctx?.focused_pane_id.as_str();
+    let r = crate::socket_client::request(
+        socket_path,
+        "pane.get",
+        serde_json::json!({"pane_id": pane_id}),
+    )
+    .ok()?;
+    let cwd = r
+        .get("pane")
+        .and_then(|p| p.get("cwd"))
+        .and_then(|v| v.as_str())?;
+    Some(std::path::PathBuf::from(cwd))
+}
+
 fn pin_path_for(node: &CursorInfo, socket_path: &str) -> Option<String> {
     match node.kind {
         nav::Kind::Dir | nav::Kind::Zox => node.id.split_once(':').map(|(_, p)| p.to_string()),

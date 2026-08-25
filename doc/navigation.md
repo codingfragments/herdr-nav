@@ -28,6 +28,32 @@ mode key.
 `Esc` is two-stage: in Search it clears the query (back to Browse); in
 Browse it closes the popup.
 
+## Directory navigation mode (DirNav) — v0.2
+
+`^f` opens a **third, toggled** mode: a filesystem directory walker
+starting at the focused pane's cwd. This is a v0.2 scope expansion —
+spec §1 lists "not a file browser" as a non-goal; DirNav is accepted as
+a deliberate departure (see [PLANNING.md](../PLANNING.md) §17 "v0.2
+phases").
+
+- **Listing:** directories + symlinks that resolve to a directory only
+  (files and links-to-files are not shown). Hidden entries (dotfiles)
+  are hidden by default.
+- **Navigation:** `↑↓` move the cursor (wraps); `←` ascends to the
+  parent directory (landing on the entry you came from); `→` descends
+  into the cursor directory. Each left/right resets the in-level search.
+- **In-level search:** typing fuzzy-filters the current level's entry
+  names and lands on the first match; `↑↓` then jump between matches
+  (find). *(Lands in Phase 18.)*
+- **Commit:** `Enter` opens a new workspace at the selected dir; `^t`
+  picks a template first; `^p` pins the cwd. *(Lands in Phase 19.)*
+- **Esc:** two-stage — active in-level search → clear; no search → exit
+  DirNav and restore the prior switcher state (Browse expansion or
+  Search query intact). *(Phase 17: single-stage — exits DirNav.)*
+
+The switcher's tree and search state are preserved off-screen while
+DirNav is active, so Esc always returns you to exactly where you were.
+
 ## The five target groups
 
 Fixed order (§4): the two live/volatile groups first, the three stable
