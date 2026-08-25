@@ -409,24 +409,27 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // Phase 19 DirNav `^p`: pin the selected directory (or
                 // cwd if the cursor is out of range) into Pinned dirs;
                 // stay in DirNav (no toast — dropped per user request).
-                if let Some(d) = dirnav.as_ref() {
-                    let path = d
-                        .cursor_entry()
-                        .map(|e| e.path.clone())
-                        .unwrap_or_else(|| d.cwd.clone());
-                    let path_str = path.display().to_string();
-                    match source::write_pin(&path_str) {
-                        Ok(slot) => {
-                            flash_error = Some((
-                                format!("dirnav:{}", path_str),
-                                format!("pinned → slot {slot}"),
-                            ));
+                // Yields to an active name prompt/template picker.
+                if name_prompt.is_none() && template_picker.is_none() {
+                    if let Some(d) = dirnav.as_ref() {
+                        let path = d
+                            .cursor_entry()
+                            .map(|e| e.path.clone())
+                            .unwrap_or_else(|| d.cwd.clone());
+                        let path_str = path.display().to_string();
+                        match source::write_pin(&path_str) {
+                            Ok(slot) => {
+                                flash_error = Some((
+                                    format!("dirnav:{}", path_str),
+                                    format!("pinned → slot {slot}"),
+                                ));
+                            }
+                            Err(e) => {
+                                flash_error = Some((format!("dirnav:{}", path_str), e));
+                            }
                         }
-                        Err(e) => {
-                            flash_error = Some((format!("dirnav:{}", path_str), e));
-                        }
+                        continue;
                     }
-                    continue;
                 }
                 // `^p` pin (spec §8): pin the selected dir (or the
                 // selected pane's cwd) into Pinned dirs; writes
@@ -518,15 +521,20 @@ fn event_loop<B: ratatui::backend::Backend>(
             Right | Tab | Char(' ') if key.modifiers.is_empty() => {
                 // Phase 17 DirNav: `→` descends into the cursor dir;
                 // `Tab`/`Space` are inert here (Phase 18 wires typing).
-                if let Some(d) = dirnav.as_mut() {
-                    if key.code == Right {
-                        if let Some(child) = d.child() {
-                            if let Some(next) = dirnav::DirNavView::at(child) {
-                                *d = next; // came_from cleared, cursor 0
+                // Yields to an active name prompt/template picker so
+                // Space types into the workspace name and →/Tab stay
+                // inert while the prompt is open.
+                if name_prompt.is_none() && template_picker.is_none() {
+                    if let Some(d) = dirnav.as_mut() {
+                        if key.code == Right {
+                            if let Some(child) = d.child() {
+                                if let Some(next) = dirnav::DirNavView::at(child) {
+                                    *d = next; // came_from cleared, cursor 0
+                                }
                             }
                         }
+                        continue;
                     }
-                    continue;
                 }
                 // Name prompt: Space types a space into the name.
                 // →/Tab are inert while the prompt is open.
@@ -840,24 +848,6 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Enter => {
-                // Phase 19 DirNav commit: Enter opens a new workspace at
-                // the selected directory (or cwd if the cursor is out of
-                // range / on a non-dir), reusing the existing template-
-                // build path + name prompt — identical to dir/zox Enter.
-                if let Some(d) = dirnav.as_ref() {
-                    let path = d
-                        .cursor_entry()
-                        .map(|e| e.path.clone())
-                        .unwrap_or_else(|| d.cwd.clone());
-                    let expanded = source::expand_path(&path.display().to_string());
-                    name_prompt = Some(NamePrompt {
-                        node_id: format!("dirnav:{}", path.display()),
-                        path: expanded.clone(),
-                        name: source::workspace_name_default(&path.display().to_string()),
-                        template: source::default_template_for(&expanded),
-                    });
-                    continue;
-                }
                 // If a plugin action picker is active, confirm: run the action
                 // (spec §8.3) via plugin.action.invoke, then close.
                 if let Some(picker) = plugin_action_picker.take() {
@@ -912,6 +902,26 @@ fn event_loop<B: ratatui::backend::Backend>(
                     }
                     continue;
                 }
+                // Phase 19 DirNav commit: Enter opens a new workspace at
+                // the selected directory (or cwd if the cursor is out of
+                // range / on a non-dir), reusing the existing template-
+                // build path + name prompt — identical to dir/zox Enter.
+                // Runs only when no dialog/prompt is already open (the
+                // confirm paths above run first when one is).
+                if let Some(d) = dirnav.as_ref() {
+                    let path = d
+                        .cursor_entry()
+                        .map(|e| e.path.clone())
+                        .unwrap_or_else(|| d.cwd.clone());
+                    let expanded = source::expand_path(&path.display().to_string());
+                    name_prompt = Some(NamePrompt {
+                        node_id: format!("dirnav:{}", path.display()),
+                        path: expanded.clone(),
+                        name: source::workspace_name_default(&path.display().to_string()),
+                        template: source::default_template_for(&expanded),
+                    });
+                    continue;
+                }
                 // The node id to invoke on: in search, the cursor
                 // leaf; in browse, the cursor row.
                 let leaf_id = search_view
@@ -964,10 +974,17 @@ fn event_loop<B: ratatui::backend::Backend>(
                     tree.expand_or_step();
                 }
             }
-            Char('.') if key.modifiers.is_empty() && is_dirnav => {
+            Char('.')
+                if key.modifiers.is_empty()
+                    && is_dirnav
+                    && name_prompt.is_none()
+                    && template_picker.is_none() =>
+            {
                 // Phase 19 DirNav: `.` toggles hidden entries (dotfiles).
                 // Refresh the listing in place; the cursor clamps and the
                 // in-level search re-runs against the new entry set.
+                // Yields to an active name prompt/template picker so `.` can
+                // be typed into the workspace name.
                 if let Some(d) = dirnav.as_mut() {
                     d.show_hidden = !d.show_hidden;
                     d.refresh_entries();
@@ -976,10 +993,14 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char(c)
                 if c.is_ascii_graphic()
                     && (key.modifiers.is_empty() || only_shift)
-                    && is_dirnav =>
+                    && is_dirnav
+                    && name_prompt.is_none()
+                    && template_picker.is_none() =>
             {
                 // Phase 18 DirNav: typing fuzzy-filters the current
                 // level's entry names and lands on the first match.
+                // Yields to an active name prompt/template picker so the
+                // keys go into the workspace name instead.
                 if let Some(d) = dirnav.as_mut() {
                     d.query.push(c);
                     d.requery();
@@ -988,12 +1009,14 @@ fn event_loop<B: ratatui::backend::Backend>(
             Char(c)
                 if c.is_ascii_graphic()
                     && (key.modifiers.is_empty() || only_shift)
-                    && !is_dirnav =>
+                    && (!is_dirnav || name_prompt.is_some()) =>
             {
-                // Name prompt: append to the name.
+                // Name prompt: append to the name (works in any mode —
+                // including DirNav, where the DirNav-search arm above
+                // yields to an active prompt).
                 if let Some(prompt) = name_prompt.as_mut() {
                     prompt.name.push(c);
-                } else {
+                } else if !is_dirnav {
                     // Printable char → enter search (or append), re-rank,
                     // cursor → 0 (spec §3).
                     match search_view.as_mut() {
