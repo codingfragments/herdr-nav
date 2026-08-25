@@ -815,6 +815,27 @@ fn build_zoxide_tree(limit: usize) -> Node {
     }
 }
 
+/// Rebuild the zoxide group node with a (possibly larger) limit
+/// (Phase 16 "extend zoxide"). Used by the `Tab` keybind in search
+/// mode to surface deeper frecency dirs when a query finds no
+/// directory results. Public so the event loop can swap the zox root
+/// node in place and rebuild the haystack without re-running the other
+/// four providers.
+pub fn zoxide_group_with_limit(limit: usize) -> Node {
+    build_zoxide_tree(limit)
+}
+
+/// Whether the `zoxide` binary is available on PATH (Phase 16): used to
+/// flash a clear error when the `Tab` extend keybind is pressed but
+/// zoxide isn't installed, rather than silently showing no new dirs.
+pub fn zoxide_available() -> bool {
+    std::process::Command::new("zoxide")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Run `zoxide query --list --score` → `Vec<(score, path)>`.
 /// Existing paths only, sorted by frecency (zoxide's own order).
 fn zoxide_query() -> Vec<(f64, String)> {

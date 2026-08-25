@@ -56,6 +56,12 @@ open_key = "ctrl-k"
 # (frecency) is preserved.
 zoxide_limit = 50
 
+# zoxide extend (Phase 16): when a search finds no directory results,
+# a `Tab extend` hint appears. Pressing `Tab` re-runs zoxide against
+# this larger limit so deeper frecency dirs surface. Sticky for the
+# invocation (one subprocess). Default 1000.
+zoxide_extend_limit = 1000
+
 # ── Preview pane (spec §2/§7) ────────────────────────────────────────────────
 #
 # The right-hand preview pane shows "what is the thing under the
