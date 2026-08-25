@@ -23,6 +23,7 @@ preview, browse expansion, search scoring, and provider bias (spec §13).
 | `groups` | `["session","agents","pinned","zoxide","plugins"]` | Root groups in display order. Any subset; order is the display order. |
 | `open_key` | `"ctrl-k"` | Informational — the real binding lives in your `config.toml` as a `plugin_action`. |
 | `zoxide_limit` | `50` | How many top zoxide entries to list (existing paths only). |
+| `zoxide_extend_limit` | `1000` | Cap for the `Tab` extend-zoxide keybind in Search mode (deeper frecency dirs when a query has no directory hits). |
 
 ## `[preview]`
 

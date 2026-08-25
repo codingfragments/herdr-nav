@@ -858,6 +858,170 @@ filter tokens behaves exactly as Phase 4.
 - **More phases?** The advanced query-language phase (grilling in
   progress) is the one addition already anticipated.
 
+### v0.2 phases (16–19) — Extend zoxide + Directory navigation mode
+
+Two user-requested capabilities ship in v0.2, as four vertical,
+end-to-end testable slices. One `phase/` branch/PR per phase, in order.
+
+**Feature A — Extend zoxide:** when a search finds no directory
+results, offer a keybind that re-runs zoxide against a much larger
+limit (default 1000, configurable) so deeper frecency dirs surface.
+
+**Feature B — Directory navigation mode (DirNav):** a toggled third
+mode — a filesystem directory walker starting at the focused pane's
+cwd, with left/right to go up/down the tree and an in-level fuzzy
+search whose first match is auto-selected.
+
+> **Spec departure (§1 non-goal):** DirNav is path-by-path directory
+> navigation, which §1 lists as a non-goal ("not a file browser").
+> Accepted as a v0.2 scope expansion. It also breaks the "mode is
+> derived from query" invariant: DirNav is a **toggled** mode, not a
+> derived one. Both departures are documented in `doc/navigation.md`
+> and the `?` help dialog (Phase 19).
+
+**Locked decisions (grilled 2026-08-22):**
+
+| # | Decision | Choice |
+| --- | --- | --- |
+| A1 | Extend hint trigger | Zero `Dir`/`Zox` matches in the result list |
+| A2 | Extended limit | Configurable `zoxide_extend_limit`, default 1000 |
+| A3 | Stickiness | Sticky for the invocation (one subprocess, cached) |
+| A4 | Key | `Tab` (inert in Search today) |
+| B1 | Scope | Accepted v0.2 expansion; document the §1 non-goal departure |
+| B2 | Enter | Open new workspace at the selected dir (cwd if on `.`/file/link-to-file), via the existing template-build path + name prompt; `^t` opens the template picker first |
+| B3 | up/down | Find-when-searching: ↑↓ cycle matches while a search is active, else next entry |
+| B4 | Listing | Directories + symlinks resolving to a dir; files & links-to-files are not listed |
+| B5 | Entry key | `^f` |
+| B6 | Esc | Two-stage: active search → clear; no search → exit DirNav to prior mode |
+
+**Standing assumptions:** hidden entries hidden by default (`.`
+toggles); DirNav preserves the switcher's `Tree`/`SearchView` off-screen
+so Esc restores them exactly (expansion intact); no new socket methods
+(cwd via existing `pane.get`, workspace via existing `workspace.create` +
+`build_workspace_from_template`, pin via existing `write_pin`); preview
+pane kept, selected dir reuses the existing dir preview.
+
+#### Phase 16 — "Extend zoxide" keybind (Feature A)
+**Aspect:** surface directories beyond the top-`zoxide_limit` cap when a
+search finds no directory results.
+- **Config:** add `zoxide_extend_limit` (default 1000) to `switcher.toml`
+  + `config.example.toml`; thread through `Config` plumbing.
+  `ZoxideProvider::with_limit` already exists.
+- **Condition:** in Search mode, `view.matches` contains no `Dir`/`Zox`
+  leaf. While true and not-yet-extended, the footer shows a
+  `Tab extend` hint (peach key, subtext0 label) appended to the
+  search-mode footer in `draw_footer`.
+- **Action on `Tab`:** run `zoxide query --list --score` at
+  `zoxide_extend_limit` once, rebuild **only the zox leaves** in the
+  haystack (other four groups' leaves unchanged), set an
+  `extended_zox: bool` flag, re-run `search()`. Hide the hint once
+  extended. Editing the query keeps the extended set (no re-subprocess).
+- **Edge cases:** zoxide binary missing → `flash_error`, stay open, hint
+  stays; still no dir results after extending → keep the `no targets
+  match` line, hint hidden; `Tab` outside the condition is inert.
+- **Tests:** condition predicate (dir present/absent), rebuild replaces
+  only zox leaves, sticky flag prevents re-subprocess, hint visibility,
+  missing-zoxide error path. Perf smoke: extended rebuild + re-rank under
+  the §12 budget.
+- **Exit criteria:** a query with no dir results shows `Tab extend`;
+  pressing it surfaces deeper zoxide dirs and re-ranks; later edits
+  keep them; the hint is gone; zoxide missing flashes and stays open.
+
+#### Phase 17 — DirNav mode: entry + single-level navigation (Feature B, part 1)
+**Aspect:** a toggled third mode — a filesystem directory walker starting
+at the focused pane's cwd.
+- **State:** `DirNavView { cwd, entries (dirs + dir-symlinks, sorted
+  dirs-first then name), cursor, scroll, came_from: Option<PathBuf>,
+  query, matches }`, held as `Option<DirNavView>` alongside
+  `search_view`. The switcher's `Tree` (+ `SearchView`) are kept for
+  Esc restore.
+- **Entry (`^f`):** from Browse or Search → fetch focused pane cwd via
+  `pane.get` (reuse `pin_path_for`'s pane-cwd path); if
+  unreadable/non-existent, fall back to `$HOME`; build entries; switch
+  body to DirNav.
+- **Navigation:** `↑↓` move cursor (wraps); `←` → `cwd = parent`,
+  refresh, cursor on `came_from` if present else 0; `→` → if cursor
+  entry is a dir (or dir-symlink), `cwd = resolved entry`, refresh,
+  cursor 0, **clear query**; inert on non-dir entries. Each left/right
+  resets `came_from`/query.
+- **Render:** body = single-column listing (dir glyph vs link glyph,
+  label = name, meta = `<dir>`/`→ target`); keep search bar (in-level
+  query) + DirNav footer. Preview reuses the dir preview for the
+  selected entry.
+- **Esc (two-stage):** active in-level query → clear it; no query →
+  exit DirNav, restore prior switcher state.
+- **Tests:** entry builds listing from cwd; `←` lands on `came_from`;
+  `→` descends only into dirs/dir-symlinks; unreadable cwd falls back
+  to `$HOME`; Esc restores prior `Tree` expansion.
+- **Exit criteria:** `^f` enters DirNav at the pane cwd; walk up/down
+  the tree; Esc returns to the switcher unchanged.
+
+#### Phase 18 — DirNav: in-level fuzzy search + find navigation (Feature B, part 2)
+**Aspect:** fuzzy search within the current level; up/down jumps between
+matches.
+- **Typing (printable):** fuzzy-filter current-level entry **names** via
+  `FuzzyEngine` (no provider bias — pure name match); cursor → **first
+  match**; list narrows to matches.
+- **`↑↓`:** with an active search, move to next/prev **match** (find);
+  with no search, move to next/prev entry in the full level.
+- **`←/→`:** change cwd **and clear the query** ("reseat the search")
+  — full level re-shown on arrival.
+- **Backspace:** delete last query char; empty → clear query (stay in
+  DirNav, full level).
+- **Status strip:** `dirnav · <basename(cwd)>` left, `matches/total`
+  right (mirrors the search strip).
+- **Tests:** typing narrows + cursor on first match; ↑↓ cycle matches
+  while searching, full level when not; left/right clears query;
+  backspace clears.
+- **Exit criteria:** typing narrows and lands on first match; ↑↓ cycle
+  finds; left/right reset; backspace clears.
+
+#### Phase 19 — DirNav: commit verb + hardening (Feature B, part 3)
+**Aspect:** the action on Enter/`^t` + edge cases + docs.
+- **Enter:** open a new workspace at the **selected dir** (or `cwd` if
+  cursor on `.`/a non-dir) via `build_workspace_from_template` + the
+  existing `NamePrompt` (default template = auto-resolved), then close
+  + focus first pane. Identical build path to dir/zox Enter.
+- **`^t`:** open the `TemplatePicker` (preselect by `match` glob against
+  the path), then the `NamePrompt`, then build — exactly the dir/zox
+  `^t` flow. Inert if no templates configured.
+- **`^p`:** pin the cwd (or selected dir) via `write_pin`; toast
+  `pinned → slot N`; stay in DirNav.
+- **Edge cases:** hidden entries hidden by default, `.` toggles
+  `show_hidden`; permission-denied dir → skip + red meta row; symlinks
+  → link glyph, `→` follows only if it resolves to a dir; empty dir →
+  dim populate-hint row; non-existent/unreadable cwd → `$HOME` fallback
+  (Phase 17); very large dirs → scroll, soft cap with `…truncated` row.
+- **Docs:** `doc/navigation.md` (DirNav section + §1 non-goal departure
+  note), `doc/keybinding.md` (`^f`, `Tab extend`, DirNav keys), `?` help
+  dialog (DirNav block + `Tab extend`), `config-reference.md`
+  (`zoxide_extend_limit`), `CHANGELOG.md` `[Unreleased]`.
+- **Tests:** Enter opens at selected dir vs cwd; `^t` preselects by glob;
+  `^p` pins cwd; hidden-toggle; perm-denied skip; symlink-resolves-to-dir
+  follow; empty-dir hint.
+- **Exit criteria:** Enter/`^t` open workspaces consistently with
+  dir/zox; edge cases render without crashing; docs + help match the
+  binary.
+
+#### Why this v0.2 phasing
+- **Vertical slices:** Phase 16 ships a complete, testable Feature A on
+  its own. Phases 17→18→19 each deliver one user-visible slice of Feature
+  B end-to-end: after 17 you can walk the filesystem; after 18 you can
+  search within a level; after 19 you can commit and it's hardened.
+- **One aspect each:** extend-zoxide (16), DirNav spine (17), DirNav
+  search (18), DirNav commit+hardening (19). 18 and 19 are the split
+  candidates if 19 grows (commit vs edge-cases).
+- **Ordering:** 16 is independent of 17–19 and lands first. 17→18→19 are
+  sequential (each extends the prior `DirNavView`).
+- **Risk:** the §1 non-goal departure is the only architectural tension;
+  it's a documentation/positioning change, not a code-structure risk,
+  since DirNav is an isolated `Option<DirNavView>` alongside the existing
+  modes.
+- **Branches:** `phase/16-extend-zoxide`, `phase/17-dirnav-mode`,
+  `phase/18-dirnav-search`, `phase/19-dirnav-commit`. Each off `main`,
+  one PR each, squash-merged, in order. Release PR `release/0.2.0`
+  after 19 with version bump + CHANGELOG, then tag `v0.2.0`.
+
 ## 18. Ideas beyond v0.1
 
 - Merge Pinned + zoxide into one "Directories" group (open question §15).

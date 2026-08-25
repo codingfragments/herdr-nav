@@ -7,6 +7,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Phase 16 — "Extend zoxide" keybind (Feature A)
+
+- **`Tab` in Search mode extends the zoxide list** when the result list
+    contains no directory entries (`Dir`/`Zox`). A `⇥ extend zoxide`
+    footer hint appears only in that case; pressing `Tab` re-runs
+    `zoxide query --list --score` against `zoxide_extend_limit`
+    (new config, default 1000), rebuilds the zoxide leaves in the
+    haystack, and re-ranks. The extension is **sticky** for the
+    invocation — one subprocess, not one per keystroke — so later
+    query edits keep the deeper frecency dirs. The hint hides once
+    extended. If zoxide isn't installed, the row flashes an error and
+    the popup stays open.
+- **New config:** `zoxide_extend_limit` (default 1000) in `switcher.toml`.
+- New `search::has_no_dir_matches` helper (the hint/trigger predicate);
+    new `source::zoxide_group_with_limit` and `source::zoxide_available`
+    helpers. `Tab` is no longer inert in Search mode.
+- `?` help dialog, `doc/keybinding.md`, `doc/config-reference.md`,
+    `config.example.toml` updated.
+- 4 new unit tests (extend condition: only-panes, dir-present, empty
+    results; config default + example-file assertion). 115 tests total.
+
 ### Fixed
 
 - **`Enter` on a dir/zox no longer creates a stray git worktree child of

@@ -221,6 +221,19 @@ pub struct SearchView {
     pub cursor: usize,
 }
 
+/// Phase 16 "extend zoxide" condition: true when the search result
+/// list contains no directory entries (`Dir` or `Zox`). This is the
+/// gate for showing the `Tab extend` hint and for the `Tab` keybind
+/// itself — extending zoxide can only ever add directory leaves, so
+/// it's only useful when none are present.
+pub fn has_no_dir_matches(haystack: &[Leaf], matches: &[ScoredMatch]) -> bool {
+    matches.iter().all(|m| {
+        haystack
+            .get(m.index)
+            .is_some_and(|l| l.kind != Kind::Dir && l.kind != Kind::Zox)
+    })
+}
+
 /// Run the fuzzy search against the haystack, returning ranked matches.
 /// `bias_cfg` overrides the spec §6.3 defaults (Phase 10).
 ///
@@ -420,6 +433,41 @@ mod tests {
         v.cursor = 5; // out of range
         v.requery(&h, &crate::config::BiasCfg::default());
         assert_eq!(v.cursor, 0);
+    }
+
+    #[test]
+    fn has_no_dir_matches_true_when_only_panes() {
+        let h = vec![leaf("a", "nvim", Kind::Pane)];
+        let m = search(&h, "nvim", &crate::config::BiasCfg::default());
+        assert!(has_no_dir_matches(&h, &m));
+    }
+
+    #[test]
+    fn has_no_dir_matches_false_when_a_dir_matches() {
+        let h = vec![
+            leaf("a", "nvim", Kind::Pane),
+            Leaf {
+                path: vec![0],
+                kind: Kind::Zox,
+                group: Group::Zoxide,
+                id: "zox:/x".into(),
+                label: "nvim".into(),
+                meta: String::new(),
+                crumbs: String::new(),
+                crumb_prefix_len: 0,
+                match_text: "nvim".into(),
+            },
+        ];
+        let m = search(&h, "nvim", &crate::config::BiasCfg::default());
+        assert!(!has_no_dir_matches(&h, &m));
+    }
+
+    #[test]
+    fn has_no_dir_matches_true_on_empty_results() {
+        let h = vec![leaf("a", "nvim", Kind::Pane)];
+        let m = search(&h, "zzz", &crate::config::BiasCfg::default());
+        assert!(m.is_empty());
+        assert!(has_no_dir_matches(&h, &m));
     }
 
     /// Performance budget (spec §12): keystroke → re-ranked < 8ms

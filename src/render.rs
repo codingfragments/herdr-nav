@@ -101,6 +101,7 @@ pub fn draw(
     kill_confirm: Option<(&str, &str)>,
     palette: &Palette,
     help_open: bool,
+    extend_hint: bool,
 ) {
     let area = frame.area();
     let c = Colors::from(palette);
@@ -158,6 +159,7 @@ pub fn draw(
             name_prompt,
             templates_exist,
             kill_confirm,
+            extend_hint,
             &c,
         );
     }
@@ -621,6 +623,7 @@ fn draw_footer(
     name_prompt: Option<(&str, &str)>,
     templates_exist: bool,
     kill_confirm: Option<(&str, &str)>,
+    extend_hint: bool,
     c: &Colors,
 ) {
     // Kill confirm active: show the inline confirm prompt (spec §8).
@@ -740,6 +743,20 @@ fn draw_footer(
             }
             _ => {}
         }
+    }
+    // `Tab extend` hint (Phase 16): shown only in search mode when the
+    // match list has no Dir/Zox leaves and zoxide has not yet been
+    // extended this invocation. Pressing `Tab` re-runs zoxide against a
+    // much larger limit so deeper frecency dirs surface.
+    if extend_hint && search.is_some() && name_prompt.is_none() {
+        hints.push(Span::styled(
+            "   ⇥ ",
+            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
+        ));
+        hints.push(Span::styled(
+            "extend zoxide",
+            Style::default().fg(c.subtext0),
+        ));
     }
     // `?` help hint (spec §13): always shown, both modes.
     hints.push(Span::styled(
@@ -918,7 +935,7 @@ fn draw_template_picker(
 /// full keymap + query-filter syntax summary. Esc closes.
 fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
     let w = 56u16;
-    let h = 18u16;
+    let h = 19u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
@@ -964,6 +981,11 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
             Span::styled("Esc", ks),
             sep.clone(),
             Span::styled("close / clear query (two-stage)", ds),
+        ]),
+        Line::from(vec![
+            Span::styled("Tab", ks),
+            sep.clone(),
+            Span::styled("extend zoxide (search, no dir hits)", ds),
         ]),
         Line::raw(""),
         Line::from(vec![

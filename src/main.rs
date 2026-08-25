@@ -219,9 +219,21 @@ fn event_loop<B: ratatui::backend::Backend>(
     let templates_exist = !source::read_templates().is_empty();
     // Search view: None = browse mode, Some = search mode (query non-empty).
     let mut search_view: Option<search::SearchView> = None;
+    // Phase 16 "extend zoxide": once the user presses `Tab` in search
+    // mode to extend the zoxide list beyond `zoxide_limit`, this flag
+    // sticks for the rest of the invocation so we don't re-run the
+    // subprocess on every keystroke. The haystack is rebuilt once with
+    // the extended zox leaves and stays extended.
+    let mut extended_zox = false;
 
     loop {
         tree.ensure_cursor_valid();
+        // Phase 16: the `Tab extend` hint shows in search mode when the
+        // match list has no Dir/Zox leaves and zoxide hasn't been extended
+        // yet this invocation.
+        let extend_hint = search_view
+            .as_ref()
+            .is_some_and(|v| !extended_zox && search::has_no_dir_matches(&haystack, &v.matches));
         terminal
             .draw(|frame| {
                 render::draw(
@@ -247,6 +259,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         .map(|(id, label)| (id.as_str(), label.as_str())),
                     palette,
                     help_open,
+                    extend_hint,
                 )
             })
             .map_err(|e| format!("draw: {e}"))?;
@@ -448,11 +461,37 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
                 // In search mode, →/Tab are inert; Space types a
                 // space (spec §8). In browse, expand/step.
+                // Phase 16: `Tab` in search mode extends the zoxide list
+                // when the match list has no Dir/Zox leaves and zoxide
+                // hasn't been extended yet this invocation.
                 if is_search {
                     if let Some(v) = search_view.as_mut() {
                         if key.code == Char(' ') {
                             v.query.push(' ');
                             v.requery(&haystack, &cfg.bias);
+                        } else if key.code == Tab && extend_hint {
+                            if !source::zoxide_available() {
+                                flash_error = Some((
+                                    "zoxide".to_string(),
+                                    "zoxide not installed".to_string(),
+                                ));
+                            } else {
+                                // Rebuild only the zoxide group with the
+                                // extended limit, then rebuild the haystack
+                                // from the updated tree. Sticky: set the flag
+                                // so we don't re-run the subprocess.
+                                let zox_group = source::zoxide_group_with_limit(
+                                    cfg.zoxide_extend_limit as usize,
+                                );
+                                if let Some(slot) =
+                                    tree.root.iter_mut().find(|n| n.id == "group:zoxide")
+                                {
+                                    *slot = zox_group;
+                                }
+                                haystack = search::build_haystack(tree);
+                                v.requery(&haystack, &cfg.bias);
+                                extended_zox = true;
+                            }
                         }
                     }
                 } else {

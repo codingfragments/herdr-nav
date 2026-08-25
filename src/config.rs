@@ -52,6 +52,12 @@ pub const DEFAULT_SCORING: ScoringCfg = ScoringCfg {
 
 pub const DEFAULT_ZOXIDE_LIMIT: u32 = 50;
 
+/// Default cap for the "extend zoxide" keybind (Phase 16): the larger
+/// limit used when a search finds no directory results and the user
+/// presses `Tab` to surface deeper frecency dirs. Configurable via
+/// `zoxide_extend_limit`.
+pub const DEFAULT_ZOXIDE_EXTEND_LIMIT: u32 = 1000;
+
 // ── Config structs ───────────────────────────────────────────────────────────
 
 /// Top-level config. All fields optional — every key falls back to a
@@ -68,6 +74,9 @@ pub struct Config {
     pub open_key: String,
     #[serde(default = "default_zoxide_limit")]
     pub zoxide_limit: u32,
+    /// Cap for the "extend zoxide" keybind (Phase 16). Default 1000.
+    #[serde(default = "default_zoxide_extend_limit")]
+    pub zoxide_extend_limit: u32,
     #[serde(default = "default_preview")]
     pub preview: PreviewCfg,
     #[serde(default = "default_expand")]
@@ -80,6 +89,9 @@ pub struct Config {
 
 fn default_zoxide_limit() -> u32 {
     DEFAULT_ZOXIDE_LIMIT
+}
+fn default_zoxide_extend_limit() -> u32 {
+    DEFAULT_ZOXIDE_EXTEND_LIMIT
 }
 fn default_preview() -> PreviewCfg {
     DEFAULT_PREVIEW
@@ -104,6 +116,7 @@ impl Default for Config {
             groups: Vec::new(),
             open_key: String::new(),
             zoxide_limit: DEFAULT_ZOXIDE_LIMIT,
+            zoxide_extend_limit: DEFAULT_ZOXIDE_EXTEND_LIMIT,
             preview: DEFAULT_PREVIEW,
             expand: default_expand(),
             scoring: DEFAULT_SCORING,
@@ -297,6 +310,7 @@ mod tests {
         assert_eq!(DEFAULT_BIAS.pane, 4.0);
         assert_eq!(DEFAULT_BIAS.plugin, -2.0);
         assert_eq!(DEFAULT_ZOXIDE_LIMIT, 50);
+        assert_eq!(DEFAULT_ZOXIDE_EXTEND_LIMIT, 1000);
         assert_eq!(DEFAULT_PREVIEW.width_pct, 56);
         assert_eq!(DEFAULT_SCORING.consecutive, 8.0);
     }
@@ -318,6 +332,7 @@ plugin = -5
         let c: Config = toml::from_str(toml).unwrap();
         assert_eq!(c.groups, vec!["session", "agents"]);
         assert_eq!(c.zoxide_limit, 10);
+        assert_eq!(c.zoxide_extend_limit, DEFAULT_ZOXIDE_EXTEND_LIMIT); // unspecified
         assert!(!c.preview.enabled);
         assert_eq!(c.preview.width_pct, 40);
         assert_eq!(c.scoring.consecutive, 10.0);
@@ -332,6 +347,7 @@ plugin = -5
         let c: Config = toml::from_str("").unwrap();
         assert!(c.groups.is_empty()); // resolved_groups() fills defaults
         assert_eq!(c.zoxide_limit, DEFAULT_ZOXIDE_LIMIT);
+        assert_eq!(c.zoxide_extend_limit, DEFAULT_ZOXIDE_EXTEND_LIMIT);
         assert_eq!(c.bias.pane, 4.0);
     }
 
@@ -389,6 +405,7 @@ width_pct = 70
         );
         assert_eq!(c.open_key, "ctrl-k");
         assert_eq!(c.zoxide_limit, DEFAULT_ZOXIDE_LIMIT);
+        assert_eq!(c.zoxide_extend_limit, DEFAULT_ZOXIDE_EXTEND_LIMIT);
 
         // [preview]
         assert_eq!(c.preview.enabled, DEFAULT_PREVIEW.enabled);
