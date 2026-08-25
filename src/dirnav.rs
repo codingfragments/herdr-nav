@@ -65,6 +65,9 @@ pub struct DirNavView {
     /// Phase 18 ranked matches (indices into `entries`). Empty when
     /// `query` is empty.
     pub matches: Vec<DirNavMatch>,
+    /// Phase 19: whether hidden entries (dotfiles) are shown. Toggled
+    /// by `.`. Default false.
+    pub show_hidden: bool,
 }
 
 impl DirNavView {
@@ -72,7 +75,7 @@ impl DirNavView {
     /// (sorted by name). Returns `None` if `cwd` can't be read — the
     /// caller falls back to `$HOME` (Phase 17).
     pub fn at(cwd: PathBuf) -> Option<Self> {
-        let entries = read_dir_entries(&cwd)?;
+        let entries = read_dir_entries(&cwd, false)?;
         Some(Self {
             cwd,
             entries,
@@ -81,6 +84,7 @@ impl DirNavView {
             came_from: None,
             query: String::new(),
             matches: Vec::new(),
+            show_hidden: false,
         })
     }
 
@@ -145,6 +149,21 @@ impl DirNavView {
         self.cursor = 0;
     }
 
+    /// Phase 19: re-read the current cwd with the current `show_hidden`
+    /// setting, preserving the cursor (clamped) and `came_from`. Used
+    /// after the `.` toggle so the listing refreshes in place.
+    pub fn refresh_entries(&mut self) {
+        if let Some(entries) = read_dir_entries(&self.cwd, self.show_hidden) {
+            self.entries = entries;
+            if self.cursor >= self.entries.len() {
+                self.cursor = self.entries.len().saturating_sub(1);
+            }
+            // Re-run the in-level search against the new entries so the
+            // filtered view stays consistent.
+            self.requery();
+        }
+    }
+
     /// `←`: the parent directory to ascend to. `None` at the filesystem
     /// root (no parent) — `←` is inert there. The caller rebuilds the
     /// view at the returned path with `came_from` set to the old cwd.
@@ -182,13 +201,13 @@ impl DirNavView {
 /// resolve to a directory only (Phase 17 decision B4), sorted by name.
 /// Hidden entries (dotfiles) are skipped — Phase 19 adds a `.` toggle.
 /// Returns `None` if `dir` can't be read.
-pub fn read_dir_entries(dir: &Path) -> Option<Vec<DirEntry>> {
+pub fn read_dir_entries(dir: &Path, show_hidden: bool) -> Option<Vec<DirEntry>> {
     let read = std::fs::read_dir(dir).ok()?;
     let mut entries: Vec<DirEntry> = read
         .filter_map(|e| {
             let e = e.ok()?;
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
+            if !show_hidden && name.starts_with('.') {
                 return None; // hidden — Phase 19 toggle
             }
             let path = e.path();
@@ -320,7 +339,7 @@ mod tests {
         // a symlink to a file (should be excluded)
         std::os::unix::fs::symlink(tmp.join("file.txt"), tmp.join("linkfile")).ok();
 
-        let entries = read_dir_entries(&tmp).expect("read dir");
+        let entries = read_dir_entries(&tmp, false).expect("read dir");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"subdir"));
         assert!(names.contains(&"link"));
@@ -340,7 +359,7 @@ mod tests {
         mkdir(&tmp);
         mkdir(&tmp.join(".hidden"));
         mkdir(&tmp.join("visible"));
-        let entries = read_dir_entries(&tmp).expect("read dir");
+        let entries = read_dir_entries(&tmp, false).expect("read dir");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"visible"));
         assert!(!names.contains(&".hidden"));
@@ -355,7 +374,7 @@ mod tests {
         mkdir(&tmp.join("zeta"));
         mkdir(&tmp.join("alpha"));
         mkdir(&tmp.join("mid"));
-        let entries = read_dir_entries(&tmp).expect("read dir");
+        let entries = read_dir_entries(&tmp, false).expect("read dir");
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(names, vec!["alpha", "mid", "zeta"]);
         std::fs::remove_dir_all(&tmp).ok();
@@ -364,7 +383,7 @@ mod tests {
     #[test]
     fn read_dir_entries_none_on_unreadable() {
         let p = Path::new("/this/does/not/exist/definitely/not");
-        assert!(read_dir_entries(p).is_none());
+        assert!(read_dir_entries(p, false).is_none());
     }
 
     #[test]
@@ -395,6 +414,7 @@ mod tests {
             came_from: None,
             query: String::new(),
             matches: Vec::new(),
+            show_hidden: false,
         };
         assert_eq!(v.parent(), Some(PathBuf::from("/a/b")));
     }
@@ -409,6 +429,7 @@ mod tests {
             came_from: None,
             query: String::new(),
             matches: Vec::new(),
+            show_hidden: false,
         };
         assert_eq!(v.parent(), None);
     }
@@ -435,6 +456,7 @@ mod tests {
             came_from: None,
             query: String::new(),
             matches: Vec::new(),
+            show_hidden: false,
         };
         assert_eq!(v.child(), None);
     }
@@ -577,5 +599,41 @@ mod tests {
     #[test]
     fn shorten_path_zero_max_returns_full() {
         assert_eq!(shorten_path("/a/b/c", 0), "/a/b/c");
+    }
+
+    // ── Phase 19: hidden toggle + refresh ────────────────────────────────────
+
+    #[test]
+    fn read_dir_entries_show_hidden_includes_dotfiles() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-sh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join(".hidden"));
+        mkdir(&tmp.join("visible"));
+        let shown = read_dir_entries(&tmp, false).expect("read");
+        assert!(!shown.iter().any(|e| e.name == ".hidden"));
+        let all = read_dir_entries(&tmp, true).expect("read");
+        assert!(all.iter().any(|e| e.name == ".hidden"));
+        assert!(all.iter().any(|e| e.name == "visible"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn refresh_entries_picks_up_hidden_toggle() {
+        let tmp = std::env::temp_dir().join(format!("dirnav-ref-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        mkdir(&tmp);
+        mkdir(&tmp.join(".secret"));
+        mkdir(&tmp.join("open"));
+        let mut v = DirNavView::at(tmp.clone()).unwrap();
+        assert_eq!(v.entries.len(), 1); // only "open"
+        v.show_hidden = true;
+        v.refresh_entries();
+        assert_eq!(v.entries.len(), 2); // ".secret" + "open"
+                                        // cursor clamped to range
+        v.cursor = 99;
+        v.refresh_entries();
+        assert!(v.cursor < v.entries.len());
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
