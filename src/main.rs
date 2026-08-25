@@ -355,9 +355,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Down => {
-                if let Some(d) = dirnav.as_mut() {
-                    d.move_down();
-                } else if let Some(p) = plugin_action_picker.as_mut() {
+                if let Some(p) = plugin_action_picker.as_mut() {
                     if p.cursor + 1 < p.actions.len() {
                         p.cursor += 1;
                     }
@@ -365,6 +363,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                     if p.cursor + 1 < p.templates.len() {
                         p.cursor += 1;
                     }
+                } else if let Some(d) = dirnav.as_mut() {
+                    d.move_down();
                 } else if let Some(v) = search_view.as_mut() {
                     v.move_down();
                 } else {
@@ -372,9 +372,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
             }
             Up => {
-                if let Some(d) = dirnav.as_mut() {
-                    d.move_up();
-                } else if let Some(p) = plugin_action_picker.as_mut() {
+                if let Some(p) = plugin_action_picker.as_mut() {
                     if p.cursor > 0 {
                         p.cursor -= 1;
                     }
@@ -382,6 +380,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                     if p.cursor > 0 {
                         p.cursor -= 1;
                     }
+                } else if let Some(d) = dirnav.as_mut() {
+                    d.move_up();
                 } else if let Some(v) = search_view.as_mut() {
                     v.move_up();
                 } else {
