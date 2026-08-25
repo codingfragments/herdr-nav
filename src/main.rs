@@ -423,6 +423,19 @@ fn event_loop<B: ratatui::backend::Backend>(
                                     format!("dirnav:{}", path_str),
                                     format!("pinned → slot {slot}"),
                                 ));
+                                // Rebuild the switcher's tree + haystack
+                                // so the Pinned group reflects the new pin
+                                // when the user returns from DirNav. DirNav's
+                                // own listing (the filesystem) is unchanged.
+                                refresh(
+                                    tree,
+                                    &mut search_view,
+                                    &mut haystack,
+                                    socket_path,
+                                    group_order,
+                                    &cfg.bias,
+                                    cfg,
+                                );
                             }
                             Err(e) => {
                                 flash_error = Some((format!("dirnav:{}", path_str), e));
