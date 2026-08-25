@@ -135,7 +135,7 @@ pub fn draw(
         ])
         .split(area);
 
-    draw_search_bar(frame, bands[0], search, name_prompt, &c);
+    draw_search_bar(frame, bands[0], search, dirnav, name_prompt, &c);
     draw_rule(frame, bands[1], &c);
     draw_body(
         frame,
@@ -212,10 +212,23 @@ fn draw_rule(frame: &mut Frame, area: Rect, c: &Colors) {
     );
 }
 
+/// Split a display path into `(prefix, direct_parent)` for the
+/// DirNav search bar: the last segment (direct parent) is rendered
+/// brighter than the prefix. `prefix` includes the trailing slash so
+/// it concatenates cleanly. For a bare segment (no slash) the prefix is
+/// empty.
+fn split_direct_parent(path: &str) -> (String, String) {
+    match path.rfind('/') {
+        Some(i) => (path[..=i].to_string(), path[i + 1..].to_string()),
+        None => (String::new(), path.to_string()),
+    }
+}
+
 fn draw_search_bar(
     frame: &mut Frame,
     area: Rect,
     search: Option<&SearchView>,
+    dirnav: Option<&DirNavView>,
     _name_prompt: Option<(&str, &str)>,
     c: &Colors,
 ) {
@@ -223,6 +236,42 @@ fn draw_search_bar(
         "❯ ",
         Style::default().fg(c.mauve).add_modifier(Modifier::BOLD),
     );
+    // Phase 18 DirNav: the search bar shows the cwd as a breadcrumb
+    // path (direct parent kept full, earlier segments shortened) plus
+    // the in-level query. The path is the "where am I" context; the
+    // query is the filter.
+    if let Some(d) = dirnav {
+        let width = area.width as usize;
+        let query_len = d.query.chars().count();
+        // Budget: "❯ " (2) + path + ("  " gap + query + " ▮" caret) when
+        // searching, else path + " ▮".
+        let path_budget = if d.query.is_empty() {
+            width.saturating_sub(3)
+        } else {
+            width.saturating_sub(2 + 2 + query_len + 1)
+        };
+        let path_disp = crate::dirnav::display_path(&d.cwd, path_budget);
+        // Split the display path into the direct parent (last segment,
+        // brighter) and the prefix (dimmed).
+        let (prefix, parent) = split_direct_parent(&path_disp);
+        let mut spans = vec![
+            prompt,
+            Span::styled(prefix, Style::default().fg(c.surface2)),
+            Span::styled(parent, Style::default().fg(c.subtext0)),
+        ];
+        if d.query.is_empty() {
+            spans.push(Span::styled(" ▮", Style::default().fg(c.mauve)));
+        } else {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(d.query.clone(), Style::default().fg(c.text)));
+            spans.push(Span::styled("▮", Style::default().fg(c.mauve)));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans).style(Style::default().bg(c.mantle))),
+            area,
+        );
+        return;
+    }
     let line = match search {
         Some(v) => Line::from(vec![
             prompt,
@@ -391,11 +440,16 @@ fn draw_dirnav_body(
     );
 }
 
-/// The DirNav single-column listing + status strip (Phase 17). One row
-/// per entry: dir glyph (or link glyph for symlinks), name, and a
-/// right-aligned meta (`<dir>` or `→ target`). The selected row gets the
-/// surface0 background + a 2px kind-colour left bar, matching the main
-/// list's selection grammar (spec §10).
+/// The DirNav single-column listing + status strip (Phase 17 + 18).
+/// One row per visible entry: dir glyph (or link glyph for symlinks),
+/// name (with matched chars highlighted peach+bold when searching), and
+/// a right-aligned meta (`<dir>` or `→ target`). The selected row gets
+/// the surface0 background + a 2px kind-colour left bar, matching the
+/// main list's selection grammar (spec §10).
+///
+/// Phase 18: when `query` is non-empty, the list narrows to the ranked
+/// matches (`d.matches`); `↑↓` wrap within that set. The status strip
+/// shows `matches/total` instead of `cursor/entries`.
 fn draw_dirnav_list(frame: &mut Frame, area: Rect, d: &DirNavView, palette: &Palette, c: &Colors) {
     let h = area.height as usize;
     let (list_area, strip_area) = if h > 1 {
@@ -408,6 +462,16 @@ fn draw_dirnav_list(frame: &mut Frame, area: Rect, d: &DirNavView, palette: &Pal
         (area, Rect::ZERO)
     };
 
+    // Build the visible rows: when searching, the match set (ranked);
+    // otherwise all entries. Each row carries its entry index, the
+    // entry, optional match positions, and whether it's the cursor.
+    let searching = !d.query.is_empty();
+    let total = if searching {
+        d.matches.len()
+    } else {
+        d.entries.len()
+    };
+
     let list_h = list_area.height as usize;
     let mut start = d.scroll;
     if list_h > 0 {
@@ -417,20 +481,32 @@ fn draw_dirnav_list(frame: &mut Frame, area: Rect, d: &DirNavView, palette: &Pal
             start = d.cursor + 1 - list_h;
         }
     }
-    let start = start.min(d.entries.len().saturating_sub(1));
+    let start = start.min(total.saturating_sub(1));
 
     let dir_color = crate::theme::kind_color(palette, Kind::Dir);
-    let visible: Vec<Line> = d
-        .entries
-        .iter()
-        .enumerate()
-        .skip(start)
+    let visible: Vec<Line> = (start..total)
         .take(list_h)
-        .map(|(i, e)| draw_dirnav_row(i, e, i == d.cursor, dir_color, c))
+        .filter_map(|row| {
+            let (entry_idx, indices) = if searching {
+                let m = d.matches.get(row)?;
+                (m.entry_idx, Some(m.indices.as_slice()))
+            } else {
+                (row, None)
+            };
+            let entry = d.entries.get(entry_idx)?;
+            Some(draw_dirnav_row(
+                entry,
+                row == d.cursor,
+                indices,
+                dir_color,
+                c,
+            ))
+        })
         .collect();
     frame.render_widget(Paragraph::new(visible), list_area);
 
-    // Status strip: `dirnav · <basename(cwd)>` left, `cursor/total` right.
+    // Status strip: `dirnav · <basename(cwd)>` left, `matches/total` right
+    // (Phase 18: when searching, show match count vs entry count).
     let cwd_label = d
         .cwd
         .file_name()
@@ -440,14 +516,21 @@ fn draw_dirnav_list(frame: &mut Frame, area: Rect, d: &DirNavView, palette: &Pal
         format!(" dirnav · {cwd_label} "),
         Style::default().fg(c.surface2),
     );
-    let pos = Span::styled(
-        format!(
-            " {}/{} ",
-            d.cursor.saturating_add(1).min(d.entries.len()),
-            d.entries.len()
-        ),
-        Style::default().fg(c.subtext0),
-    );
+    let pos = if searching {
+        Span::styled(
+            format!(" {}/{} ", d.matches.len(), d.entries.len()),
+            Style::default().fg(c.subtext0),
+        )
+    } else {
+        Span::styled(
+            format!(
+                " {}/{} ",
+                d.cursor.saturating_add(1).min(d.entries.len()),
+                d.entries.len()
+            ),
+            Style::default().fg(c.subtext0),
+        )
+    };
     frame.render_widget(
         Paragraph::new(
             Line::from(vec![scope, Span::raw(""), pos]).style(Style::default().bg(c.mantle)),
@@ -456,11 +539,12 @@ fn draw_dirnav_list(frame: &mut Frame, area: Rect, d: &DirNavView, palette: &Pal
     );
 }
 
-/// One DirNav row (Phase 17): glyph + name (left), meta (right).
+/// One DirNav row (Phase 17 + 18): glyph + name (left, with matched
+/// chars peach+bold when `indices` is Some), meta (right).
 fn draw_dirnav_row(
-    _i: usize,
     e: &crate::dirnav::DirEntry,
     selected: bool,
+    indices: Option<&[u32]>,
     dir_color: Color,
     c: &Colors,
 ) -> Line<'static> {
@@ -481,16 +565,77 @@ fn draw_dirnav_row(
     } else {
         "<dir> ".to_string()
     };
-    Line::from(vec![
+
+    // Build the name spans: matched chars peach+bold, the rest in the
+    // label colour. Coalesce adjacent chars of the same style into runs.
+    let matched: std::collections::HashSet<u32> = indices
+        .map(|idx| idx.iter().copied().collect())
+        .unwrap_or_default();
+    let name_spans = build_name_spans(&e.name, &matched, label_color, c.peach);
+
+    let mut spans = vec![
         bar,
         Span::styled(
             format!("{glyph} "),
             Style::default().fg(dir_color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(e.name.clone(), Style::default().fg(label_color)),
-        Span::raw(" "),
-        Span::styled(meta, Style::default().fg(c.surface2)),
-    ])
+    ];
+    spans.extend(name_spans);
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(meta, Style::default().fg(c.surface2)));
+    Line::from(spans)
+}
+
+/// Coalesce a name into runs: matched chars peach+bold, unmatched chars
+/// in `label_color`. Mirrors the main search row's run coalescing
+/// (spec §6.4) but over a bare name (no crumb prefix).
+fn build_name_spans(
+    name: &str,
+    matched: &std::collections::HashSet<u32>,
+    label_color: Color,
+    match_color: Color,
+) -> Vec<Span<'static>> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut out = Vec::new();
+    let mut run = String::new();
+    let mut run_matched = chars.first().is_some_and(|_| matched.contains(&0));
+    for (i, ch) in chars.iter().enumerate() {
+        let is_m = matched.contains(&(i as u32));
+        if i == 0 {
+            run.push(*ch);
+            run_matched = is_m;
+            continue;
+        }
+        if is_m == run_matched {
+            run.push(*ch);
+        } else {
+            out.push(Span::styled(
+                std::mem::take(&mut run),
+                if run_matched {
+                    Style::default()
+                        .fg(match_color)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(label_color)
+                },
+            ));
+            run.push(*ch);
+            run_matched = is_m;
+        }
+    }
+    if !run.is_empty() {
+        out.push(Span::styled(
+            run,
+            if run_matched {
+                Style::default()
+                    .fg(match_color)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(label_color)
+            },
+        ));
+    }
+    out
 }
 
 fn draw_list(
@@ -1134,7 +1279,7 @@ fn draw_template_picker(
 /// full keymap + query-filter syntax summary. Esc closes.
 fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
     let w = 56u16;
-    let h = 20u16;
+    let h = 21u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
@@ -1190,6 +1335,14 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
             Span::styled("^f", ks),
             sep.clone(),
             Span::styled("directory navigation mode (DirNav)", ds),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("in DirNav:", ds),
+            Span::raw("  "),
+            Span::styled("type", ks),
+            Span::raw(" "),
+            Span::styled("fuzzy-search this level", ds),
         ]),
         Line::raw(""),
         Line::from(vec![

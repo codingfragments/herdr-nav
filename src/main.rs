@@ -333,12 +333,17 @@ fn event_loop<B: ratatui::backend::Backend>(
                 if name_prompt.take().is_some() {
                     continue;
                 }
-                // Phase 17 DirNav: Esc exits DirNav and restores the
-                // prior switcher state (Tree + SearchView were preserved
-                // off-screen). Phase 18 adds the "active query → clear"
-                // first stage; in Phase 17 there's no query yet.
-                if is_dirnav {
-                    dirnav = None;
+                // Phase 17/18 DirNav: two-stage Esc — active in-level
+                // query → clear it (full level re-shown); no query →
+                // exit DirNav and restore the prior switcher state
+                // (Tree + SearchView were preserved off-screen).
+                if let Some(d) = dirnav.as_mut() {
+                    if !d.query.is_empty() {
+                        d.query.clear();
+                        d.requery();
+                    } else {
+                        dirnav = None;
+                    }
                     continue;
                 }
                 // Two-stage Esc (spec §3): search → clear query
@@ -472,6 +477,13 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // Name prompt: delete last char of the name.
                 if let Some(prompt) = name_prompt.as_mut() {
                     prompt.name.pop();
+                } else if let Some(d) = dirnav.as_mut() {
+                    // Phase 18 DirNav: delete last query char; empty →
+                    // clear the search (full level, stay in DirNav).
+                    if !d.query.is_empty() {
+                        d.query.pop();
+                        d.requery();
+                    }
                 } else if let Some(v) = search_view.as_mut() {
                     // Search: delete last char; empty → browse (spec §3).
                     v.query.pop();
@@ -888,6 +900,18 @@ fn event_loop<B: ratatui::backend::Backend>(
                 } else if !is_search {
                     // Branch in browse → step into it.
                     tree.expand_or_step();
+                }
+            }
+            Char(c)
+                if c.is_ascii_graphic()
+                    && (key.modifiers.is_empty() || only_shift)
+                    && is_dirnav =>
+            {
+                // Phase 18 DirNav: typing fuzzy-filters the current
+                // level's entry names and lands on the first match.
+                if let Some(d) = dirnav.as_mut() {
+                    d.query.push(c);
+                    d.requery();
                 }
             }
             Char(c)
