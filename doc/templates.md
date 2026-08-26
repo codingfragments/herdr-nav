@@ -131,3 +131,71 @@ tabs:
         - command: cargo watch -x test
           cwd: ~/code/watch   # this pane overrides the tab cwd
 ```
+
+---
+
+## Capturing a workspace as a template
+
+The `nav-capture` action (bound to `prefix+ctrl+t` by recommendation;
+see [`doc/keybinding.md`](keybinding.md)) opens a wizard that captures
+the **current** workspace's live structure and writes a template YAML
+— the inverse of `^t` (which applies a template). See
+[`spec/capture-template-spec.md`](../spec/capture-template-spec.md) for
+the full spec.
+
+### What it captures
+
+- **Structure**: every tab's recursive split tree (`layout.export`),
+  mapped to the `Template` schema (`direction`, `ratio`, nested
+  `layout`).
+- **Per-pane `cwd`**: from the live pane. The wizard's cwd policy
+  controls how it's written:
+  - `relative` (default) — relativize under the workspace base cwd;
+    keep absolute when a pane cwd is "far distant" (not under the base).
+  - `absolute` — keep every cwd as captured (machine-specific).
+  - `inherit` — blank every cwd; each pane inherits the new workspace's
+    cwd on apply.
+- **Per-pane `command`**: best-effort from `pane.process_info`. A
+  plain shell (only foreground process is `fish`/`bash`/`zsh`) → blank
+  (high confidence). A non-shell pane → the detected command, with a
+  `# best-effort:` comment so you can verify in the editor step. The
+  `blank` command policy forces all commands to plain shells.
+- **Per-pane `name`** (label): from the live pane.
+
+### The wizard
+
+A step-by-step form with a **live YAML preview** on every step:
+
+1. **Confirm workspace** — read-only summary (label, tab count, pane
+   count, per-tab breakdown).
+2. **Template name** (required) — defaults to the workspace label.
+3. **Match globs** — space-separated glob patterns for auto-preselect;
+   `Tab` toggles the `default: true` flag.
+4. **Command policy** — `keep` (best-effort) or `blank` (plain shells).
+5. **cwd policy** — `relative`, `absolute`, or `inherit`.
+6. **Tab names** — pre-filled from live labels; `↑↓` focuses a tab,
+   typing edits the focused one.
+7. **Review & write** — live YAML preview; `Enter` writes.
+
+If the name clashes with an existing template, a **Clash prompt** offers
+overwrite / rename / cancel before writing. After a successful write,
+an **Editor prompt** offers to open `$EDITOR` on the file for fine-tuning.
+
+### Non-interactive (CLI)
+
+For scripts and tests, the wizard can be bypassed with flags:
+
+```sh
+herdr-nav capture --name my-tmpl --cwd-policy relative --command-policy keep
+herdr-nav capture --summary   # print the workspace summary without writing
+```
+
+### Fidelity caveat
+
+`pane.process_info` returns the **whole foreground process group** with
+no `ppid`, so the user's originally-launched command can't be
+identified with certainty when multiple non-shell processes are present
+(e.g. an agent's MCP-server children). The `# best-effort:` comments
+flag every guessed command; the `$EDITOR` step is the verification
+surface. Plain-shell detection is reliable; non-shell capture is
+best-effort.

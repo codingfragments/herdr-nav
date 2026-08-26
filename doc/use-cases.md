@@ -54,3 +54,18 @@ An agent is waiting on a confirmation:
    that plugin's declared actions, default preselected.
 3. `↑↓` to the action you want, `Enter` → it runs and the popup closes;
    `Esc` → back to the switcher with the plugin still selected.
+
+## Capture the current workspace as a template
+
+1. `prefix+ctrl+t` → the capture wizard opens with a live summary of
+   the current workspace (tabs, panes, per-tab breakdown).
+2. Walk the steps: name → match globs → command policy → cwd policy →
+   tab names. A live YAML preview on the right shows the template
+   evolving as you choose. `←` goes back, `Esc` aborts.
+3. On Review, `Enter` writes the template to
+   `~/.config/herdr/templates/<name>.yaml`. If the name clashes, choose
+   overwrite / rename / cancel.
+4. After the write, `y` opens `$EDITOR` on the file for fine-tuning
+   (or `n` to close). Verify the `# best-effort:` command guesses.
+5. The new template is immediately available in `^t` (open-with-template)
+   the next time you open a directory or zoxide entry.

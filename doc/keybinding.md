@@ -110,3 +110,39 @@ full syntax, composition rules, and worked examples.
 The commit verb `Enter`/`^t`/`^p` and the `.` hidden-toggle are now
 shipped. See
 [navigation.md](navigation.md#directory-navigation-mode-dirnav--v02).
+
+## Capture wizard keymap
+
+`nav-capture` opens a step-by-step wizard that captures the current
+workspace as a template YAML. See
+[`spec/capture-template-spec.md`](../spec/capture-template-spec.md) for
+the full spec.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | advance to the next step (or write on Review) |
+| `←` | go back one step |
+| `↑` / `↓` | move selection (policy lists, tab names) or scroll the YAML preview (Review) |
+| `Tab` | toggle the `default: true` flag (Match globs step) |
+| `a–z 0–9 …` | type into the focused input field |
+| `Backspace` | delete last char from the focused input field |
+| `o` | overwrite (Clash prompt) |
+| `r` | rename — go back to the name step (Clash prompt) |
+| `c` | cancel — abort without writing (Clash prompt) |
+| `y` | open `$EDITOR` on the written file (Editor prompt) |
+| `n` | close the popup (Editor prompt) |
+| `Esc` | abort (no write) from any step; or go back from Review |
+
+The wizard steps: **Confirm workspace** → **Template name** →
+**Match globs** → **Command policy** → **cwd policy** → **Tab names**
+→ **Review & write**. A live YAML preview is shown on every step. If
+the name clashes with an existing template, a **Clash prompt** offers
+overwrite / rename / cancel before writing. After a successful write,
+an **Editor prompt** offers to open `$EDITOR` on the file.
+
+There is also a non-interactive CLI path for scripts/tests:
+
+```sh
+herdr-nav capture --name my-tmpl --cwd-policy relative --command-policy keep
+herdr-nav capture --summary   # print the workspace summary without writing
+```
