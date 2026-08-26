@@ -38,7 +38,7 @@ keymap.
 | [`doc/keybinding.md`](doc/keybinding.md) | Shipped actions, binding a key, adding your own |
 | [`doc/navigation.md`](doc/navigation.md) | The two modes, the five groups, the switch action |
 | [`doc/query-filters.md`](doc/query-filters.md) | Query filter syntax: `@pane`, `kind:`, `!`, group scope, composition |
-| [`doc/templates.md`](doc/templates.md) | Workspace template file syntax: YAML, recursive layout, `cwd`, examples |
+| [`doc/templates.md`](doc/templates.md) | Workspace template file syntax + capturing a workspace as a template |
 | [`doc/use-cases.md`](doc/use-cases.md) | Worked walkthroughs |
 | [`doc/env-vars.md`](doc/env-vars.md) | The environment variables involved |
 
@@ -57,11 +57,11 @@ as `config.toml`. Full schema: [`doc/config-reference.md`](doc/config-reference.
 
 ## Keybinding
 
-The plugin ships one action — `nav-open` — bound via a
-`[[keys.command]]` entry with `type = "plugin_action"` in your own
-`~/.config/herdr/config.toml`. Herdr owns all keybindings; the plugin
-never binds its own keys. There is one popup; in-popup navigation handles
-the five target groups. Full binding reference is in
+The plugin ships two actions — `nav-open` (the switcher) and
+`nav-capture` (capture the current workspace as a template) — bound
+via `[[keys.command]]` entries with `type = "plugin_action"` in your
+own `~/.config/herdr/config.toml`. Herdr owns all keybindings; the
+plugin never binds its own keys. Full binding reference is in
 [`doc/keybinding.md`](doc/keybinding.md).
 
 ```toml
@@ -69,9 +69,15 @@ the five target groups. Full binding reference is in
 key = "Ctrl k"
 action = "nav-open"
 type = "plugin_action"
+
+[[keys.command]]
+key = "prefix+ctrl+t"
+action = "nav-capture"
+type = "plugin_action"
+description = "capture workspace as template"
 ```
 
-Press `?` inside the popup for the full keybinding dialog.
+Press `?` inside the switcher popup for the full keybinding dialog.
 
 ## Build
 

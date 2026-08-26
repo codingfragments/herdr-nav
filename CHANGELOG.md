@@ -7,6 +7,80 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-26
+
+**New feature:** capture the current workspace as a template. A new
+`nav-capture` action opens a step-by-step wizard that reads the live
+workspace structure (tabs, splits, panes, cwds, best-effort commands)
+from the herdr daemon and writes a workspace template YAML — the inverse
+of `^t` (which applies a template). The written template is immediately
+consumable by the existing `^t` open-with-template flow.
+
+### Phase C1 — capture subcommand + workspace spine
+
+- `herdr-nav capture` subcommand: reads the active workspace from the
+  daemon (`workspace.list` → `tab.list` → per-tab `layout.export`) and
+  prints a plain-text summary. No UI, no YAML — the spine.
+- Hand-rolled subcommand dispatch in `main.rs` (no clap —
+  zero-dep-increase). The switcher path is unchanged.
+
+### Phase C2 — layout.export → Template mapping + write YAML
+
+- `capture_template()`: fetches the full `layout.export` tree per tab,
+  maps the recursive binary split tree to the `Template` schema
+  (`right`→`v`, `down`→`h`, ratio 0–1 → 0–100), derives the base cwd
+  (first pane of first tab), and applies the cwd policy
+  (relative/absolute/inherit). Single-pane tabs wrapped in a one-pane
+  `Layout`.
+- `--name` and `--cwd-policy` CLI flags (non-interactive; the wizard
+  lands in C4). Name defaults to the focused workspace's label.
+- `Template`/`TemplateTab`/`Layout`/`PaneNode` gained `Serialize`
+  (non-breaking). Written YAML round-trips through `read_templates`.
+
+### Phase C3 — pane.process_info best-effort command capture
+
+- `best_effort_command()`: calls `pane.process_info` per pane. Plain
+  shell (only foreground process is a known shell) → blank (high
+  confidence). Non-shell → picks the cwd-matching process (smallest pid
+  tiebreak), with a `# best-effort:` comment for verification. No match
+  → blank + annotation.
+- `--command-policy keep|blank` CLI flag; `blank` skips all
+  `pane.process_info` calls.
+- `# best-effort:` comments injected above guessed commands in the YAML
+  (serde_yaml can't emit comments natively; post-processing pass).
+
+### Phase C4 — step-by-step ratatui capture wizard
+
+- `src/capture_ui.rs`: a 7-step wizard with a **live YAML preview** on
+  every step. Two-column layout (input | preview) with syntax
+  highlighting. `←` back navigation, `Esc` abort. Steps: Confirm
+  workspace → Name → Match globs → Command policy → cwd policy → Tab
+  names → Review & write.
+- `capture.rs` refactored: `fetch_raw()` does all daemon calls once and
+  caches a `RawCapture`; `build_template()` is pure — called on every
+  render for the live preview, no socket calls.
+- Multi-tab name editing: `↑↓` focuses a tab, typing edits the focused
+  one. All tab names flow through to the template + preview.
+- No-flags → wizard; `--name` etc. → non-interactive (scripts/tests).
+
+### Phase C5 — name clash prompt + `$EDITOR` handoff
+
+- **Clash prompt**: if `<name>.yaml` exists, offers overwrite / rename
+  / cancel before writing. Clash check is before write, so cancel never
+  leaves a half-written file.
+- **Editor prompt**: after a successful write, offers to open
+  `$VISUAL`/`$EDITOR`/`vi` on the file. `exec` (not spawn) replaces
+  the popup pane process — no fork, no post-edit validation (spec §9).
+  Terminal restored before exec so the editor gets a clean TTY.
+
+### Other
+
+- `herdr-plugin.toml`: `capture` entrypoint + `nav-capture` action.
+- `doc/keybinding.md`, `doc/templates.md`, `doc/use-cases.md`, `README.md`:
+  document the capture feature, the wizard keymap, and the CLI path.
+- `spec/capture-template-spec.md`, `spec/capture-template-plan.md`,
+  `spec/spike-layout-export.md`: the spec, plan, and feasibility spike.
+
 ## [0.2.0] — 2026-08-25
 
 **Two new features:** `Tab` extends the zoxide list in Search mode when no directory results match; `^f` opens a directory navigation mode (DirNav) — a filesystem directory walker with in-level fuzzy search, a path display, and commit verbs (`Enter`/`^t`/`^p`).
