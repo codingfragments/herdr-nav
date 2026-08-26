@@ -12,6 +12,7 @@
 //! mode (Phase 4), per-kind preview (Phase 2), and the switch action
 //! (Phase 3) land in later phases.
 
+mod capture;
 mod config;
 mod dirnav;
 mod nav;
@@ -1320,8 +1321,36 @@ fn show_toast(socket_path: &str, message: &str) {
 }
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("herdr-nav: {e}");
-        std::process::exit(1);
+    // Subcommand dispatch (Phase C1): `herdr-nav capture` runs the
+    // capture path (plain stdout, no terminal setup); with no subcommand
+    // or any other arg, the switcher popup runs as before. Hand-rolled
+    // match — no clap, to keep the binary zero-dep-increase and match
+    // the popup's one-shot nature. See spec/capture-template-plan.md.
+    match std::env::args().nth(1).as_deref() {
+        Some("capture") => {
+            if let Err(e) = run_capture() {
+                eprintln!("herdr-nav: {e}");
+                std::process::exit(1);
+            }
+        }
+        _ => {
+            if let Err(e) = run() {
+                eprintln!("herdr-nav: {e}");
+                std::process::exit(1);
+            }
+        }
     }
+}
+
+/// `herdr-nav capture` (Phase C1): read the active workspace from the
+/// daemon and print a plain-text summary to stdout. No UI, no YAML —
+/// the spine only. Later phases (C2+) grow `capture.rs`.
+fn run_capture() -> Result<(), String> {
+    let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+    if socket_path.is_empty() {
+        return Err("HERDR_SOCKET_PATH not set — capture needs a live herdr session".to_string());
+    }
+    let summary = capture::capture_summary(&socket_path)?;
+    capture::print_summary(&summary);
+    Ok(())
 }
