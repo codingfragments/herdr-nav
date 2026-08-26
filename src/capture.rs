@@ -861,14 +861,21 @@ fn templates_dir() -> Result<std::path::PathBuf, String> {
 }
 
 /// Write a template to `~/.config/herdr/templates/<name>.yaml`, creating
-/// the dir if missing. **C2: silent overwrite on clash** (C5 adds the
-/// prompt). Returns the written path.
+/// the dir if missing. Returns the written path.
 pub fn write_template(name: &str, yaml: &str) -> Result<std::path::PathBuf, String> {
     let dir = templates_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let path = dir.join(format!("{name}.yaml"));
     std::fs::write(&path, yaml).map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// Check if a template named `<name>.yaml` already exists in the
+/// templates dir (Phase C5 clash check).
+pub fn template_exists(name: &str) -> bool {
+    templates_dir()
+        .map(|dir| dir.join(format!("{name}.yaml")).exists())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
