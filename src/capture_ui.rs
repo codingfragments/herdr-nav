@@ -37,6 +37,9 @@ const TOTAL_STEPS: usize = 7;
 
 // ── Steps ─────────────────────────────────────────────────────────
 
+/// The wizard steps (spec §8). Steps 1-7 are the main flow; ClashPrompt
+/// and EditorPrompt are interleaved after Review (Phase C5) and are not
+/// counted in the progress bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     ScopeConfirm,
@@ -46,6 +49,10 @@ enum Step {
     CwdPolicy,
     TabNames,
     Review,
+    /// Shown after Review if the name clashes (Phase C5).
+    ClashPrompt,
+    /// Shown after a successful write (Phase C5).
+    EditorPrompt,
 }
 
 impl Step {
@@ -58,6 +65,8 @@ impl Step {
             Self::CwdPolicy => 5,
             Self::TabNames => 6,
             Self::Review => 7,
+            // C5 steps are not counted in the progress bar.
+            Self::ClashPrompt | Self::EditorPrompt => 7,
         }
     }
 
@@ -70,6 +79,8 @@ impl Step {
             Self::CwdPolicy => "cwd policy",
             Self::TabNames => "Tab names",
             Self::Review => "Review & write",
+            Self::ClashPrompt => "Name clash",
+            Self::EditorPrompt => "Open in editor?",
         }
     }
 
@@ -82,6 +93,8 @@ impl Step {
             Self::CwdPolicy => "How to handle each pane's working directory in the generated template.",
             Self::TabNames => "Tab names, pre-filled from live labels. ↑↓ to focus a tab, type to edit.",
             Self::Review => "Live YAML preview. Enter writes the template to ~/.config/herdr/templates/.",
+            Self::ClashPrompt => "A template with this name already exists. Choose how to proceed.",
+            Self::EditorPrompt => "Template written. Open it in your editor to fine-tune, or close.",
         }
     }
 
@@ -94,6 +107,8 @@ impl Step {
             Self::CwdPolicy => Some(Self::CommandPolicy),
             Self::TabNames => Some(Self::CwdPolicy),
             Self::Review => Some(Self::TabNames),
+            Self::ClashPrompt => Some(Self::Review),
+            Self::EditorPrompt => None, // no back — the write already happened
         }
     }
 }
@@ -121,6 +136,9 @@ struct CaptureForm {
     focused_tab_idx: usize,
     /// Scroll offset for the YAML preview.
     preview_scroll: usize,
+    /// The written template path (set after a successful write, used by
+    /// the EditorPrompt to exec $EDITOR). Phase C5.
+    written_path: Option<std::path::PathBuf>,
 }
 
 const COMMAND_CHOICES: &[(&str, &str)] = &[
@@ -194,6 +212,7 @@ pub fn run(socket_path: &str) -> Result<(), String> {
         cwd_policy_idx: 0,
         focused_tab_idx: 0,
         preview_scroll: 0,
+        written_path: None,
         raw,
     };
 
@@ -263,6 +282,46 @@ enum Action {
     Continue,
     Abort,
     Done,
+}
+
+/// Build the YAML from the current form state and write it (Phase C5).
+/// Stores the written path in `form.written_path` for the editor prompt.
+fn do_write(form: &mut CaptureForm) -> Result<(), String> {
+    let yaml = match form.build_preview_yaml() {
+        Some(y) => y,
+        None => return Err("cannot build template (name empty?)".to_string()),
+    };
+    let name = form.name.trim().to_string();
+    let path = capture::write_template(&name, &yaml)?;
+    form.written_path = Some(path);
+    Ok(())
+}
+
+/// Exec the user's editor on the written path (Phase C5, spec §9).
+///
+/// `$VISUAL` → `$EDITOR` → `vi`. Uses `exec` (not spawn) — the popup
+/// pane process is **replaced** by the editor. When the editor exits,
+/// the pane process ends and the popup closes. No post-edit validation:
+/// the plugin isn't alive after `exec`. A malformed YAML is surfaced by
+/// `read_templates` on the next `^t` use (it already logs parse errors
+/// to stderr).
+fn exec_editor(path: &std::path::Path) {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let mut parts = editor.split_whitespace();
+    let cmd = parts.next().unwrap_or("vi");
+    let args: Vec<String> = parts.map(str::to_string).collect();
+    // Restore the terminal before exec so the editor gets a clean TTY.
+    disable_raw_mode().ok();
+    let _ = execute!(std::io::stdout(), cursor::Show);
+    let _ = execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new(cmd);
+    command.args(&args);
+    command.arg(path);
+    let err = command.exec();
+    eprintln!("herdr-nav: exec {cmd} failed: {err}");
 }
 
 fn handle_key(
@@ -381,16 +440,56 @@ fn handle_key(
                     form.preview_scroll = form.preview_scroll.saturating_add(1);
                 }
                 KeyCode::Enter => {
-                    let yaml = match form.build_preview_yaml() {
-                        Some(y) => y,
-                        None => return Ok(Action::Continue),
-                    };
                     let name = form.name.trim().to_string();
                     if name.is_empty() {
                         return Ok(Action::Continue);
                     }
-                    let path = capture::write_template(&name, &yaml)?;
-                    println!("wrote {}", path.display());
+                    // Phase C5: clash check before write.
+                    if capture::template_exists(&name) {
+                        form.step = Step::ClashPrompt;
+                        return Ok(Action::Continue);
+                    }
+                    // No clash — write and go to the editor prompt.
+                    do_write(form)?;
+                    form.step = Step::EditorPrompt;
+                }
+                _ => {}
+            }
+            Ok(Action::Continue)
+        }
+        Step::ClashPrompt => {
+            match code {
+                // o = overwrite, c = cancel, r = rename
+                KeyCode::Char('o') => {
+                    do_write(form)?;
+                    form.step = Step::EditorPrompt;
+                }
+                KeyCode::Char('c') | KeyCode::Esc => {
+                    return Ok(Action::Abort);
+                }
+                KeyCode::Char('r') => {
+                    form.step = Step::Name;
+                }
+                _ => {}
+            }
+            Ok(Action::Continue)
+        }
+        Step::EditorPrompt => {
+            match code {
+                // y = yes, open $EDITOR; n = no, close
+                KeyCode::Char('y') => {
+                    if let Some(ref path) = form.written_path {
+                        exec_editor(path);
+                        // exec replaces the process; if it returns,
+                        // it failed.
+                        return Ok(Action::Done);
+                    }
+                    return Ok(Action::Done);
+                }
+                KeyCode::Char('n') | KeyCode::Enter => {
+                    if let Some(ref path) = form.written_path {
+                        println!("wrote {}", path.display());
+                    }
                     return Ok(Action::Done);
                 }
                 _ => {}
@@ -521,6 +620,8 @@ fn draw_two_column(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, p
         Step::CwdPolicy => draw_cwd_policy(f, input_inner, form, palette),
         Step::TabNames => draw_tab_names(f, input_inner, form, palette),
         Step::Review => draw_review_input(f, input_inner, form, palette),
+        Step::ClashPrompt => draw_clash_prompt(f, input_inner, form, palette),
+        Step::EditorPrompt => draw_editor_prompt(f, input_inner, form, palette),
         _ => {}
     }
 
@@ -903,7 +1004,97 @@ fn draw_review_input(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pal
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-// ── Live YAML preview (right panel, every step) ─────────────────
+// ── Phase C5: clash + editor prompt rendering ──────────────────
+
+fn draw_clash_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "⚠ Name clash",
+            Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            format!(
+                "A template named \"{}\" already exists at:",
+                form.name.trim()
+            ),
+            Style::default().fg(palette.text),
+        )),
+        Line::from(Span::styled(
+            format!("  ~/.config/herdr/templates/{}.yaml", form.name.trim()),
+            Style::default().fg(palette.subtext0),
+        )),
+        Line::raw(""),
+        Line::raw(""),
+    ];
+
+    let choices = [
+        ("o", "overwrite", "replace the existing file", palette.peach),
+        ("r", "rename", "go back and pick a new name", palette.accent),
+        ("c", "cancel", "abort without writing", palette.subtext0),
+    ];
+    for (key, label, desc, color) in &choices {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", key), Style::default().fg(*color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:<10} ", label), Style::default().fg(palette.text)),
+            Span::styled(*desc, Style::default().fg(palette.overlay0)),
+        ]));
+        lines.push(Line::raw(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "  Esc also cancels",
+        Style::default().fg(palette.overlay0),
+    )));
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+}
+
+fn draw_editor_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+    let path = form.written_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "✓ Template written",
+            Style::default().fg(palette.green).add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            format!("  {}", path),
+            Style::default().fg(palette.subtext0),
+        )),
+        Line::raw(""),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Open it in your editor to fine-tune?",
+            Style::default().fg(palette.text),
+        )),
+        Line::raw(""),
+    ];
+
+    let choices = [
+        ("y", "yes", format!("open in {} (replaces this pane)", editor), palette.green),
+        ("n", "no", "close the popup".to_string(), palette.subtext0),
+    ];
+    for (key, label, desc, color) in &choices {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", key), Style::default().fg(*color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:<6} ", label), Style::default().fg(palette.text)),
+            Span::styled(desc, Style::default().fg(palette.overlay0)),
+        ]));
+        lines.push(Line::raw(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "  Enter also closes",
+        Style::default().fg(palette.overlay0),
+    )));
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+}
 
 fn draw_preview(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, palette: &theme::Palette) {
     let block = Block::default()
@@ -1019,6 +1210,20 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: 
                     Style::default().fg(palette.green).add_modifier(Modifier::BOLD),
                 ),
             ],
+        ),
+        Step::ClashPrompt => (
+            vec![Span::styled("esc cancel", Style::default().fg(palette.overlay0))],
+            vec![Span::styled(
+                "o overwrite   r rename   c cancel",
+                Style::default().fg(palette.overlay0),
+            )],
+        ),
+        Step::EditorPrompt => (
+            vec![Span::styled("", Style::default())],
+            vec![Span::styled(
+                "y open editor   n close",
+                Style::default().fg(palette.overlay0),
+            )],
         ),
         _ => (
             vec![
