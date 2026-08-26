@@ -29,7 +29,26 @@ placement = "popup"
 width = "80%"
 height = "80%"
 
+# The capture popup (Phase C2+): a separate action that analyzes the
+# current workspace and generates a workspace template YAML, with an
+# optional in-flow $EDITOR fine-tune. See spec/capture-template-spec.md.
+# Distinct from nav-open: this captures a template; ^t (nav-open's
+# in-popup key) applies one. Bind it via a [[keys.command]] entry in
+# your ~/.config/herdr/config.toml — see doc/keybinding.md.
+[[panes]]
+id = "capture"
+title = "herdr capture"
+command = ["./target/release/herdr-nav", "capture"]
+placement = "popup"
+width = "80%"
+height = "80%"
+
 [[actions]]
 id = "nav-open"
 title = "nav: switcher"
 command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-nav", "--entrypoint", "switcher", "--placement", "popup"]
+
+[[actions]]
+id = "nav-capture"
+title = "nav: capture workspace as template"
+command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-nav", "--entrypoint", "capture", "--placement", "popup"]

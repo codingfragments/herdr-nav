@@ -10,7 +10,7 @@
 //! (Agents → 5, Pinned+zoxide → 6a, Plugins → 7).
 
 use crate::nav::{Group, Kind, Node, NodeId, Preview, Provider};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Build the five group subtrees in spec §4 fixed order, using the
 /// registered providers. A provider that fails leaves its group row in
@@ -1046,28 +1046,28 @@ fn tab_node(tab_id: &str, tab_name: &str, panes: &[&PaneRow], active_tab: &str) 
 /// A workspace template (spec §8.4, amended 2026-08-21): one YAML
 /// file per template in `~/.config/herdr/templates/`. Recursive
 /// multi-level split layout, cwd at tab and pane level.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Template {
     pub name: String,
     /// Glob patterns that auto-preselect this template when the
     /// target path matches (spec §8.4).
-    #[serde(default, rename = "match")]
+    #[serde(default, rename = "match", skip_serializing_if = "Vec::is_empty")]
     pub match_globs: Vec<String>,
     /// `default: true` — the fallback when no match glob fits.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub default: bool,
     pub tabs: Vec<TemplateTab>,
 }
 
 /// One tab in a template.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TemplateTab {
     pub name: String,
     /// Working directory for every pane in this tab. None =
     /// the workspace's cwd (the path the workspace was opened at).
     /// Passed to pane.split/tab.create as `cwd`, so no `cd`
     /// command is needed.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     pub layout: Layout,
 }
@@ -1076,14 +1076,14 @@ pub struct TemplateTab {
 /// split: a direction, an optional ratio, and a list of
 /// children. Each child is either a leaf pane (`command`)
 /// or a nested split (`layout`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Layout {
     /// `"v"` (vertical/side-by-side: left | right) or
     /// `"h"` (horizontal/stacked: top / bottom).
-    #[serde(default = "default_direction")]
+    #[serde(default = "default_direction", skip_serializing_if = "is_default_direction")]
     pub direction: String,
     /// Split ratio (0–100). 0 = even.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ratio: u32,
     pub panes: Vec<PaneNode>,
 }
@@ -1091,7 +1091,7 @@ pub struct Layout {
 /// One child of a layout: either a leaf pane or a nested
 /// split. Untagged: a `command:` key → leaf; a
 /// `layout:` key → nested split.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum PaneNode {
     /// A nested split.
@@ -1102,11 +1102,11 @@ pub enum PaneNode {
     /// the split; herdr's pane.split does not accept a
     /// label directly — confirmed live).
     Pane {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         command: Option<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
 }
@@ -1122,6 +1122,17 @@ impl PaneNode {
 
 fn default_direction() -> String {
     "v".to_string()
+}
+
+/// `skip_serializing_if` helpers for clean YAML output.
+fn is_false(b: &bool) -> bool {
+    !b
+}
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+fn is_default_direction(d: &str) -> bool {
+    d == "v"
 }
 
 /// Read every `*.yaml` in `~/.config/herdr/templates/` →

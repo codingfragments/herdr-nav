@@ -3,19 +3,20 @@
 `herdr-nav` never binds its own keys — Herdr's own
 `~/.config/herdr/config.toml` owns all keybindings, via
 `[[keys.command]]` entries with `type = "plugin_action"`. This doc covers
-the one shipped action, how to bind it, and the in-popup keymap. The
+the shipped actions, how to bind them, and the in-popup keymap. The
 normative keymap is spec §8 / [PLANNING.md](../PLANNING.md) §10.
 
-## Shipped action
+## Shipped actions
 
-`herdr-plugin.toml` declares one `[[actions]]` — `nav-open` — a thin
-launcher that opens the real interactive popup (`herdr plugin pane open`).
-There is one popup; in-popup navigation handles the five target groups,
-so there are no per-group launcher actions.
+`herdr-plugin.toml` declares two `[[actions]]` — `nav-open` (the
+switcher) and `nav-capture` (capture the current workspace as a
+template). Each is a thin launcher that opens its interactive popup
+(`herdr plugin pane open`).
 
 | Action id | Description |
 | --- | --- |
 | `nav-open` | Open the switcher popup |
+| `nav-capture` | Capture the current workspace as a template (see [`spec/capture-template-spec.md`](../spec/capture-template-spec.md)) |
 
 ## Binding the open key
 
@@ -26,6 +27,21 @@ Bind a key to `nav-open` in your `~/.config/herdr/config.toml`:
 key = "Ctrl k"
 action = "nav-open"
 type = "plugin_action"
+```
+
+## Binding the capture key
+
+`nav-capture` is a separate binding. A prefix chord keeps the direct
+keys clean; `prefix+ctrl+t` is the recommended default (the `t` family
+= herdr-nav; `prefix+t` opens the switcher, `prefix+ctrl+t` captures a
+template):
+
+```toml
+[[keys.command]]
+key = "prefix+ctrl+t"
+action = "nav-capture"
+type = "plugin_action"
+description = "capture workspace as template"
 ```
 
 ## In-popup keymap

@@ -1342,15 +1342,68 @@ fn main() {
     }
 }
 
-/// `herdr-nav capture` (Phase C1): read the active workspace from the
-/// daemon and print a plain-text summary to stdout. No UI, no YAML —
-/// the spine only. Later phases (C2+) grow `capture.rs`.
+/// `herdr-nav capture` (Phase C2): read the active workspace from the
+/// daemon, map it to a `Template`, apply the cwd policy, and write a
+/// YAML to `~/.config/herdr/templates/<name>.yaml` that the existing
+/// `^t` apply path can read and build.
+///
+/// Flags (non-interactive; the wizard lands in C4):
+///   --name <name>          template name (default: the workspace label)
+///   --cwd-policy <p>       relative | absolute | inherit (default: relative)
+///   --summary              print the C1 plain-text summary instead of writing
 fn run_capture() -> Result<(), String> {
     let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
     if socket_path.is_empty() {
         return Err("HERDR_SOCKET_PATH not set — capture needs a live herdr session".to_string());
     }
-    let summary = capture::capture_summary(&socket_path)?;
-    capture::print_summary(&summary);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut name: Option<String> = None;
+    let mut cwd_policy = capture::CwdPolicy::Relative;
+    let mut summary_only = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--name" => {
+                i += 1;
+                name = args.get(i).cloned();
+            }
+            "--cwd-policy" => {
+                i += 1;
+                cwd_policy = capture::CwdPolicy::parse(
+                    args.get(i).map(String::as_str).unwrap_or(""),
+                )?;
+            }
+            "--summary" => summary_only = true,
+            _ => {} // ignore unknown (the "capture" subcommand word itself)
+        }
+        i += 1;
+    }
+
+    // --summary: the C1 behavior (plain-text print, no write).
+    if summary_only {
+        let summary = capture::capture_summary(&socket_path)?;
+        capture::print_summary(&summary);
+        return Ok(());
+    }
+
+    // Resolve the name: --name, else the focused workspace's label.
+    let name = match name {
+        Some(n) if !n.is_empty() => n,
+        _ => {
+            let ws_resp = crate::socket_client::request(
+                &socket_path,
+                "workspace.list",
+                serde_json::json!({}),
+            )
+            .map_err(|e| format!("workspace.list failed: {e}"))?;
+            let (_id, label) = capture::parse_focused_workspace(&ws_resp)?;
+            label
+        }
+    };
+
+    let template = capture::capture_template(&socket_path, &name, cwd_policy)?;
+    let yaml = capture::template_to_yaml(&template)?;
+    let path = capture::write_template(&name, &yaml)?;
+    println!("wrote {}", path.display());
     Ok(())
 }
