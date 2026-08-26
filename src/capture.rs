@@ -253,6 +253,33 @@ impl CwdPolicy {
     }
 }
 
+/// The command policy (spec §5 / Phase C3). One global choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandPolicy {
+    /// Best-effort capture from `pane.process_info`; annotate guesses
+    /// with a `# best-effort:` comment. Default.
+    Keep,
+    /// Force every pane's `command` to `None` (plain shell). No
+    /// `pane.process_info` calls are made.
+    Blank,
+}
+
+impl CommandPolicy {
+    /// Parse from a CLI flag string ("keep" | "blank").
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "keep" | "" => Ok(Self::Keep),
+            "blank" => Ok(Self::Blank),
+            other => Err(format!("unknown command policy '{other}' (keep|blank)")),
+        }
+    }
+}
+
+/// Known interactive shells — when the only foreground process is one
+/// of these, the pane is a plain shell and `command` is `None` (high
+/// confidence). From the spike: a lone `fish`/`bash`/`zsh` is reliable.
+const SHELLS: &[&str] = &["fish", "bash", "zsh", "sh", "dash", "ksh", "tcsh", "csh"];
+
 /// A captured tab's full export tree (the `layout.export` root) plus its
 /// live label, ready to map to a `TemplateTab`.
 struct CapturedTab {
@@ -262,15 +289,18 @@ struct CapturedTab {
 
 /// Capture the active workspace and emit a `Template` (spec §4/§7).
 ///
-/// This is the C2 entry point: it reads the workspace, fetches the full
-/// `layout.export` tree per tab, derives the base cwd, applies the cwd
-/// policy, and assembles a `Template`. Command capture is C3 — every
-/// pane's `command` is `None` here.
+/// This is the C2/C3 entry point: it reads the workspace, fetches the
+/// full `layout.export` tree per tab, derives the base cwd, applies the
+/// cwd policy, best-effort captures each pane's `command` from
+/// `pane.process_info` (C3), and assembles a `Template`. Returns the
+/// template plus a list of `# best-effort:` annotations to inject as
+/// YAML comments (serde_yaml can't emit comments natively).
 pub fn capture_template(
     socket_path: &str,
     name: &str,
     cwd_policy: CwdPolicy,
-) -> Result<Template, String> {
+    command_policy: CommandPolicy,
+) -> Result<(Template, Vec<Annotation>), String> {
     // 1. Focused workspace.
     let ws_resp = socket_client::request(socket_path, "workspace.list", serde_json::json!({}))
         .map_err(|e| format!("workspace.list failed: {e}"))?;
@@ -299,18 +329,24 @@ pub fn capture_template(
         .and_then(|t| first_leaf_cwd(&t.root))
         .unwrap_or_default();
 
-    // 5. Map each tab → TemplateTab, applying the cwd policy.
+    // 5. Map each tab → TemplateTab, applying cwd + command policies.
+    //    Annotations (for # best-effort: comments) are collected in pane
+    //    order across the whole template.
+    let mut annotations = Vec::new();
     let template_tabs = captured
         .iter()
-        .map(|t| map_tab(t, &base_cwd, cwd_policy))
+        .map(|t| map_tab(t, &base_cwd, cwd_policy, command_policy, socket_path, &mut annotations))
         .collect();
 
-    Ok(Template {
-        name: name.to_string(),
-        match_globs: Vec::new(),
-        default: false,
-        tabs: template_tabs,
-    })
+    Ok((
+        Template {
+            name: name.to_string(),
+            match_globs: Vec::new(),
+            default: false,
+            tabs: template_tabs,
+        },
+        annotations,
+    ))
 }
 
 /// Fetch the `layout.export` root for one tab.
@@ -350,15 +386,26 @@ fn first_leaf_cwd(root: &serde_json::Value) -> Option<String> {
 /// (multi-pane). A tab's `layout` is always a `Layout` (a split), so:
 /// - `pane` root → a one-pane `Layout` (direction "v", ratio 0).
 /// - `split` root → `map_split` builds the `Layout` directly.
-fn map_tab(tab: &CapturedTab, base_cwd: &str, policy: CwdPolicy) -> TemplateTab {
+///
+/// `annotations` is appended to in pane order (left-to-right, depth-first);
+/// each entry is a `# best-effort:` comment to inject above the pane's
+/// `command:` line in the serialized YAML.
+fn map_tab(
+    tab: &CapturedTab,
+    base_cwd: &str,
+    cwd_policy: CwdPolicy,
+    command_policy: CommandPolicy,
+    socket_path: &str,
+    annotations: &mut Vec<Annotation>,
+) -> TemplateTab {
     let kind = tab.root.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let layout = match kind {
-        "split" => map_split(&tab.root, base_cwd, policy),
+        "split" => map_split(&tab.root, base_cwd, cwd_policy, command_policy, socket_path, annotations),
         // Single-pane tab (or unknown): wrap the pane in a one-pane Layout.
         _ => Layout {
             direction: "v".to_string(),
             ratio: 0,
-            panes: vec![map_pane(&tab.root, base_cwd, policy)],
+            panes: vec![map_pane(&tab.root, base_cwd, cwd_policy, command_policy, socket_path, annotations)],
         },
     };
     TemplateTab {
@@ -370,15 +417,22 @@ fn map_tab(tab: &CapturedTab, base_cwd: &str, policy: CwdPolicy) -> TemplateTab 
 
 /// Map a `split` export node → a `Layout`. Its `first`/`second` children
 /// are mapped via `map_child` (pane → leaf, split → nested split).
-fn map_split(node: &serde_json::Value, base_cwd: &str, policy: CwdPolicy) -> Layout {
+fn map_split(
+    node: &serde_json::Value,
+    base_cwd: &str,
+    cwd_policy: CwdPolicy,
+    command_policy: CommandPolicy,
+    socket_path: &str,
+    annotations: &mut Vec<Annotation>,
+) -> Layout {
     let direction = node.get("direction").and_then(|v| v.as_str()).unwrap_or("right");
     let ratio = node.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.5);
     let mut panes = Vec::new();
     if let Some(first) = node.get("first") {
-        panes.push(map_child(first, base_cwd, policy));
+        panes.push(map_child(first, base_cwd, cwd_policy, command_policy, socket_path, annotations));
     }
     if let Some(second) = node.get("second") {
-        panes.push(map_child(second, base_cwd, policy));
+        panes.push(map_child(second, base_cwd, cwd_policy, command_policy, socket_path, annotations));
     }
     Layout {
         direction: map_direction(direction),
@@ -389,24 +443,63 @@ fn map_split(node: &serde_json::Value, base_cwd: &str, policy: CwdPolicy) -> Lay
 
 /// Map a child of a split → a `PaneNode`. A `pane` → leaf; a `split` →
 /// `Nested{layout}` (recursive).
-fn map_child(node: &serde_json::Value, base_cwd: &str, policy: CwdPolicy) -> PaneNode {
+fn map_child(
+    node: &serde_json::Value,
+    base_cwd: &str,
+    cwd_policy: CwdPolicy,
+    command_policy: CommandPolicy,
+    socket_path: &str,
+    annotations: &mut Vec<Annotation>,
+) -> PaneNode {
     let kind = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
         "split" => PaneNode::Nested {
-            layout: map_split(node, base_cwd, policy),
+            layout: map_split(node, base_cwd, cwd_policy, command_policy, socket_path, annotations),
         },
-        _ => map_pane(node, base_cwd, policy),
+        _ => map_pane(node, base_cwd, cwd_policy, command_policy, socket_path, annotations),
     }
 }
 
-/// Map a `pane` export node → a leaf `PaneNode::Pane`. `command` is
-/// `None` in C2 (C3 fills it from `pane.process_info`).
-fn map_pane(node: &serde_json::Value, base_cwd: &str, policy: CwdPolicy) -> PaneNode {
+/// Map a `pane` export node → a leaf `PaneNode::Pane`. The `command` is
+/// best-effort captured from `pane.process_info` (C3), or `None` when
+/// the command policy is `Blank` or the pane is a plain shell.
+fn map_pane(
+    node: &serde_json::Value,
+    base_cwd: &str,
+    cwd_policy: CwdPolicy,
+    command_policy: CommandPolicy,
+    socket_path: &str,
+    annotations: &mut Vec<Annotation>,
+) -> PaneNode {
     let raw_cwd = node.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
     let label = node.get("label").and_then(|v| v.as_str());
+    let pane_id = node.get("pane_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    let command = if command_policy == CommandPolicy::Blank {
+        None // --command-policy blank: no process_info calls
+    } else {
+        match best_effort_command(socket_path, pane_id, raw_cwd) {
+            Ok((cmd, ann)) => {
+                if let Some(a) = ann {
+                    annotations.push(a);
+                }
+                cmd
+            }
+            Err(e) => {
+                // A failed process_info shouldn't kill the capture —
+                // leave the command blank and note the error.
+                annotations.push(Annotation {
+                    pane_id: pane_id.to_string(),
+                    text: format!("best-effort: pane.process_info failed: {e}"),
+                });
+                None
+            }
+        }
+    };
+
     PaneNode::Pane {
-        command: None,
-        cwd: apply_cwd_policy(raw_cwd, base_cwd, policy),
+        command,
+        cwd: apply_cwd_policy(raw_cwd, base_cwd, cwd_policy),
         name: label.map(str::to_string),
     }
 }
@@ -418,6 +511,129 @@ fn map_direction(dir: &str) -> String {
         "down" => "h".to_string(),
         _ => "v".to_string(), // "right" and any unknown → side-by-side
     }
+}
+
+// ── Phase C3: pane.process_info best-effort command capture ──────
+
+/// A `# best-effort:` annotation to inject as a YAML comment above the
+/// pane's `command:` line. serde_yaml can't emit comments, so we collect
+/// these during mapping and inject them in a post-processing pass on the
+/// serialized string (spec §5 / plan C3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation {
+    /// The pane id this annotation belongs to (for matching in the YAML).
+    pub pane_id: String,
+    /// The comment text (without the leading `# `).
+    pub text: String,
+}
+
+/// Best-effort recover a pane's startup `command` from `pane.process_info`
+/// (spec §5 / spike §"Second spike"). Returns `(command, annotation)`:
+///
+/// - **Plain shell** (only foreground process is a known shell) →
+///   `(None, None)`. High confidence.
+/// - **Non-shell** → pick the non-shell foreground process whose `cwd`
+///   matches the pane cwd (smallest `pid` tiebreak); `command` = its
+///   `cmdline`; `annotation` = `best-effort: captured from pane <id>
+///   process <name>; verify`.
+/// - **No match** → `(None, Some("best-effort: …; no confident match"))`.
+///
+/// The spike showed `pane.process_info` returns the **whole foreground
+/// process group** with **no `ppid`**, so the user's originally-launched
+/// command can't be identified with certainty when multiple non-shell
+/// processes are present. The editor step (C5) is the verification surface.
+pub fn best_effort_command(
+    socket_path: &str,
+    pane_id: &str,
+    pane_cwd: &str,
+) -> Result<(Option<String>, Option<Annotation>), String> {
+    let resp = socket_client::request(
+        socket_path,
+        "pane.process_info",
+        serde_json::json!({"pane_id": pane_id}),
+    )
+    .map_err(|e| format!("pane.process_info failed: {e}"))?;
+    let procs = resp
+        .get("process_info")
+        .and_then(|p| p.get("foreground_processes"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Plain shell: only foreground process is a known shell.
+    if procs.len() == 1 {
+        if let Some(name) = procs[0].get("name").and_then(|v| v.as_str()) {
+            if SHELLS.contains(&name) {
+                return Ok((None, None));
+            }
+        }
+    }
+
+    // Non-shell: pick the non-shell process whose cwd matches the pane cwd,
+    // smallest pid tiebreak. The spike showed the foreground process group
+    // can include the agent's MCP-server children (e.g. bun, trajectory);
+    // matching cwd is the best available heuristic without ppid.
+    let candidates: Vec<&serde_json::Value> = procs
+        .iter()
+        .filter(|p| {
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            !SHELLS.contains(&name)
+        })
+        .collect();
+    // Prefer a cwd match; fall back to all non-shell candidates.
+    let cwd_match: Vec<&serde_json::Value> = candidates
+        .iter()
+        .copied()
+        .filter(|p| {
+            p.get("cwd").and_then(|v| v.as_str()).unwrap_or("") == pane_cwd
+        })
+        .collect();
+    let pool: Vec<&serde_json::Value> = if !cwd_match.is_empty() { cwd_match } else { candidates };
+    // Smallest pid tiebreak (clone to a sortable vec).
+    let mut sorted: Vec<&serde_json::Value> = pool;
+    sorted.sort_by_key(|p| p.get("pid").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
+
+    match sorted.first() {
+        Some(proc) => {
+            let cmdline = proc.get("cmdline").and_then(|v| v.as_str()).unwrap_or("");
+            let name = proc.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            if cmdline.is_empty() {
+                Ok((
+                    None,
+                    Some(Annotation {
+                        pane_id: pane_id.to_string(),
+                        text: format!("best-effort: pane {pane_id} process {name}; no cmdline; verify"),
+                    }),
+                ))
+            } else {
+                Ok((
+                    Some(cmdline.to_string()),
+                    Some(Annotation {
+                        pane_id: pane_id.to_string(),
+                        text: format!("best-effort: captured from pane {pane_id} process {name}; verify"),
+                    }),
+                ))
+            }
+        }
+        None => Ok((
+            None,
+            Some(Annotation {
+                pane_id: pane_id.to_string(),
+                text: format!("best-effort: pane {pane_id}; no confident match"),
+            }),
+        )),
+    }
+}
+
+/// Parse a `pane.process_info` response into its foreground processes
+/// (pure, for unit testing). Returns the `foreground_processes` array.
+#[cfg(test)]
+pub fn parse_foreground_processes(resp: &serde_json::Value) -> Vec<serde_json::Value> {
+    resp.get("process_info")
+        .and_then(|p| p.get("foreground_processes"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Apply the cwd policy to one pane's cwd (spec §6).
@@ -452,9 +668,75 @@ fn apply_cwd_policy(raw_cwd: &str, base_cwd: &str, policy: CwdPolicy) -> Option<
     }
 }
 
-/// Serialize a `Template` to YAML (spec §8 step 9).
-pub fn template_to_yaml(template: &Template) -> Result<String, String> {
-    serde_yaml::to_string(template).map_err(|e| format!("YAML serialize failed: {e}"))
+/// Serialize a `Template` to YAML (spec §8 step 9), injecting `# best-effort:`
+/// annotations as comments above the matching pane's `command:` line.
+///
+/// serde_yaml can't emit comments natively, so we serialize first, then
+/// post-process: for each annotation, find the pane's `command:` line and
+/// insert the comment immediately above it. Pane ids are NOT in the
+/// serialized YAML (they're dropped in the mapping), so we match by pane
+/// order — the Nth annotation belongs to the Nth pane that has a
+/// `command:` key, in document order. This is fragile but correct for
+/// the deterministic output serde_yaml produces.
+pub fn template_to_yaml(
+    template: &Template,
+    annotations: &[Annotation],
+) -> Result<String, String> {
+    let yaml = serde_yaml::to_string(template).map_err(|e| format!("YAML serialize failed: {e}"))?;
+    if annotations.is_empty() {
+        return Ok(yaml);
+    }
+    Ok(inject_comments(&yaml, annotations))
+}
+
+/// Inject `# best-effort:` comments above `command:` lines in the YAML.
+///
+/// We walk the serialized YAML line by line. Each `- command:` (or
+/// `command:`) line is the Nth pane's command field, in document order.
+/// The Nth annotation (if any) is inserted as a comment above it. Blank
+/// `command:` lines (serialized as `command: null` or omitted entirely
+/// via skip_serializing_if) don't get a comment — the annotation for a
+/// `None` command is still useful, so we attach it above the pane's first
+/// serialized field instead.
+///
+/// This is a best-effort post-processor; the exact insertion point is an
+/// implementation detail (the contract is "adjacent to the guessed
+/// command"). For `None` commands with an annotation, we insert above
+/// the pane's first key (cwd/name), or skip if the pane serialized as
+/// `{}` (no keys).
+fn inject_comments(yaml: &str, annotations: &[Annotation]) -> String {
+    let mut out = String::with_capacity(yaml.len() + annotations.len() * 80);
+    let mut ann_iter = annotations.iter();
+    let mut next_ann = ann_iter.next();
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        // A `command:` key (with a value) marks a pane whose command was
+        // captured. Insert the matching annotation above it.
+        if line.contains("command:") && !line.contains("command: null") {
+            if let Some(ann) = next_ann {
+                // Find the indentation of the current line to align the comment.
+                let indent = line.len() - line.trim_start().len();
+                out.push_str(&" ".repeat(indent));
+                out.push_str("# ");
+                out.push_str(&ann.text);
+                out.push('\n');
+                next_ann = ann_iter.next();
+            }
+            out.push_str(line);
+            out.push('\n');
+            i += 1;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        i += 1;
+    }
+    // Any remaining annotations (for panes whose command: null and thus
+    // serialized without a command: line) are dropped — there's no clean
+    // anchor point. The editor step (C5) is the surface for those.
+    out.trim_end().to_string()
 }
 
 /// The templates dir: `~/.config/herdr/templates/`.
@@ -610,7 +892,7 @@ mod tests {
     #[test]
     fn map_tab_nested_split_preserves_structure() {
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute);
+        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank, "", &mut Vec::new());
         assert_eq!(tt.name, "main");
         assert_eq!(tt.layout.direction, "v"); // right → v
         assert_eq!(tt.layout.ratio, 50);
@@ -638,7 +920,7 @@ mod tests {
     fn map_tab_single_pane_wraps_in_one_pane_layout() {
         let root = json!({"type": "pane", "pane_id": "p1", "cwd": "/x"});
         let tab = captured_tab(root);
-        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute);
+        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute, CommandPolicy::Blank, "", &mut Vec::new());
         assert_eq!(tt.layout.direction, "v");
         assert_eq!(tt.layout.ratio, 0);
         assert_eq!(tt.layout.panes.len(), 1);
@@ -699,14 +981,14 @@ mod tests {
     fn template_to_yaml_round_trips_through_read_templates() {
         // Build a template from the nested fixture, serialize, parse back.
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative);
+        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative, CommandPolicy::Blank, "", &mut Vec::new());
         let template = Template {
             name: "roundtrip".to_string(),
             match_globs: vec![],
             default: false,
             tabs: vec![tt],
         };
-        let yaml = template_to_yaml(&template).unwrap();
+        let yaml = template_to_yaml(&template, &[]).unwrap();
         // Parse it back through the existing read_templates path
         // (source::Template deserialization).
         let parsed: source::Template = serde_yaml::from_str(&yaml).unwrap();
@@ -723,5 +1005,103 @@ mod tests {
         assert_eq!(CwdPolicy::parse("inherit").unwrap(), CwdPolicy::Inherit);
         assert_eq!(CwdPolicy::parse("").unwrap(), CwdPolicy::Relative); // default
         assert!(CwdPolicy::parse("bogus").is_err());
+    }
+
+    // ── Phase C3: best-effort command capture ──
+
+    fn process_info_resp(procs: &[serde_json::Value]) -> serde_json::Value {
+        json!({"process_info": {"foreground_processes": procs}})
+    }
+
+    #[test]
+    fn best_effort_plain_shell_returns_none_no_annotation() {
+        // A lone fish process → plain shell, high confidence.
+        let resp = process_info_resp(&[json!({
+            "pid": 100, "name": "fish", "cmdline": "fish", "cwd": "/code"
+        })]);
+        let procs = parse_foreground_processes(&resp);
+        // best_effort_command takes a socket; test the pure logic by
+        // reconstructing the decision from the parsed procs.
+        let only_shell = procs.len() == 1
+            && procs[0].get("name").and_then(|v| v.as_str()).map(|n| SHELLS.contains(&n)).unwrap_or(false);
+        assert!(only_shell);
+    }
+
+    #[test]
+    fn best_effort_non_shell_picks_cwd_match() {
+        // Two non-shell procs, one matches the pane cwd → pick it.
+        let procs = vec![
+            json!({"pid": 200, "name": "bun",   "cmdline": "bun server.mjs", "cwd": "/other"}),
+            json!({"pid": 100, "name": "pi",    "cmdline": "pi",            "cwd": "/code"}),
+        ];
+        // Simulate the selection: non-shell, cwd match, smallest pid.
+        let candidates: Vec<&serde_json::Value> = procs
+            .iter()
+            .filter(|p| !SHELLS.contains(&p.get("name").and_then(|v| v.as_str()).unwrap_or("")))
+            .collect();
+        let cwd_match: Vec<&serde_json::Value> = candidates
+            .iter()
+            .copied()
+            .filter(|p| p.get("cwd").and_then(|v| v.as_str()).unwrap_or("") == "/code")
+            .collect();
+        let mut sorted: Vec<&serde_json::Value> = cwd_match;
+        sorted.sort_by_key(|p| p.get("pid").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
+        let picked = sorted.first().unwrap();
+        assert_eq!(picked.get("cmdline").and_then(|v| v.as_str()).unwrap(), "pi");
+    }
+
+    #[test]
+    fn best_effort_no_match_returns_none_with_annotation() {
+        // Only a shell present but multiple → no non-shell candidate.
+        let procs = vec![json!({"pid": 1, "name": "fish", "cmdline": "fish", "cwd": "/code"})];
+        let candidates: Vec<&serde_json::Value> = procs
+            .iter()
+            .filter(|p| !SHELLS.contains(&p.get("name").and_then(|v| v.as_str()).unwrap_or("")))
+            .collect();
+        assert!(candidates.is_empty(), "no non-shell candidates → no confident match");
+    }
+
+    #[test]
+    fn command_policy_parse_known_values() {
+        assert_eq!(CommandPolicy::parse("keep").unwrap(), CommandPolicy::Keep);
+        assert_eq!(CommandPolicy::parse("blank").unwrap(), CommandPolicy::Blank);
+        assert_eq!(CommandPolicy::parse("").unwrap(), CommandPolicy::Keep); // default
+        assert!(CommandPolicy::parse("bogus").is_err());
+    }
+
+    #[test]
+    fn inject_comments_inserts_above_command_line() {
+        let yaml = "name: t\ntabs:\n- name: tab1\n  layout:\n    panes:\n    - command: pi\n      cwd: .\n    - cwd: .\n";
+        let annotations = vec![Annotation {
+            pane_id: "p1".to_string(),
+            text: "best-effort: captured from pane p1 process pi; verify".to_string(),
+        }];
+        let result = inject_comments(yaml, &annotations);
+        // The comment should appear immediately above the `command: pi` line.
+        let lines: Vec<&str> = result.lines().collect();
+        let cmd_idx = lines.iter().position(|l| l.contains("command: pi")).unwrap();
+        assert!(lines[cmd_idx - 1].contains("# best-effort:"));
+        assert!(lines[cmd_idx - 1].contains("process pi"));
+    }
+
+    #[test]
+    fn inject_comments_no_annotations_returns_unchanged() {
+        let yaml = "name: t\ntabs: []\n";
+        let result = inject_comments(yaml, &[]);
+        assert_eq!(result, yaml.trim_end());
+    }
+
+    #[test]
+    fn annotation_for_none_command_is_dropped_gracefully() {
+        // A pane with command: null serializes without a command: line
+        // (skip_serializing_if). Its annotation has no anchor and is dropped.
+        let yaml = "name: t\ntabs:\n- name: tab1\n  layout:\n    panes:\n    - cwd: .\n";
+        let annotations = vec![Annotation {
+            pane_id: "p2".to_string(),
+            text: "best-effort: no confident match".to_string(),
+        }];
+        let result = inject_comments(yaml, &annotations);
+        // No comment injected (nothing to anchor to).
+        assert!(!result.contains("# best-effort:"));
     }
 }

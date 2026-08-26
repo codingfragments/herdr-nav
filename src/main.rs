@@ -1342,14 +1342,16 @@ fn main() {
     }
 }
 
-/// `herdr-nav capture` (Phase C2): read the active workspace from the
-/// daemon, map it to a `Template`, apply the cwd policy, and write a
-/// YAML to `~/.config/herdr/templates/<name>.yaml` that the existing
-/// `^t` apply path can read and build.
+/// `herdr-nav capture` (Phase C3): read the active workspace from the
+/// daemon, map it to a `Template`, best-effort capture each pane's
+/// `command` from `pane.process_info`, and write a YAML to
+/// `~/.config/herdr/templates/<name>.yaml` that the existing `^t` apply
+/// path can read and build.
 ///
 /// Flags (non-interactive; the wizard lands in C4):
 ///   --name <name>          template name (default: the workspace label)
 ///   --cwd-policy <p>       relative | absolute | inherit (default: relative)
+///   --command-policy <p>   keep | blank (default: keep)
 ///   --summary              print the C1 plain-text summary instead of writing
 fn run_capture() -> Result<(), String> {
     let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
@@ -1359,6 +1361,7 @@ fn run_capture() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut name: Option<String> = None;
     let mut cwd_policy = capture::CwdPolicy::Relative;
+    let mut command_policy = capture::CommandPolicy::Keep;
     let mut summary_only = false;
     let mut i = 0;
     while i < args.len() {
@@ -1370,6 +1373,12 @@ fn run_capture() -> Result<(), String> {
             "--cwd-policy" => {
                 i += 1;
                 cwd_policy = capture::CwdPolicy::parse(
+                    args.get(i).map(String::as_str).unwrap_or(""),
+                )?;
+            }
+            "--command-policy" => {
+                i += 1;
+                command_policy = capture::CommandPolicy::parse(
                     args.get(i).map(String::as_str).unwrap_or(""),
                 )?;
             }
@@ -1401,8 +1410,9 @@ fn run_capture() -> Result<(), String> {
         }
     };
 
-    let template = capture::capture_template(&socket_path, &name, cwd_policy)?;
-    let yaml = capture::template_to_yaml(&template)?;
+    let (template, annotations) =
+        capture::capture_template(&socket_path, &name, cwd_policy, command_policy)?;
+    let yaml = capture::template_to_yaml(&template, &annotations)?;
     let path = capture::write_template(&name, &yaml)?;
     println!("wrote {}", path.display());
     Ok(())
