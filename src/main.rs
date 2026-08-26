@@ -13,6 +13,7 @@
 //! (Phase 3) land in later phases.
 
 mod capture;
+mod capture_ui;
 mod config;
 mod dirnav;
 mod nav;
@@ -1363,6 +1364,8 @@ fn run_capture() -> Result<(), String> {
     let mut cwd_policy = capture::CwdPolicy::Relative;
     let mut command_policy = capture::CommandPolicy::Keep;
     let mut summary_only = false;
+    let mut cwd_overridden = false;
+    let mut command_overridden = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1375,12 +1378,14 @@ fn run_capture() -> Result<(), String> {
                 cwd_policy = capture::CwdPolicy::parse(
                     args.get(i).map(String::as_str).unwrap_or(""),
                 )?;
+                cwd_overridden = true;
             }
             "--command-policy" => {
                 i += 1;
                 command_policy = capture::CommandPolicy::parse(
                     args.get(i).map(String::as_str).unwrap_or(""),
                 )?;
+                command_overridden = true;
             }
             "--summary" => summary_only = true,
             _ => {} // ignore unknown (the "capture" subcommand word itself)
@@ -1393,6 +1398,17 @@ fn run_capture() -> Result<(), String> {
         let summary = capture::capture_summary(&socket_path)?;
         capture::print_summary(&summary);
         return Ok(());
+    }
+
+    // Interactive vs non-interactive: if any of --name/--cwd-policy/
+    // --command-policy was passed, run the non-interactive flag path
+    // (for scripts/tests). Otherwise run the wizard (the default for
+    // the popup binding).
+    let interactive = name.is_none()
+        && !cwd_overridden
+        && !command_overridden;
+    if interactive {
+        return capture_ui::run(&socket_path);
     }
 
     // Resolve the name: --name, else the focused workspace's label.

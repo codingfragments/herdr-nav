@@ -20,6 +20,8 @@
 //! it is param-driven by `tab_id` and returns the portable recursive
 //! tree.
 
+use std::collections::HashMap;
+
 use crate::socket_client;
 use crate::source::{self, Layout, PaneNode, Template, TemplateTab};
 
@@ -280,31 +282,49 @@ impl CommandPolicy {
 /// confidence). From the spike: a lone `fish`/`bash`/`zsh` is reliable.
 const SHELLS: &[&str] = &["fish", "bash", "zsh", "sh", "dash", "ksh", "tcsh", "csh"];
 
-/// A captured tab's full export tree (the `layout.export` root) plus its
-/// live label, ready to map to a `TemplateTab`.
-struct CapturedTab {
-    tab_label: String,
-    root: serde_json::Value,
+// ── Raw capture (Phase C4: split fetch from build for live preview) ──
+
+/// One tab's raw export tree + live label. The tree is the `layout.export`
+/// `root` node (a recursive `split`/`pane` tree).
+#[derive(Debug, Clone)]
+pub struct RawTab {
+    pub tab_label: String,
+    pub root: serde_json::Value,
 }
 
-/// Capture the active workspace and emit a `Template` (spec §4/§7).
+/// The best-effort command capture result for one pane (pre-computed
+/// during `fetch_raw` so the wizard can rebuild the template on every
+/// render without socket calls).
+#[derive(Debug, Clone)]
+pub struct PaneCommandResult {
+    pub command: Option<String>,
+    pub annotation: Option<Annotation>,
+}
+
+/// All the raw data fetched from the daemon in one pass. The wizard
+/// caches this and calls `build_template` on every render to produce a
+/// live YAML preview as the user makes choices.
+#[derive(Debug, Clone)]
+pub struct RawCapture {
+    pub workspace_id: String,
+    pub workspace_label: String,
+    pub base_cwd: String,
+    pub tabs: Vec<RawTab>,
+    /// Per-pane best-effort command results, keyed by pane_id.
+    pub pane_commands: HashMap<String, PaneCommandResult>,
+}
+
+/// Fetch all raw data from the daemon in one pass (spec §4/§7).
 ///
-/// This is the C2/C3 entry point: it reads the workspace, fetches the
-/// full `layout.export` tree per tab, derives the base cwd, applies the
-/// cwd policy, best-effort captures each pane's `command` from
-/// `pane.process_info` (C3), and assembles a `Template`. Returns the
-/// template plus a list of `# best-effort:` annotations to inject as
-/// YAML comments (serde_yaml can't emit comments natively).
-pub fn capture_template(
-    socket_path: &str,
-    name: &str,
-    cwd_policy: CwdPolicy,
-    command_policy: CommandPolicy,
-) -> Result<(Template, Vec<Annotation>), String> {
+/// This does all socket calls: `workspace.list`, `tab.list`, one
+/// `layout.export` per tab, and one `pane.process_info` per pane. The
+/// wizard calls this once on entry; `build_template` (pure) is then
+/// called on every render for the live preview.
+pub fn fetch_raw(socket_path: &str) -> Result<RawCapture, String> {
     // 1. Focused workspace.
     let ws_resp = socket_client::request(socket_path, "workspace.list", serde_json::json!({}))
         .map_err(|e| format!("workspace.list failed: {e}"))?;
-    let (workspace_id, _workspace_label) = parse_focused_workspace(&ws_resp)?;
+    let (workspace_id, workspace_label) = parse_focused_workspace(&ws_resp)?;
 
     // 2. Tabs for that workspace, sorted by number.
     let tab_resp = socket_client::request(socket_path, "tab.list", serde_json::json!({}))
@@ -312,41 +332,149 @@ pub fn capture_template(
     let tabs_meta = parse_tabs_for_workspace(&tab_resp, &workspace_id);
 
     // 3. Full layout.export tree per tab.
-    let mut captured = Vec::with_capacity(tabs_meta.len());
+    let mut tabs = Vec::with_capacity(tabs_meta.len());
     for (tab_id, tab_label, _number) in &tabs_meta {
         let root = fetch_layout_root(socket_path, tab_id)?;
-        captured.push(CapturedTab {
+        tabs.push(RawTab {
             tab_label: tab_label.clone(),
             root,
         });
     }
 
-    // 4. Derive the base cwd = first pane's cwd of the first tab
-    //    (spec §6). The first tab is tabs_meta[0] (sorted by number);
-    //    its first pane is the leftmost leaf of its export tree.
-    let base_cwd = captured
+    // 4. Derive the base cwd = first pane's cwd of the first tab.
+    let base_cwd = tabs
         .first()
         .and_then(|t| first_leaf_cwd(&t.root))
         .unwrap_or_default();
 
-    // 5. Map each tab → TemplateTab, applying cwd + command policies.
-    //    Annotations (for # best-effort: comments) are collected in pane
-    //    order across the whole template.
+    // 5. Collect all pane_ids and fetch best-effort commands.
+    let mut pane_commands = HashMap::new();
+    for tab in &tabs {
+        for pane_id in collect_pane_ids(&tab.root) {
+            let cwd = pane_cwd_for(&tab.root, &pane_id).unwrap_or_default();
+            match best_effort_command(socket_path, &pane_id, &cwd) {
+                Ok((command, annotation)) => {
+                    pane_commands.insert(pane_id.clone(), PaneCommandResult { command, annotation });
+                }
+                Err(e) => {
+                    pane_commands.insert(
+                        pane_id.clone(),
+                        PaneCommandResult {
+                            command: None,
+                            annotation: Some(Annotation {
+                                pane_id: pane_id.clone(),
+                                text: format!("best-effort: pane.process_info failed: {e}"),
+                            }),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(RawCapture {
+        workspace_id,
+        workspace_label,
+        base_cwd,
+        tabs,
+        pane_commands,
+    })
+}
+
+/// Walk an export tree and collect all leaf pane_ids in order
+/// (left-to-right, depth-first).
+fn collect_pane_ids(root: &serde_json::Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    collect_pane_ids_rec(root, &mut ids);
+    ids
+}
+
+fn collect_pane_ids_rec(node: &serde_json::Value, ids: &mut Vec<String>) {
+    let kind = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match kind {
+        "pane" => {
+            if let Some(id) = node.get("pane_id").and_then(|v| v.as_str()) {
+                ids.push(id.to_string());
+            }
+        }
+        "split" => {
+            if let Some(first) = node.get("first") {
+                collect_pane_ids_rec(first, ids);
+            }
+            if let Some(second) = node.get("second") {
+                collect_pane_ids_rec(second, ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Find the cwd for a specific pane_id in an export tree.
+fn pane_cwd_for(root: &serde_json::Value, target_pane_id: &str) -> Option<String> {
+    let kind = root.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match kind {
+        "pane" => {
+            let id = root.get("pane_id").and_then(|v| v.as_str()).unwrap_or("");
+            if id == target_pane_id {
+                root.get("cwd").and_then(|v| v.as_str()).map(str::to_string)
+            } else {
+                None
+            }
+        }
+        "split" => root
+            .get("first")
+            .and_then(|n| pane_cwd_for(n, target_pane_id))
+            .or_else(|| root.get("second").and_then(|n| pane_cwd_for(n, target_pane_id))),
+        _ => None,
+    }
+}
+
+/// Build a `Template` from the raw capture + the user's choices (pure,
+/// no socket calls). Called on every wizard render for the live preview.
+///
+/// `tab_names` overrides the live tab labels (first entry → first tab,
+/// etc.); entries beyond the tab count are ignored, missing entries
+/// fall back to the live label.
+pub fn build_template(
+    raw: &RawCapture,
+    name: &str,
+    cwd_policy: CwdPolicy,
+    command_policy: CommandPolicy,
+    tab_names: &[String],
+    match_globs: Vec<String>,
+    default: bool,
+) -> (Template, Vec<Annotation>) {
     let mut annotations = Vec::new();
-    let template_tabs = captured
+    let template_tabs = raw
+        .tabs
         .iter()
-        .map(|t| map_tab(t, &base_cwd, cwd_policy, command_policy, socket_path, &mut annotations))
+        .enumerate()
+        .map(|(i, tab)| {
+            let label = tab_names.get(i).cloned().unwrap_or_else(|| tab.tab_label.clone());
+            map_tab(tab, &raw.base_cwd, cwd_policy, command_policy, &raw.pane_commands, &mut annotations, label)
+        })
         .collect();
 
-    Ok((
+    (
         Template {
             name: name.to_string(),
-            match_globs: Vec::new(),
-            default: false,
+            match_globs,
+            default,
             tabs: template_tabs,
         },
         annotations,
-    ))
+    )
+}
+
+/// Convenience wrapper: fetch + build in one call (for the CLI path).
+pub fn capture_template(
+    socket_path: &str,
+    name: &str,
+    cwd_policy: CwdPolicy,
+    command_policy: CommandPolicy,
+) -> Result<(Template, Vec<Annotation>), String> {
+    let raw = fetch_raw(socket_path)?;
+    Ok(build_template(&raw, name, cwd_policy, command_policy, &[], Vec::new(), false))
 }
 
 /// Fetch the `layout.export` root for one tab.
@@ -380,59 +508,56 @@ fn first_leaf_cwd(root: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Map a captured tab's export tree → a `TemplateTab` (spec §7).
+/// Map a raw tab's export tree → a `TemplateTab` (spec §7).
 ///
 /// The export root is either a `pane` (single-pane tab) or a `split`
 /// (multi-pane). A tab's `layout` is always a `Layout` (a split), so:
 /// - `pane` root → a one-pane `Layout` (direction "v", ratio 0).
 /// - `split` root → `map_split` builds the `Layout` directly.
 ///
-/// `annotations` is appended to in pane order (left-to-right, depth-first);
-/// each entry is a `# best-effort:` comment to inject above the pane's
-/// `command:` line in the serialized YAML.
+/// `tab_name` overrides the live label. `annotations` is appended to
+/// in pane order (left-to-right, depth-first).
 fn map_tab(
-    tab: &CapturedTab,
+    tab: &RawTab,
     base_cwd: &str,
     cwd_policy: CwdPolicy,
     command_policy: CommandPolicy,
-    socket_path: &str,
+    pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
+    tab_name: String,
 ) -> TemplateTab {
     let kind = tab.root.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let layout = match kind {
-        "split" => map_split(&tab.root, base_cwd, cwd_policy, command_policy, socket_path, annotations),
-        // Single-pane tab (or unknown): wrap the pane in a one-pane Layout.
+        "split" => map_split(&tab.root, base_cwd, cwd_policy, command_policy, pane_commands, annotations),
         _ => Layout {
             direction: "v".to_string(),
             ratio: 0,
-            panes: vec![map_pane(&tab.root, base_cwd, cwd_policy, command_policy, socket_path, annotations)],
+            panes: vec![map_pane(&tab.root, base_cwd, cwd_policy, command_policy, pane_commands, annotations)],
         },
     };
     TemplateTab {
-        name: tab.tab_label.clone(),
+        name: tab_name,
         cwd: None,
         layout,
     }
 }
 
-/// Map a `split` export node → a `Layout`. Its `first`/`second` children
-/// are mapped via `map_child` (pane → leaf, split → nested split).
 fn map_split(
     node: &serde_json::Value,
     base_cwd: &str,
     cwd_policy: CwdPolicy,
     command_policy: CommandPolicy,
-    socket_path: &str,
+    pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
 ) -> Layout {
     let direction = node.get("direction").and_then(|v| v.as_str()).unwrap_or("right");
     let ratio = node.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.5);
     let mut panes = Vec::new();
     if let Some(first) = node.get("first") {
-        panes.push(map_child(first, base_cwd, cwd_policy, command_policy, socket_path, annotations));
+        panes.push(map_child(first, base_cwd, cwd_policy, command_policy, pane_commands, annotations));
     }
     if let Some(second) = node.get("second") {
-        panes.push(map_child(second, base_cwd, cwd_policy, command_policy, socket_path, annotations));
+        panes.push(map_child(second, base_cwd, cwd_policy, command_policy, pane_commands, annotations));
     }
     Layout {
         direction: map_direction(direction),
@@ -441,34 +566,32 @@ fn map_split(
     }
 }
 
-/// Map a child of a split → a `PaneNode`. A `pane` → leaf; a `split` →
-/// `Nested{layout}` (recursive).
 fn map_child(
     node: &serde_json::Value,
     base_cwd: &str,
     cwd_policy: CwdPolicy,
     command_policy: CommandPolicy,
-    socket_path: &str,
+    pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
 ) -> PaneNode {
     let kind = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
         "split" => PaneNode::Nested {
-            layout: map_split(node, base_cwd, cwd_policy, command_policy, socket_path, annotations),
+            layout: map_split(node, base_cwd, cwd_policy, command_policy, pane_commands, annotations),
         },
-        _ => map_pane(node, base_cwd, cwd_policy, command_policy, socket_path, annotations),
+        _ => map_pane(node, base_cwd, cwd_policy, command_policy, pane_commands, annotations),
     }
 }
 
-/// Map a `pane` export node → a leaf `PaneNode::Pane`. The `command` is
-/// best-effort captured from `pane.process_info` (C3), or `None` when
-/// the command policy is `Blank` or the pane is a plain shell.
+/// Map a `pane` export node → a leaf `PaneNode::Pane`. The `command`
+/// comes from the pre-computed `pane_commands` map (fetched during
+/// `fetch_raw`), or `None` when the policy is `Blank`.
 fn map_pane(
     node: &serde_json::Value,
     base_cwd: &str,
     cwd_policy: CwdPolicy,
     command_policy: CommandPolicy,
-    socket_path: &str,
+    pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
 ) -> PaneNode {
     let raw_cwd = node.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
@@ -476,24 +599,16 @@ fn map_pane(
     let pane_id = node.get("pane_id").and_then(|v| v.as_str()).unwrap_or("");
 
     let command = if command_policy == CommandPolicy::Blank {
-        None // --command-policy blank: no process_info calls
+        None
     } else {
-        match best_effort_command(socket_path, pane_id, raw_cwd) {
-            Ok((cmd, ann)) => {
-                if let Some(a) = ann {
-                    annotations.push(a);
+        match pane_commands.get(pane_id) {
+            Some(r) => {
+                if let Some(ref ann) = r.annotation {
+                    annotations.push(ann.clone());
                 }
-                cmd
+                r.command.clone()
             }
-            Err(e) => {
-                // A failed process_info shouldn't kill the capture —
-                // leave the command blank and note the error.
-                annotations.push(Annotation {
-                    pane_id: pane_id.to_string(),
-                    text: format!("best-effort: pane.process_info failed: {e}"),
-                });
-                None
-            }
+            None => None,
         }
     };
 
@@ -885,14 +1000,14 @@ mod tests {
         })
     }
 
-    fn captured_tab(root: serde_json::Value) -> CapturedTab {
-        CapturedTab { tab_label: "main".to_string(), root }
+    fn captured_tab(root: serde_json::Value) -> RawTab {
+        RawTab { tab_label: "main".to_string(), root }
     }
 
     #[test]
     fn map_tab_nested_split_preserves_structure() {
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank, "", &mut Vec::new());
+        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string());
         assert_eq!(tt.name, "main");
         assert_eq!(tt.layout.direction, "v"); // right → v
         assert_eq!(tt.layout.ratio, 50);
@@ -920,7 +1035,7 @@ mod tests {
     fn map_tab_single_pane_wraps_in_one_pane_layout() {
         let root = json!({"type": "pane", "pane_id": "p1", "cwd": "/x"});
         let tab = captured_tab(root);
-        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute, CommandPolicy::Blank, "", &mut Vec::new());
+        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "tab1".to_string());
         assert_eq!(tt.layout.direction, "v");
         assert_eq!(tt.layout.ratio, 0);
         assert_eq!(tt.layout.panes.len(), 1);
@@ -981,7 +1096,7 @@ mod tests {
     fn template_to_yaml_round_trips_through_read_templates() {
         // Build a template from the nested fixture, serialize, parse back.
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative, CommandPolicy::Blank, "", &mut Vec::new());
+        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string());
         let template = Template {
             name: "roundtrip".to_string(),
             match_globs: vec![],
