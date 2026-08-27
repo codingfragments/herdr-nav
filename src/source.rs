@@ -425,8 +425,8 @@ impl Provider for ZoxideProvider {
 /// because `worktree.create` creates a worktree *child of the current
 /// workspace* whenever the target path is inside *any* git repo, even
 /// one unrelated to the current ws. Building every dir open through the
-/// template path (Enter and ^t unified) fixes that and makes the two
-/// keys behave identically modulo which template they use.
+/// template path (Enter, unified across dir/zox/dirnav) fixes that and
+/// makes every entry behave identically modulo which template they use.
 ///
 /// `id` is the node id (`pinned:<path>` or `zox:<path>`); the path is
 /// the part after the colon. `name` is the workspace label (None =
@@ -457,7 +457,7 @@ pub fn open_dir_workspace_template(
 /// amended): the match-glob or `default: true` template if any
 /// templates exist, else the hardcoded 1-tab/1-pane default. Uses
 /// the same resolution as `preselect_template` so `Enter` builds
-/// exactly what `^t` would have pre-highlighted.
+/// exactly what the picker would have pre-highlighted.
 pub fn default_template_for(path: &str) -> Template {
     let templates = read_templates();
     if templates.is_empty() {
@@ -1062,6 +1062,10 @@ pub struct Template {
 /// One tab in a template.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TemplateTab {
+    /// The tab's label. Applied at build time: the first tab is renamed
+    /// via `tab.rename` after `workspace.create` (which creates it with
+    /// a default numeric label); later tabs get `label` at `tab.create`
+    /// time (the socket API accepts it — confirmed live).
     pub name: String,
     /// Working directory for every pane in this tab. None =
     /// the workspace's cwd (the path the workspace was opened at).
@@ -1140,7 +1144,8 @@ fn is_default_direction(d: &str) -> bool {
 
 /// Read every `*.yaml` in `~/.config/herdr/templates/` →
 /// `Vec<Template>`. Empty if the dir is missing or empty
-/// (no crash; `^t` unbound). One file per template.
+/// (no crash; Enter skips the picker and uses the hardcoded default).
+/// One file per template.
 pub fn read_templates() -> Vec<Template> {
     let Some(dir) = std::env::var("HOME")
         .ok()
@@ -1208,6 +1213,21 @@ pub fn build_workspace_from_template(
         .and_then(|v| v.get("pane_id"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    // The first tab is created by `workspace.create`; its id is in
+    // the response (either `tab.tab_id` or `workspace.active_tab_id`).
+    // We need it to rename the first tab to the template's tab name
+    // (the workspace is created with a default numeric label).
+    let first_tab_id = resp
+        .get("tab")
+        .and_then(|v| v.get("tab_id"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            resp.get("workspace")
+                .and_then(|v| v.get("active_tab_id"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
 
     // Focus the new workspace's root pane before any splits —
     // herdr's pane.split targets the ACTIVE pane in the ACTIVE
@@ -1231,14 +1251,29 @@ pub fn build_workspace_from_template(
         // The first tab uses the workspace's initial pane; later
         // tabs need tab.create.
         let (pane_id, _new_tab) = if tab_i == 0 {
+            // Rename the first tab to the template's tab name. The
+            // workspace is created with a default numeric label, so
+            // we set the template name via `tab.rename` (the first
+            // tab isn't created by us, so we can't pass `label` to
+            // `tab.create` for it). Best-effort: a missing tab id or
+            // an empty template name is a no-op.
+            if !first_tab_id.is_empty() && !tab.name.is_empty() {
+                let _ = crate::socket_client::request(
+                    &socket,
+                    "tab.rename",
+                    serde_json::json!({"tab_id": &first_tab_id, "label": &tab.name}),
+                );
+            }
             (first_pane.clone().unwrap_or_default(), false)
         } else {
-            let r = crate::socket_client::request(
-                &socket,
-                "tab.create",
-                serde_json::json!({"workspace_id": ws_id, "cwd": tab_cwd}),
-            )
-            .map_err(|e| e.to_string())?;
+            // `tab.create` accepts a `label` param (confirmed live),
+            // so later tabs get their template name at creation.
+            let mut params = serde_json::json!({"workspace_id": ws_id, "cwd": tab_cwd});
+            if !tab.name.is_empty() {
+                params["label"] = serde_json::json!(tab.name);
+            }
+            let r = crate::socket_client::request(&socket, "tab.create", params)
+                .map_err(|e| e.to_string())?;
             let new_root = r
                 .get("root_pane")
                 .and_then(|v| v.get("pane_id"))

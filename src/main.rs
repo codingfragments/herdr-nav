@@ -53,10 +53,9 @@ const KEY_DEBOUNCE: Duration = Duration::from_millis(40);
 /// Prefilled with a good default derived from the path; the user
 /// confirms (Enter) to create + enter, or cancels (Esc) to abort
 /// without creating and stay in the popup. Carries the template to
-/// build from: for `Enter` it's the auto-resolved default, for `^t`
-/// it's the user-selected template (spec §8.4 amended — ^t now asks
-/// for a name after template selection, so both keys share one build
-/// path).
+/// build from — either the user-selected template (when the template
+/// picker was shown) or the hardcoded 1-tab/1-pane default (when no
+/// templates are configured and the picker was skipped).
 struct NamePrompt {
     /// The node id being acted on (`pinned:<path>` / `zox:<path>`).
     node_id: String,
@@ -68,9 +67,12 @@ struct NamePrompt {
     template: source::Template,
 }
 
-/// Template picker state (spec §8.4): `^t` on a dir/zox
-/// opens a selector listing templates; ↑↓ moves, Enter builds,
-/// Esc returns to the switcher.
+/// Template picker state (spec §8.4 amended): `Enter` on a
+/// dir/zox/dirnav entry opens a selector listing templates (when
+/// templates are configured); the default is preselected via
+/// match-glob → `default: true` → first. ↑↓ moves, Enter advances
+/// to the name prompt carrying the chosen template, Esc returns to
+/// the navigator without creating anything.
 struct TemplatePicker {
     /// The node id being acted on (`pinned:<path>` / `zox:<path>`).
     node_id: String,
@@ -201,8 +203,9 @@ fn event_loop<B: ratatui::backend::Backend>(
     // confirm = create + enter; cancel = don't create, stay open).
     // None = no prompt active; Some = prompt visible, editing the name.
     let mut name_prompt: Option<NamePrompt> = None;
-    // Template picker (spec §8.4): `^t` on a dir/zox opens a
-    // selector listing templates; Enter builds, Esc returns.
+    // Template picker (spec §8.4 amended): Enter on a dir/zox/dirnav
+    // entry opens a selector listing templates (when templates are
+    // configured); Enter advances to the name prompt, Esc returns.
     let mut template_picker: Option<TemplatePicker> = None;
     // Plugin action picker (spec §8.3): Enter on a plugin opens
     // a selector listing its actions; ↑↓ move, Enter runs,
@@ -219,8 +222,6 @@ fn event_loop<B: ratatui::backend::Backend>(
     // only, group order. Stable for the whole popup (providers
     // don't refresh mid-invocation in Phase 4).
     let mut haystack = search::build_haystack(tree);
-    // Whether any templates exist (for the ^t footer hint, spec §8.4).
-    let templates_exist = !source::read_templates().is_empty();
     // Search view: None = browse mode, Some = search mode (query non-empty).
     let mut search_view: Option<search::SearchView> = None;
     // Phase 16 "extend zoxide": once the user presses `Tab` in search
@@ -261,7 +262,6 @@ fn event_loop<B: ratatui::backend::Backend>(
                     template_picker
                         .as_ref()
                         .map(|p| (p.templates.as_slice(), p.cursor)),
-                    templates_exist,
                     plugin_action_picker
                         .as_ref()
                         .map(|p| (p.plugin_id.as_str(), p.actions.as_slice(), p.cursor)),
@@ -620,72 +620,6 @@ fn event_loop<B: ratatui::backend::Backend>(
                     tree.collapse_or_parent();
                 }
             }
-            Char('t')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
-                // Phase 19 DirNav `^t`: open the template picker for the
-                // selected directory (or cwd), mirroring dir/zox `^t`.
-                // Inert if no templates are configured.
-                if let Some(d) = dirnav.as_ref() {
-                    if template_picker.is_none() && name_prompt.is_none() {
-                        let templates = source::read_templates();
-                        if !templates.is_empty() {
-                            let path = d
-                                .cursor_entry()
-                                .map(|e| e.path.clone())
-                                .unwrap_or_else(|| d.cwd.clone());
-                            let path_str = path.display().to_string();
-                            let cursor = source::preselect_template(&templates, &path_str);
-                            template_picker = Some(TemplatePicker {
-                                node_id: format!("dirnav:{}", path_str),
-                                path: source::expand_path(&path_str),
-                                name: source::workspace_name_default(&path_str),
-                                templates,
-                                cursor,
-                            });
-                        }
-                    }
-                    continue;
-                }
-                // `^t` on a dir/zox: open the template picker (spec §8.4).
-                // Inert on non-dir leaves and in search mode (no group
-                // context for the path). Unbound if no templates.toml.
-                let is_dir = match &search_view {
-                    Some(v) => v
-                        .cursor_leaf(&haystack)
-                        .is_some_and(|l| l.kind == nav::Kind::Dir || l.kind == nav::Kind::Zox),
-                    None => tree
-                        .cursor_row()
-                        .is_some_and(|r| r.kind == nav::Kind::Dir || r.kind == nav::Kind::Zox),
-                };
-                if is_dir && template_picker.is_none() && name_prompt.is_none() {
-                    let templates = source::read_templates();
-                    if !templates.is_empty() {
-                        let leaf_id = search_view
-                            .as_ref()
-                            .and_then(|v| v.cursor_leaf(&haystack))
-                            .map(|l| l.id.clone())
-                            .or_else(|| tree.cursor_row().map(|r| r.id.clone()));
-                        if let Some(id) = leaf_id {
-                            let path = id
-                                .split_once(':')
-                                .map(|(_, p)| p)
-                                .unwrap_or(&id)
-                                .to_string();
-                            let cursor = source::preselect_template(&templates, &path);
-                            template_picker = Some(TemplatePicker {
-                                node_id: id.clone(),
-                                path: source::expand_path(&path),
-                                name: source::workspace_name_default(&path),
-                                templates,
-                                cursor,
-                            });
-                        }
-                    }
-                }
-            }
             Char('d')
                 if key
                     .modifiers
@@ -878,9 +812,10 @@ fn event_loop<B: ratatui::backend::Backend>(
                     break;
                 }
                 // If a template picker is active, confirm: open a name
-                // prompt carrying the selected template (spec §8.4 amended
-                // — ^t now asks for a name after template selection, so it
-                // shares the one build path with Enter).
+                // prompt carrying the selected template. (Enter on a
+                // dir/zox/dirnav entry opens the picker when templates
+                // are configured; confirming it advances to the name
+                // prompt, and confirming that builds + opens.)
                 if let Some(picker) = template_picker.take() {
                     let template =
                         picker.templates[picker.cursor.min(picker.templates.len() - 1)].clone();
@@ -893,8 +828,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                     continue;
                 }
                 // If a name prompt is active, confirm: build the workspace
-                // from the prompt's template (Enter = auto-resolved default,
-                // ^t = user-selected) and close (spec §8.2/§8.4 amended).
+                // from the prompt's template (user-selected when the
+                // picker was shown, else the hardcoded default) and close.
                 if let Some(prompt) = name_prompt.take() {
                     match source::build_workspace_from_template(
                         &prompt.path,
@@ -919,8 +854,13 @@ fn event_loop<B: ratatui::backend::Backend>(
                 }
                 // Phase 19 DirNav commit: Enter opens a new workspace at
                 // the selected directory (or cwd if the cursor is out of
-                // range / on a non-dir), reusing the existing template-
-                // build path + name prompt — identical to dir/zox Enter.
+                // range / on a non-dir). When templates are configured,
+                // Enter first opens the template picker (default
+                // preselected); confirming the picker then opens the name
+                // prompt carrying the chosen template — the same combined
+                // path dir/zox Enter uses. When no templates are
+                // configured, Enter skips the picker and opens the name
+                // prompt directly with the hardcoded default template.
                 // Runs only when no dialog/prompt is already open (the
                 // confirm paths above run first when one is).
                 if let Some(d) = dirnav.as_ref() {
@@ -928,13 +868,28 @@ fn event_loop<B: ratatui::backend::Backend>(
                         .cursor_entry()
                         .map(|e| e.path.clone())
                         .unwrap_or_else(|| d.cwd.clone());
-                    let expanded = source::expand_path(&path.display().to_string());
-                    name_prompt = Some(NamePrompt {
-                        node_id: format!("dirnav:{}", path.display()),
-                        path: expanded.clone(),
-                        name: source::workspace_name_default(&path.display().to_string()),
-                        template: source::default_template_for(&expanded),
-                    });
+                    let path_str = path.display().to_string();
+                    let expanded = source::expand_path(&path_str);
+                    let node_id = format!("dirnav:{}", path_str);
+                    let name = source::workspace_name_default(&path_str);
+                    let templates = source::read_templates();
+                    if !templates.is_empty() {
+                        let cursor = source::preselect_template(&templates, &path_str);
+                        template_picker = Some(TemplatePicker {
+                            node_id,
+                            path: expanded,
+                            name,
+                            templates,
+                            cursor,
+                        });
+                    } else {
+                        name_prompt = Some(NamePrompt {
+                            node_id,
+                            path: expanded,
+                            name,
+                            template: source::hardcoded_default_template(),
+                        });
+                    }
                     continue;
                 }
                 // The node id to invoke on: in search, the cursor
@@ -952,19 +907,37 @@ fn event_loop<B: ratatui::backend::Backend>(
                 };
                 if is_leaf {
                     if let Some(id) = leaf_id {
-                        // Dir/zox: prompt for a workspace name (spec §8.2
-                        // amended). Enter builds from the auto-resolved
-                        // default template (match-glob → default → hardcoded
-                        // 1-tab/1-pane); ^t lets the user pick the template.
+                        // Dir/zox: Enter opens the template picker
+                        // when templates are configured (default
+                        // preselected via match-glob → default → first),
+                        // then the name prompt carrying the chosen
+                        // template; Enter on the name prompt builds +
+                        // opens. When no templates are configured, Enter
+                        // skips the picker and opens the name prompt
+                        // directly with the hardcoded 1-tab/1-pane
+                        // default. Esc at either step cancels back to
+                        // the navigator without creating anything.
                         if id.starts_with("pinned:") || id.starts_with("zox:") {
                             let path = id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
                             let expanded = source::expand_path(path);
-                            name_prompt = Some(NamePrompt {
-                                node_id: id.clone(),
-                                path: expanded.clone(),
-                                name: source::workspace_name_default(path),
-                                template: source::default_template_for(&expanded),
-                            });
+                            let templates = source::read_templates();
+                            if !templates.is_empty() {
+                                let cursor = source::preselect_template(&templates, path);
+                                template_picker = Some(TemplatePicker {
+                                    node_id: id.clone(),
+                                    path: expanded,
+                                    name: source::workspace_name_default(path),
+                                    templates,
+                                    cursor,
+                                });
+                            } else {
+                                name_prompt = Some(NamePrompt {
+                                    node_id: id.clone(),
+                                    path: expanded,
+                                    name: source::workspace_name_default(path),
+                                    template: source::hardcoded_default_template(),
+                                });
+                            }
                         } else if id.starts_with("plugin:") {
                             // Plugin: open the action picker (spec §8.3),
                             // unless the plugin has no actions (inert).
@@ -1346,7 +1319,7 @@ fn main() {
 /// `herdr-nav capture` (Phase C3): read the active workspace from the
 /// daemon, map it to a `Template`, best-effort capture each pane's
 /// `command` from `pane.process_info`, and write a YAML to
-/// `~/.config/herdr/templates/<name>.yaml` that the existing `^t` apply
+/// `~/.config/herdr/templates/<name>.yaml` that the existing Enter apply
 /// path can read and build.
 ///
 /// Flags (non-interactive; the wizard lands in C4):

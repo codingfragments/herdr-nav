@@ -44,7 +44,7 @@ An agent is waiting on a confirmation:
 
 1. `Ctrl k` → expand Pinned dirs (or zoxide). Preview shows the dir
    listing + git branch/dirty.
-2. `Enter` → a **new** workspace opens at that path, built from the auto-resolved default template (match-glob → `default: true` → hardcoded 1-tab/1-pane). You're prompted for the workspace name first. The current workspace is never reused. Use `^t` to pick a specific template first.
+2. `Enter` → a **new** workspace opens at that path. When templates are configured, Enter first opens a template picker (default preselected via match-glob → `default: true` → first); confirm → name prompt → build + open. With no templates, Enter skips the picker and opens the name prompt directly with the hardcoded 1-tab/1-pane default. The current workspace is never reused.
 
 ## Run a plugin action
 
@@ -67,5 +67,5 @@ An agent is waiting on a confirmation:
    overwrite / rename / cancel.
 4. After the write, `y` opens `$EDITOR` on the file for fine-tuning
    (or `n` to close). Verify the `# best-effort:` command guesses.
-5. The new template is immediately available in `^t` (open-with-template)
-   the next time you open a directory or zoxide entry.
+5. The new template is immediately available in the `Enter` template
+   picker the next time you open a directory or zoxide entry.

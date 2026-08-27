@@ -1,6 +1,6 @@
 # Workspace templates reference
 
-> **Status:** the template file syntax. See [`doc/query-filters.md`](query-filters.md) for the query-filter syntax, [`doc/keybinding.md`](keybinding.md) for the `^t` keybind.
+> **Status:** the template file syntax. See [`doc/query-filters.md`](query-filters.md) for the query-filter syntax, [`doc/keybinding.md`](keybinding.md) for the `Enter` keybind.
 
 ---
 
@@ -8,10 +8,12 @@
 
 ## Templates (open-with-template, §8.4)
 
-`^t` on a directory or zoxide entry opens a template picker.
-Templates are **one YAML file per template** in
-`~/.config/herdr/templates/`. With no dir (or an empty
-one), `^t` is unbound.
+`Enter` on a directory, zoxide, or DirNav entry opens a template
+picker (when templates are configured); the default is preselected via
+match-glob → `default: true` → first. Confirm the picker → name prompt
+→ build + open the workspace. With no templates dir (or an empty one),
+`Enter` skips the picker and opens the name prompt directly with the
+hardcoded 1-tab/1-pane default.
 
 ### File layout
 
@@ -34,7 +36,9 @@ default: false          # true = the fallback when no match glob fits
 match:                   # optional; globs that auto-preselect this template
   - "**/Cargo.toml"
 
-# Tabs — each becomes a herdr tab
+# Tabs — each becomes a herdr tab; `name` is set as the tab's label
+# (the first tab is renamed after workspace.create; later tabs get
+# `label` at tab.create time).
 tabs:
   - name: editor
     cwd: ~/code           # TAB-level cwd: every pane in this tab starts here
@@ -139,7 +143,7 @@ tabs:
 The `nav-capture` action (bound to `prefix+ctrl+t` by recommendation;
 see [`doc/keybinding.md`](keybinding.md)) opens a wizard that captures
 the **current** workspace's live structure and writes a template YAML
-— the inverse of `^t` (which applies a template). See
+— the inverse of `Enter` (which applies a template). See
 [`spec/capture-template-spec.md`](../spec/capture-template-spec.md) for
 the full spec.
 
