@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-26
+
 ### Combined Names step (tab + pane naming)
 
 - The capture wizard's step 6 is renamed **Tab names → Names** and now
