@@ -47,7 +47,7 @@ enum Step {
     MatchGlobs,
     CommandPolicy,
     CwdPolicy,
-    TabNames,
+    Names,
     Review,
     /// Shown after Review if the name clashes (Phase C5).
     ClashPrompt,
@@ -63,7 +63,7 @@ impl Step {
             Self::MatchGlobs => 3,
             Self::CommandPolicy => 4,
             Self::CwdPolicy => 5,
-            Self::TabNames => 6,
+            Self::Names => 6,
             Self::Review => 7,
             // C5 steps are not counted in the progress bar.
             Self::ClashPrompt | Self::EditorPrompt => 7,
@@ -77,7 +77,7 @@ impl Step {
             Self::MatchGlobs => "Match globs",
             Self::CommandPolicy => "Command policy",
             Self::CwdPolicy => "cwd policy",
-            Self::TabNames => "Tab names",
+            Self::Names => "Names",
             Self::Review => "Review & write",
             Self::ClashPrompt => "Name clash",
             Self::EditorPrompt => "Open in editor?",
@@ -91,7 +91,7 @@ impl Step {
             Self::MatchGlobs => "Glob patterns that auto-preselect this template (e.g. `**/Cargo.toml`). Space-separated. Tab toggles the default flag.",
             Self::CommandPolicy => "How to fill each pane's `command:` from the running process group.",
             Self::CwdPolicy => "How to handle each pane's working directory in the generated template.",
-            Self::TabNames => "Tab names, pre-filled from live labels. ↑↓ to focus a tab, type to edit.",
+            Self::Names => "Tab and pane names, pre-filled from live labels. ↑↓ to focus a row, type to edit. Blank = no name.",
             Self::Review => "Live YAML preview. Enter writes the template to ~/.config/herdr/templates/.",
             Self::ClashPrompt => "A template with this name already exists. Choose how to proceed.",
             Self::EditorPrompt => "Template written. Open it in your editor to fine-tune, or close.",
@@ -105,8 +105,8 @@ impl Step {
             Self::MatchGlobs => Some(Self::Name),
             Self::CommandPolicy => Some(Self::MatchGlobs),
             Self::CwdPolicy => Some(Self::CommandPolicy),
-            Self::TabNames => Some(Self::CwdPolicy),
-            Self::Review => Some(Self::TabNames),
+            Self::Names => Some(Self::CwdPolicy),
+            Self::Review => Some(Self::Names),
             Self::ClashPrompt => Some(Self::Review),
             Self::EditorPrompt => None, // no back — the write already happened
         }
@@ -120,8 +120,12 @@ struct CaptureForm {
     step: Step,
     /// Cached raw capture (fetched once on wizard entry).
     raw: RawCapture,
-    /// Tab labels (live, pre-filled) — editable on TabNames.
+    /// Tab labels (live, pre-filled) — editable on Names.
     tab_labels: Vec<String>,
+    /// Per-tab pane names (live, pre-filled) — editable on Names.
+    /// `pane_names[i][j]` is tab i's j-th pane (leaf order, matching
+    /// `capture::collect_pane_labels`). Empty = no name (None).
+    pane_names: Vec<Vec<String>>,
     /// Template name (editable).
     name: String,
     /// match globs (one line, space-separated).
@@ -132,8 +136,10 @@ struct CaptureForm {
     command_policy_idx: usize,
     /// cwd policy (cursor index).
     cwd_policy_idx: usize,
-    /// Which tab is focused for editing on the TabNames step.
-    focused_tab_idx: usize,
+    /// Which row is focused for editing on the Names step. Indexes a
+    /// flattened `[tab, pane, pane, …, tab, pane, …]` list (see
+    /// `name_rows`).
+    focused_row_idx: usize,
     /// Scroll offset for the YAML preview.
     preview_scroll: usize,
     /// The written template path (set after a successful write, used by
@@ -188,10 +194,53 @@ impl CaptureForm {
             self.cwd_policy(),
             self.command_policy(),
             &self.tab_labels,
+            &self.pane_names,
             self.match_globs_vec(),
             self.default_flag,
         );
         capture::template_to_yaml(&template, &annotations).ok()
+    }
+
+    /// The flattened list of editable name rows for the Names step:
+    /// `[tab0, pane0, pane1, …, tab1, pane0, …]`. One focus axis over
+    /// tabs and panes interleaved; pane rows are indented under their
+    /// tab for visual grouping only.
+    fn name_rows(&self) -> Vec<NameRow> {
+        let mut rows = Vec::new();
+        for (ti, _label) in self.tab_labels.iter().enumerate() {
+            rows.push(NameRow { tab_idx: ti, pane_idx: None });
+            let n_panes = self.pane_names.get(ti).map(Vec::len).unwrap_or(0);
+            for pi in 0..n_panes {
+                rows.push(NameRow { tab_idx: ti, pane_idx: Some(pi) });
+            }
+        }
+        rows
+    }
+}
+
+/// One row in the Names step's flat list. `pane_idx == None` → the tab
+/// header row; `Some(p)` → pane `p` within `tab_idx`.
+struct NameRow {
+    tab_idx: usize,
+    pane_idx: Option<usize>,
+}
+
+/// Apply a mutation (`push`/`pop`) to the name string at `row`. Tab rows
+/// edit `tab_labels`; pane rows edit `pane_names[tab_idx][pane_idx]`.
+fn edit_name_row(form: &mut CaptureForm, row: &NameRow, f: impl FnOnce(&mut String)) {
+    match row.pane_idx {
+        None => {
+            if let Some(tab) = form.tab_labels.get_mut(row.tab_idx) {
+                f(tab);
+            }
+        }
+        Some(pi) => {
+            if let Some(panes) = form.pane_names.get_mut(row.tab_idx) {
+                if let Some(name) = panes.get_mut(pi) {
+                    f(name);
+                }
+            }
+        }
     }
 }
 
@@ -201,16 +250,19 @@ pub fn run(socket_path: &str) -> Result<(), String> {
     // Fetch all raw data once (all socket calls happen here).
     let raw = capture::fetch_raw(socket_path)?;
     let tab_labels: Vec<String> = raw.tabs.iter().map(|t| t.tab_label.clone()).collect();
+    let pane_names: Vec<Vec<String>> =
+        raw.tabs.iter().map(|t| capture::collect_pane_labels(&t.root)).collect();
 
     let mut form = CaptureForm {
         step: Step::ScopeConfirm,
         name: raw.workspace_label.clone(),
         tab_labels,
+        pane_names,
         match_globs: String::new(),
         default_flag: false,
         command_policy_idx: 0,
         cwd_policy_idx: 0,
-        focused_tab_idx: 0,
+        focused_row_idx: 0,
         preview_scroll: 0,
         written_path: None,
         raw,
@@ -402,27 +454,34 @@ fn handle_key(
                 KeyCode::Down if form.cwd_policy_idx < CWD_CHOICES.len() - 1 => {
                     form.cwd_policy_idx += 1
                 }
-                KeyCode::Enter => form.step = Step::TabNames,
+                KeyCode::Enter => form.step = Step::Names,
                 _ => {}
             }
             Ok(Action::Continue)
         }
-        Step::TabNames => {
+        Step::Names => {
+            let rows = form.name_rows();
+            let total = rows.len();
             match code {
                 KeyCode::Enter => form.step = Step::Review,
-                // Up/Down move focus between tabs.
-                KeyCode::Up if form.focused_tab_idx > 0 => form.focused_tab_idx -= 1,
-                KeyCode::Down if form.focused_tab_idx < form.tab_labels.len().saturating_sub(1) => {
-                    form.focused_tab_idx += 1
+                // Up/Down move focus across the flat [tab, pane, pane, …]
+                // list — tabs and panes interleaved, one axis.
+                KeyCode::Up if form.focused_row_idx > 0 => form.focused_row_idx -= 1,
+                KeyCode::Down if form.focused_row_idx < total.saturating_sub(1) => {
+                    form.focused_row_idx += 1
                 }
                 KeyCode::Backspace => {
-                    if let Some(tab) = form.tab_labels.get_mut(form.focused_tab_idx) {
-                        tab.pop();
+                    if let Some(row) = rows.get(form.focused_row_idx) {
+                        edit_name_row(form, row, |s| {
+                            s.pop();
+                        });
                     }
                 }
                 KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) => {
-                    if let Some(tab) = form.tab_labels.get_mut(form.focused_tab_idx) {
-                        tab.push(c);
+                    if let Some(row) = rows.get(form.focused_row_idx) {
+                        edit_name_row(form, row, |s| {
+                            s.push(c);
+                        });
                     }
                 }
                 _ => {}
@@ -618,7 +677,7 @@ fn draw_two_column(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, p
         Step::MatchGlobs => draw_match_globs(f, input_inner, form, palette),
         Step::CommandPolicy => draw_command_policy(f, input_inner, form, palette),
         Step::CwdPolicy => draw_cwd_policy(f, input_inner, form, palette),
-        Step::TabNames => draw_tab_names(f, input_inner, form, palette),
+        Step::Names => draw_names(f, input_inner, form, palette),
         Step::Review => draw_review_input(f, input_inner, form, palette),
         Step::ClashPrompt => draw_clash_prompt(f, input_inner, form, palette),
         Step::EditorPrompt => draw_editor_prompt(f, input_inner, form, palette),
@@ -928,36 +987,65 @@ fn draw_cwd_policy(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palet
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_tab_names(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_names(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
     let mut lines = vec![
         Line::from(Span::styled(
-            "Tab names",
+            "Names",
             Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            "Pre-filled from live labels. ↑↓ to focus a tab, type to edit.",
+            "Pre-filled from live labels. ↑↓ to focus a row, type to edit. Blank = no name.",
             Style::default().fg(palette.overlay0),
         )),
         Line::raw(""),
     ];
 
-    for (i, label) in form.tab_labels.iter().enumerate() {
-        let is_focused = i == form.focused_tab_idx;
+    let rows = form.name_rows();
+    for (i, row) in rows.iter().enumerate() {
+        let is_focused = i == form.focused_row_idx;
         let marker = if is_focused { "▶" } else { " " };
-        let style = if is_focused {
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD)
-                .bg(palette.selection_bg)
-        } else {
-            Style::default().fg(palette.subtext0)
-        };
         let cursor = if is_focused { "▍" } else { "" };
-        let display = if label.is_empty() { "(unnamed)" } else { label.as_str() };
-        lines.push(Line::from(Span::styled(
-            format!(" {} tab {}: {}{} ", marker, i + 1, display, cursor),
-            style,
-        )));
+        match row.pane_idx {
+            None => {
+                // Tab header row.
+                let label = form.tab_labels.get(row.tab_idx).map(String::as_str).unwrap_or("");
+                let display = if label.is_empty() { "(unnamed)" } else { label };
+                let style = if is_focused {
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD)
+                        .bg(palette.selection_bg)
+                } else {
+                    Style::default().fg(palette.subtext0)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(" {} tab {}: {}{} ", marker, row.tab_idx + 1, display, cursor),
+                    style,
+                )));
+            }
+            Some(pi) => {
+                // Pane row, indented under its tab.
+                let label = form
+                    .pane_names
+                    .get(row.tab_idx)
+                    .and_then(|v| v.get(pi))
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let display = if label.is_empty() { "(unnamed)" } else { label };
+                let style = if is_focused {
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD)
+                        .bg(palette.selection_bg)
+                } else {
+                    Style::default().fg(palette.subtext0)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(" {}   pane {}: {}{} ", marker, pi + 1, display, cursor),
+                    style,
+                )));
+            }
+        }
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(

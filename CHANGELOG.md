@@ -7,6 +7,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Combined Names step (tab + pane naming)
+
+- The capture wizard's step 6 is renamed **Tab names → Names** and now
+  edits **pane names** alongside tab names on a single screen. Pane
+  names are pre-filled from the live pane `label` (empty when the pane
+  has none) and shown as a flat, indented list: each tab header row is
+  followed by its pane rows.
+- `↑↓` focuses any row (tab or pane); typing edits the focused row.
+  A **blank pane name means "no name"** — the `name:` field is omitted
+  (`None`), so the pane is not renamed when the template is applied
+  (the apply path only calls `pane.rename` for `Some` names).
+- A non-empty pane name overrides the live label; an absent entry
+  (defensive) falls back to the live label (previous behavior).
+- `src/capture.rs`: `build_template` / `map_tab` / `map_split` /
+  `map_child` / `map_pane` thread a `pane_names: &[Vec<String>]`
+  override + a leaf-order `pane_idx` counter; new
+  `collect_pane_labels` pre-fills the wizard. 6 new unit tests cover
+  the override semantics (non-empty → `Some`, empty → `None`, absent →
+  live label, index alignment, round-trip through `read_templates`).
+- Spec/docs updated: `spec/capture-template-spec.md` §8 step 6 + §7
+  mapping table + decisions log; `doc/templates.md`; `doc/keybinding.md`.
+
 ## [0.3.0] — 2026-08-26
 
 **New feature:** capture the current workspace as a template. A new

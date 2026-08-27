@@ -160,7 +160,9 @@ the full spec.
   (high confidence). A non-shell pane → the detected command, with a
   `# best-effort:` comment so you can verify in the editor step. The
   `blank` command policy forces all commands to plain shells.
-- **Per-pane `name`** (label): from the live pane.
+- **Per-pane `name`** (label): from the live pane, editable in the
+  wizard's Names step; a blank pane name means no `name:` field (the
+  pane is not renamed on apply).
 
 ### The wizard
 
@@ -173,8 +175,10 @@ A step-by-step form with a **live YAML preview** on every step:
    `Tab` toggles the `default: true` flag.
 4. **Command policy** — `keep` (best-effort) or `blank` (plain shells).
 5. **cwd policy** — `relative`, `absolute`, or `inherit`.
-6. **Tab names** — pre-filled from live labels; `↑↓` focuses a tab,
-   typing edits the focused one.
+6. **Names** — tab **and pane** names, pre-filled from live labels,
+   shown as a flat indented list (each tab header followed by its pane
+   rows); `↑↓` focuses a row, typing edits the focused one. A blank
+   pane name means "no name" (the `name:` field is omitted).
 7. **Review & write** — live YAML preview; `Enter` writes.
 
 If the name clashes with an existing template, a **Clash prompt** offers

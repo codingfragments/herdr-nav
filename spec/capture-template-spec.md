@@ -182,6 +182,7 @@ base is under HOME).
 | pane `label` | `PaneNode::Pane.name` | direct |
 | pane `pane_id` | — (not in template) | dropped; optionally a `# pane: <id>` comment |
 | tab `label` (from `tab.list`) | `TemplateTab.name` | pre-filled, editable in wizard (§8 step 6) |
+| pane `label` (from `layout.export`) | `PaneNode::Pane.name` | pre-filled, editable in wizard (§8 step 6); blank → `None` (no `name:` field) |
 | `focused_pane_id` | — | dropped (template has no focus concept) |
 | `zoomed` | — | dropped (view state, not structure) |
 
@@ -212,9 +213,16 @@ theme stack. `Esc` at any step aborts (no write). `Enter` advances.
    `# best-effort:` comments) / *blank all to plain shells*.
 5. **cwd policy** (global) — *relative to base* (default) / *absolute*
    / *inherit (blank)*. See §6.
-6. **Per-tab names** — one editable field per tab, each pre-filled with
-   the live tab label from `tab.list` (fallback `tab<N>` when the label
-   is empty or a bare number like `1`). All tabs on one screen.
+6. **Names (tabs + panes)** — one editable field per tab **and per
+   pane**, each pre-filled from the live label (`tab.list` for tabs,
+   the export tree's `label` for panes; fallback `tab<N>` when a tab
+   label is empty or a bare number like `1`). All rows on one screen as
+   a flat, indented list: each tab header row is followed by its pane
+   rows. `↑↓` focuses a row, typing edits the focused row. A **blank
+   pane name means "no name"** — the `name:` field is omitted (None),
+   so the pane is not renamed on apply. A non-empty entry overrides
+   the live label; an absent entry (defensive) falls back to the live
+   label.
 7. **Review** — a rendered YAML preview (read-only) of the final
    template. `Enter` writes; `Esc` goes back.
 8. **Name clash** — if `~/.config/herdr/templates/<name>.yaml` exists:
@@ -286,5 +294,8 @@ theme stack. `Esc` at any step aborts (no write). `Enter` advances.
 9. Agent panes: **captured like any pane** (no special-casing).
 10. Form layout: **step-by-step wizard**.
 11. Tab names: **ask per-tab, pre-filled from live labels**.
+11b. Pane names: **editable in the same Names step as tabs** (combined);
+     a blank pane name means `None` (no `name:` field, not renamed on
+     apply). Pre-filled from the live pane label.
 12. Per-pane cwd: **global in wizard, per-pane in editor**.
 13. After editor: **exec, no validation**.

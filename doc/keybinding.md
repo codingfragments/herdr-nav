@@ -122,7 +122,7 @@ the full spec.
 | --- | --- |
 | `Enter` | advance to the next step (or write on Review) |
 | `←` | go back one step |
-| `↑` / `↓` | move selection (policy lists, tab names) or scroll the YAML preview (Review) |
+| `↑` / `↓` | move selection (policy lists, name rows) or scroll the YAML preview (Review) |
 | `Tab` | toggle the `default: true` flag (Match globs step) |
 | `a–z 0–9 …` | type into the focused input field |
 | `Backspace` | delete last char from the focused input field |
@@ -134,11 +134,12 @@ the full spec.
 | `Esc` | abort (no write) from any step; or go back from Review |
 
 The wizard steps: **Confirm workspace** → **Template name** →
-**Match globs** → **Command policy** → **cwd policy** → **Tab names**
-→ **Review & write**. A live YAML preview is shown on every step. If
-the name clashes with an existing template, a **Clash prompt** offers
-overwrite / rename / cancel before writing. After a successful write,
-an **Editor prompt** offers to open `$EDITOR` on the file.
+**Match globs** → **Command policy** → **cwd policy** → **Names**
+(tab + pane names) → **Review & write**. A live YAML preview is shown
+on every step. If the name clashes with an existing template, a
+**Clash prompt** offers overwrite / rename / cancel before writing.
+After a successful write, an **Editor prompt** offers to open
+`$EDITOR` on the file.
 
 There is also a non-interactive CLI path for scripts/tests:
 
