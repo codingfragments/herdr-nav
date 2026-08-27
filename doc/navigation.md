@@ -49,10 +49,12 @@ phases").
   then exits DirNav. The search bar shows the cwd as a breadcrumb path
   (direct parent kept full, earlier segments shortened) with the query.
 - **Commit:** `Enter` opens a new workspace at the selected dir (or
-  cwd if the cursor is out of range), reusing the existing template-
-  build path + name prompt — identical to dir/zox `Enter`. `^t` picks a
-  template first (then the name prompt); `^p` pins the cwd (or selected
-  dir). Both keep the popup open until the name prompt confirms.
+  cwd if the cursor is out of range). When templates are configured,
+  Enter first opens the template picker (default preselected); confirm
+  → name prompt → build + open. With no templates, Enter skips the
+  picker and opens the name prompt directly with the hardcoded default.
+  `^p` pins the cwd (or selected dir). The popup stays open until the
+  name prompt confirms.
 - **Hidden entries:** dotfiles are hidden by default; `.` toggles them
   (the listing refreshes in place, cursor clamped, search re-runs).
 - **Edge cases:** permission-denied dirs are skipped; symlinks render with
@@ -102,7 +104,7 @@ one-line toast in the host terminal). Side actions (`^p` pin, `^d` kill,
 | --- | --- | --- |
 | pane / agent | jump to the pane (switch workspace + tab + focus) | `^d` kill · `^r` restart / `^c` interrupt / `^x` detach |
 | workspace / tab | switch to it, keeping its active pane | `^p` pin · `^d` kill |
-| dir / zox | **always** open a new workspace at that path, built from the auto-resolved default template (match-glob → `default: true` → hardcoded 1-tab/1-pane) | `^t` pick template then name · `^p` pin |
+| dir / zox | **always** open a new workspace at that path: template picker → name prompt → build (skips picker when no templates are configured) | `^p` pin |
 | plugin | open the plugin's action picker (secondary selector) | — |
 
 The default action is always named in the preview footer before you

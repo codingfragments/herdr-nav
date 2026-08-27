@@ -425,8 +425,8 @@ impl Provider for ZoxideProvider {
 /// because `worktree.create` creates a worktree *child of the current
 /// workspace* whenever the target path is inside *any* git repo, even
 /// one unrelated to the current ws. Building every dir open through the
-/// template path (Enter and ^t unified) fixes that and makes the two
-/// keys behave identically modulo which template they use.
+/// template path (Enter, unified across dir/zox/dirnav) fixes that and
+/// makes every entry behave identically modulo which template they use.
 ///
 /// `id` is the node id (`pinned:<path>` or `zox:<path>`); the path is
 /// the part after the colon. `name` is the workspace label (None =
@@ -457,7 +457,7 @@ pub fn open_dir_workspace_template(
 /// amended): the match-glob or `default: true` template if any
 /// templates exist, else the hardcoded 1-tab/1-pane default. Uses
 /// the same resolution as `preselect_template` so `Enter` builds
-/// exactly what `^t` would have pre-highlighted.
+/// exactly what the picker would have pre-highlighted.
 pub fn default_template_for(path: &str) -> Template {
     let templates = read_templates();
     if templates.is_empty() {
@@ -1140,7 +1140,8 @@ fn is_default_direction(d: &str) -> bool {
 
 /// Read every `*.yaml` in `~/.config/herdr/templates/` →
 /// `Vec<Template>`. Empty if the dir is missing or empty
-/// (no crash; `^t` unbound). One file per template.
+/// (no crash; Enter skips the picker and uses the hardcoded default).
+/// One file per template.
 pub fn read_templates() -> Vec<Template> {
     let Some(dir) = std::env::var("HOME")
         .ok()

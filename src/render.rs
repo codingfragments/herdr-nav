@@ -97,7 +97,6 @@ pub fn draw(
     flash_error: Option<&(String, String)>,
     name_prompt: Option<(&str, &str)>,
     template_picker: Option<(&[source::Template], usize)>,
-    templates_exist: bool,
     plugin_action_picker: Option<(&str, &[(String, String)], usize)>,
     kill_confirm: Option<(&str, &str)>,
     palette: &Palette,
@@ -165,7 +164,6 @@ pub fn draw(
             search,
             cursor_kind,
             name_prompt,
-            templates_exist,
             kill_confirm,
             extend_hint,
             dirnav.is_some(),
@@ -942,7 +940,6 @@ fn draw_footer(
     search: Option<&SearchView>,
     cursor_kind: Option<Kind>,
     name_prompt: Option<(&str, &str)>,
-    templates_exist: bool,
     kill_confirm: Option<(&str, &str)>,
     extend_hint: bool,
     is_dirnav: bool,
@@ -964,16 +961,14 @@ fn draw_footer(
         return;
     }
     // Phase 17/19 DirNav footer: a dedicated hint row for the directory
-    // walker. Enter opens a workspace at the selected dir; ^t picks a
-    // template first; ^p pins the cwd; `.` toggles hidden entries.
+    // walker. Enter opens a workspace at the selected dir (template
+    // picker → name prompt); ^p pins the cwd; `.` toggles hidden entries.
     if is_dirnav {
         let ks = Style::default().fg(c.peach).add_modifier(Modifier::BOLD);
         let ds = Style::default().fg(c.subtext0);
         let line = Line::from(vec![
             Span::styled(" ⏎ ", ks),
             Span::styled("open   ", ds),
-            Span::styled("^t ", ks),
-            Span::styled("template   ", ds),
             Span::styled("^p ", ks),
             Span::styled("pin   ", ds),
             Span::styled(". ", ks),
@@ -1011,17 +1006,6 @@ fn draw_footer(
         ),
         Span::styled(esc_hint, Style::default().fg(c.subtext0)),
     ];
-    // ^t hint (spec §8.4): show only when templates exist AND the
-    // cursor is on a dir/zox (the kinds that support templates).
-    // Omitted when no templates/ dir — the key is unbound.
-    let is_dir = matches!(cursor_kind, Some(Kind::Dir) | Some(Kind::Zox));
-    if templates_exist && is_dir && name_prompt.is_none() {
-        hints.push(Span::styled(
-            "   ^t ",
-            Style::default().fg(c.peach).add_modifier(Modifier::BOLD),
-        ));
-        hints.push(Span::styled("template", Style::default().fg(c.subtext0)));
-    }
     // Side-action hints (spec §8): ^p pin, ^d kill, ^r/^c/^x alternates.
     // Shown per kind, only in browse mode (search mode keeps the footer
     // minimal — the query is the focus).
@@ -1279,7 +1263,7 @@ fn draw_template_picker(
 /// full keymap + query-filter syntax summary. Esc closes.
 fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
     let w = 56u16;
-    let h = 22u16;
+    let h = 21u16;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let dialog = Rect::new(x, y, w.min(area.width), h.min(area.height));
@@ -1349,9 +1333,6 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
             Span::styled("⏎", ks),
             Span::raw(" "),
             Span::styled("open workspace   ", ds),
-            Span::styled("^t", ks),
-            Span::raw(" "),
-            Span::styled("template   ", ds),
             Span::styled("^p", ks),
             Span::raw(" "),
             Span::styled("pin   ", ds),
@@ -1374,11 +1355,6 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
             Span::styled("^d", ks),
             sep.clone(),
             Span::styled("kill pane / tab / workspace (confirm)", ds),
-        ]),
-        Line::from(vec![
-            Span::styled("^t", ks),
-            sep.clone(),
-            Span::styled("open with template (dir/zox)", ds),
         ]),
         Line::from(vec![
             Span::styled("^r ^c ^x", ks),

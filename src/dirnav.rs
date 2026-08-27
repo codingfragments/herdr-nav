@@ -6,7 +6,7 @@
 //! the cursor (wraps). Phase 18 adds an in-level fuzzy search: typing
 //! filters the current level's entry names and lands on the first
 //! match; `↑↓` then jump between matches (find). The commit verb
-//! (`Enter`/`^t`/`^p`) lands in Phase 19.
+//! (`Enter`/`^p`) lands in Phase 19.
 //!
 //! **Spec departure (§1 non-goal):** DirNav is path-by-path directory
 //! navigation, which §1 lists as a non-goal ("not a file browser").

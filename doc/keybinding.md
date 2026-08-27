@@ -55,14 +55,13 @@ Mode is derived from the query: empty → Browse, non-empty → Search.
 | `↑` / `^p` | previous visible row (wraps) | previous match (wraps) |
 | `→` / `Space` / `Tab` | expand; if open, step to first child | `→` inert; `Space` types a space; `Tab` extends zoxide (see below) |
 | `←` | collapse; if closed, jump to parent | inert |
-| `Enter` | branch → expand/step; leaf → default action, close | default action, close |
+| `Enter` | branch → expand/step; leaf → default action, close (on a dir/zox: template picker → name prompt → open workspace) | default action, close |
 | `a–z 0–9 …` | enter search with that char | append, re-rank, cursor → 0 |
 | `Backspace` | — | delete last char; empty → browse |
 | `Esc` | close popup | clear query → browse |
 | `^p` | pin selected dir (or selected pane's cwd) into Pinned dirs; stay open | |
 | `^u` | unpin selected pinned dir; stay open | |
 | `^d` | kill selected pane / tab / workspace; confirm inline; stay open | |
-| `^t` | on a dir/zox entry: pick a workspace template, then name the workspace (Enter uses the auto-resolved default template with no picker) | |
 | `^f` | enter directory navigation mode (DirNav) — see [navigation.md](navigation.md#directory-navigation-mode-dirnav--v02) | |
 | `^r` `^c` `^x` | context alternates, named per item in the preview footer | |
 | `?` | open the in-popup help dialog | |
@@ -101,13 +100,12 @@ full syntax, composition rules, and worked examples.
 | `→` | descend into the cursor directory (inert on non-dirs); clears the search |
 | `a–z 0–9 …` | fuzzy-search this level's entry names; cursor → first match |
 | `Backspace` | delete last search char; empty → clear search |
-| `Enter` | open a new workspace at the selected dir (name prompt) |
-| `^t` | pick a workspace template, then name the workspace |
+| `Enter` | open a new workspace at the selected dir (template picker → name prompt; skips picker when no templates are configured) |
 | `^p` | pin the selected dir (or cwd) into Pinned dirs |
 | `.` | toggle hidden entries (dotfiles) |
 | `Esc` | clear search → exit DirNav (two-stage) |
 
-The commit verb `Enter`/`^t`/`^p` and the `.` hidden-toggle are now
+The commit verb `Enter`/`^p` and the `.` hidden-toggle are now
 shipped. See
 [navigation.md](navigation.md#directory-navigation-mode-dirnav--v02).
 
