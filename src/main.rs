@@ -1375,16 +1375,14 @@ fn run_capture() -> Result<(), String> {
             }
             "--cwd-policy" => {
                 i += 1;
-                cwd_policy = capture::CwdPolicy::parse(
-                    args.get(i).map(String::as_str).unwrap_or(""),
-                )?;
+                cwd_policy =
+                    capture::CwdPolicy::parse(args.get(i).map(String::as_str).unwrap_or(""))?;
                 cwd_overridden = true;
             }
             "--command-policy" => {
                 i += 1;
-                command_policy = capture::CommandPolicy::parse(
-                    args.get(i).map(String::as_str).unwrap_or(""),
-                )?;
+                command_policy =
+                    capture::CommandPolicy::parse(args.get(i).map(String::as_str).unwrap_or(""))?;
                 command_overridden = true;
             }
             "--summary" => summary_only = true,
@@ -1404,9 +1402,7 @@ fn run_capture() -> Result<(), String> {
     // --command-policy was passed, run the non-interactive flag path
     // (for scripts/tests). Otherwise run the wizard (the default for
     // the popup binding).
-    let interactive = name.is_none()
-        && !cwd_overridden
-        && !command_overridden;
+    let interactive = name.is_none() && !cwd_overridden && !command_overridden;
     if interactive {
         return capture_ui::run(&socket_path);
     }

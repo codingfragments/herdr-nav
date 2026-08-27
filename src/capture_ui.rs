@@ -148,13 +148,28 @@ struct CaptureForm {
 }
 
 const COMMAND_CHOICES: &[(&str, &str)] = &[
-    ("keep", "Best-effort capture from pane.process_info, with # best-effort: comments on guesses"),
-    ("blank", "Force every pane to a plain shell — no command, no process_info calls"),
+    (
+        "keep",
+        "Best-effort capture from pane.process_info, with # best-effort: comments on guesses",
+    ),
+    (
+        "blank",
+        "Force every pane to a plain shell — no command, no process_info calls",
+    ),
 ];
 const CWD_CHOICES: &[(&str, &str)] = &[
-    ("relative", "Relativize under the workspace base cwd; keep absolute when distant"),
-    ("absolute", "Keep every pane cwd absolute as captured (machine-specific)"),
-    ("inherit", "Blank every pane cwd — each inherits the new workspace's cwd"),
+    (
+        "relative",
+        "Relativize under the workspace base cwd; keep absolute when distant",
+    ),
+    (
+        "absolute",
+        "Keep every pane cwd absolute as captured (machine-specific)",
+    ),
+    (
+        "inherit",
+        "Blank every pane cwd — each inherits the new workspace's cwd",
+    ),
 ];
 
 impl CaptureForm {
@@ -208,10 +223,16 @@ impl CaptureForm {
     fn name_rows(&self) -> Vec<NameRow> {
         let mut rows = Vec::new();
         for (ti, _label) in self.tab_labels.iter().enumerate() {
-            rows.push(NameRow { tab_idx: ti, pane_idx: None });
+            rows.push(NameRow {
+                tab_idx: ti,
+                pane_idx: None,
+            });
             let n_panes = self.pane_names.get(ti).map(Vec::len).unwrap_or(0);
             for pi in 0..n_panes {
-                rows.push(NameRow { tab_idx: ti, pane_idx: Some(pi) });
+                rows.push(NameRow {
+                    tab_idx: ti,
+                    pane_idx: Some(pi),
+                });
             }
         }
         rows
@@ -250,8 +271,11 @@ pub fn run(socket_path: &str) -> Result<(), String> {
     // Fetch all raw data once (all socket calls happen here).
     let raw = capture::fetch_raw(socket_path)?;
     let tab_labels: Vec<String> = raw.tabs.iter().map(|t| t.tab_label.clone()).collect();
-    let pane_names: Vec<Vec<String>> =
-        raw.tabs.iter().map(|t| capture::collect_pane_labels(&t.root)).collect();
+    let pane_names: Vec<Vec<String>> = raw
+        .tabs
+        .iter()
+        .map(|t| capture::collect_pane_labels(&t.root))
+        .collect();
 
     let mut form = CaptureForm {
         step: Step::ScopeConfirm,
@@ -564,18 +588,16 @@ fn draw_wizard(f: &mut ratatui::Frame, form: &mut CaptureForm, palette: &theme::
     let area = f.area();
 
     // Outer popup: rounded border, accent title with step indicator.
-    let title = format!(
-        " {} · {} ",
-        "herdr capture",
-        form.step.title()
-    );
+    let title = format!(" {} · {} ", "herdr capture", form.step.title());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette.surface1))
         .title(Span::styled(
             title,
-            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
         ))
         .title_alignment(Alignment::Center)
         .style(Style::default().bg(palette.panel_bg));
@@ -586,12 +608,12 @@ fn draw_wizard(f: &mut ratatui::Frame, form: &mut CaptureForm, palette: &theme::
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // progress dots
-            Constraint::Length(2),  // hint
-            Constraint::Length(1),  // separator
+            Constraint::Length(1), // progress dots
+            Constraint::Length(2), // hint
+            Constraint::Length(1), // separator
             Constraint::Min(3),    // body
-            Constraint::Length(1),  // separator
-            Constraint::Length(1),  // footer
+            Constraint::Length(1), // separator
+            Constraint::Length(1), // footer
         ])
         .split(inner);
 
@@ -629,7 +651,12 @@ fn draw_progress(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette
         let (dot, style) = if i < current {
             ("●", Style::default().fg(palette.surface1))
         } else if i == current {
-            ("●", Style::default().fg(palette.accent).add_modifier(Modifier::BOLD))
+            (
+                "●",
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             ("○", Style::default().fg(palette.overlay0))
         };
@@ -659,7 +686,12 @@ fn draw_separator(f: &mut ratatui::Frame, area: Rect, palette: &theme::Palette) 
 
 /// Two-column layout: left = step input, right = live YAML preview.
 /// The input column is 45% so text fields and descriptions have room.
-fn draw_two_column(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, palette: &theme::Palette) {
+fn draw_two_column(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &mut CaptureForm,
+    palette: &theme::Palette,
+) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -668,7 +700,9 @@ fn draw_two_column(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, p
     // Left: step input (no border — the content itself provides structure).
     let input_area = chunks[0];
     // 1-cell inner padding via a margin block.
-    let pad = Block::default().borders(Borders::NONE).style(Style::default().bg(palette.panel_bg));
+    let pad = Block::default()
+        .borders(Borders::NONE)
+        .style(Style::default().bg(palette.panel_bg));
     let input_inner = pad.inner(input_area);
     f.render_widget(pad, input_area);
 
@@ -690,11 +724,18 @@ fn draw_two_column(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, p
 
 // ── Per-step input rendering ─────────────────────────────────────
 
-fn draw_scope_confirm(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_scope_confirm(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Workspace summary",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "This is the live structure from the herdr daemon.",
@@ -705,12 +746,17 @@ fn draw_scope_confirm(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pa
             Span::styled("  workspace   ", Style::default().fg(palette.overlay0)),
             Span::styled(
                 format!("{} ({})", form.raw.workspace_label, form.raw.workspace_id),
-                Style::default().fg(palette.text).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.text)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
             Span::styled("  tabs        ", Style::default().fg(palette.overlay0)),
-            Span::styled(format!("{}", form.tab_labels.len()), Style::default().fg(palette.text)),
+            Span::styled(
+                format!("{}", form.tab_labels.len()),
+                Style::default().fg(palette.text),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  panes       ", Style::default().fg(palette.overlay0)),
@@ -720,12 +766,18 @@ fn draw_scope_confirm(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pa
             ),
         ]),
         Line::raw(""),
-        Line::from(Span::styled("  per-tab breakdown:", Style::default().fg(palette.subtext0))),
+        Line::from(Span::styled(
+            "  per-tab breakdown:",
+            Style::default().fg(palette.subtext0),
+        )),
     ];
 
     for (i, label) in form.tab_labels.iter().enumerate() {
         lines.push(Line::from(vec![
-            Span::styled(format!("    tab {}  ", i + 1), Style::default().fg(palette.accent)),
+            Span::styled(
+                format!("    tab {}  ", i + 1),
+                Style::default().fg(palette.accent),
+            ),
             Span::styled(
                 format!("{:<16}", if label.is_empty() { "(unnamed)" } else { label }),
                 Style::default().fg(palette.text),
@@ -748,7 +800,9 @@ fn draw_name(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &t
     let mut lines = vec![
         Line::from(Span::styled(
             "Template name",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "The filename stem and the `name:` field in the YAML.",
@@ -785,7 +839,9 @@ fn draw_name(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &t
             Span::styled(" ", Style::default()),
             Span::styled(
                 format!("{}▍", form.name),
-                Style::default().fg(palette.text).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.text)
+                    .add_modifier(Modifier::BOLD),
             ),
         ])),
         field_inner,
@@ -806,7 +862,10 @@ fn draw_name(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &t
         )));
     } else {
         lines.push(Line::from(Span::styled(
-            format!("  → writes to ~/.config/herdr/templates/{}.yaml", form.name.trim()),
+            format!(
+                "  → writes to ~/.config/herdr/templates/{}.yaml",
+                form.name.trim()
+            ),
             Style::default().fg(palette.overlay0),
         )));
     }
@@ -814,11 +873,18 @@ fn draw_name(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &t
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_match_globs(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_match_globs(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Match globs",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "Glob patterns that auto-preselect this template (e.g. `**/Cargo.toml`).",
@@ -876,7 +942,9 @@ fn draw_match_globs(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pale
     // Default flag toggle (row 7).
     let default_marker = if form.default_flag { "✔" } else { "○" };
     let default_style = if form.default_flag {
-        Style::default().fg(palette.green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette.green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(palette.subtext0)
     };
@@ -897,11 +965,18 @@ fn draw_match_globs(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pale
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_command_policy(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_command_policy(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Command policy",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "How to fill each pane's `command:` from the running process group.",
@@ -931,7 +1006,14 @@ fn draw_command_policy(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, p
         lines.push(Line::from(Span::styled(label_line, label_style)));
         // Description line, indented.
         lines.push(Line::from(vec![
-            Span::styled("   ", Style::default().bg(if is_selected { palette.selection_bg } else { palette.panel_bg })),
+            Span::styled(
+                "   ",
+                Style::default().bg(if is_selected {
+                    palette.selection_bg
+                } else {
+                    palette.panel_bg
+                }),
+            ),
             Span::styled(*desc, desc_style),
         ]));
         lines.push(Line::raw(""));
@@ -943,11 +1025,18 @@ fn draw_command_policy(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, p
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_cwd_policy(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_cwd_policy(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
     let mut lines = vec![
         Line::from(Span::styled(
             "cwd policy",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "How to handle each pane's working directory in the generated template.",
@@ -975,7 +1064,14 @@ fn draw_cwd_policy(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palet
         let label_line = format!(" {} {:<10} ", marker, label);
         lines.push(Line::from(Span::styled(label_line, label_style)));
         lines.push(Line::from(vec![
-            Span::styled("   ", Style::default().bg(if is_selected { palette.selection_bg } else { palette.panel_bg })),
+            Span::styled(
+                "   ",
+                Style::default().bg(if is_selected {
+                    palette.selection_bg
+                } else {
+                    palette.panel_bg
+                }),
+            ),
             Span::styled(*desc, desc_style),
         ]));
         lines.push(Line::raw(""));
@@ -991,7 +1087,9 @@ fn draw_names(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &
     let mut lines = vec![
         Line::from(Span::styled(
             "Names",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "Pre-filled from live labels. ↑↓ to focus a row, type to edit. Blank = no name.",
@@ -1008,7 +1106,11 @@ fn draw_names(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &
         match row.pane_idx {
             None => {
                 // Tab header row.
-                let label = form.tab_labels.get(row.tab_idx).map(String::as_str).unwrap_or("");
+                let label = form
+                    .tab_labels
+                    .get(row.tab_idx)
+                    .map(String::as_str)
+                    .unwrap_or("");
                 let display = if label.is_empty() { "(unnamed)" } else { label };
                 let style = if is_focused {
                     Style::default()
@@ -1019,7 +1121,13 @@ fn draw_names(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &
                     Style::default().fg(palette.subtext0)
                 };
                 lines.push(Line::from(Span::styled(
-                    format!(" {} tab {}: {}{} ", marker, row.tab_idx + 1, display, cursor),
+                    format!(
+                        " {} tab {}: {}{} ",
+                        marker,
+                        row.tab_idx + 1,
+                        display,
+                        cursor
+                    ),
                     style,
                 )));
             }
@@ -1055,11 +1163,18 @@ fn draw_names(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_review_input(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_review_input(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Ready to write",
-            Style::default().fg(palette.subtext0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.subtext0)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
     ];
@@ -1073,7 +1188,10 @@ fn draw_review_input(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pal
     ];
     for (key, val) in &summary {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<10} ", key), Style::default().fg(palette.overlay0)),
+            Span::styled(
+                format!("  {:<10} ", key),
+                Style::default().fg(palette.overlay0),
+            ),
             Span::styled(*val, Style::default().fg(palette.text)),
         ]));
     }
@@ -1086,7 +1204,9 @@ fn draw_review_input(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pal
     )));
     lines.push(Line::from(Span::styled(
         "  Enter writes the file",
-        Style::default().fg(palette.green).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.green)
+            .add_modifier(Modifier::BOLD),
     )));
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
@@ -1094,11 +1214,18 @@ fn draw_review_input(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pal
 
 // ── Phase C5: clash + editor prompt rendering ──────────────────
 
-fn draw_clash_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
+fn draw_clash_prompt(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
     let mut lines = vec![
         Line::from(Span::styled(
             "⚠ Name clash",
-            Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.red)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
         Line::from(Span::styled(
@@ -1123,7 +1250,10 @@ fn draw_clash_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pal
     ];
     for (key, label, desc, color) in &choices {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {} ", key), Style::default().fg(*color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("  {} ", key),
+                Style::default().fg(*color).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("{:<10} ", label), Style::default().fg(palette.text)),
             Span::styled(*desc, Style::default().fg(palette.overlay0)),
         ]));
@@ -1138,8 +1268,17 @@ fn draw_clash_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pal
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_editor_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
-    let path = form.written_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+fn draw_editor_prompt(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &CaptureForm,
+    palette: &theme::Palette,
+) {
+    let path = form
+        .written_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
@@ -1147,7 +1286,9 @@ fn draw_editor_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pa
     let mut lines = vec![
         Line::from(Span::styled(
             "✓ Template written",
-            Style::default().fg(palette.green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.green)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
         Line::from(Span::styled(
@@ -1164,12 +1305,20 @@ fn draw_editor_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pa
     ];
 
     let choices = [
-        ("y", "yes", format!("open in {} (replaces this pane)", editor), palette.green),
+        (
+            "y",
+            "yes",
+            format!("open in {} (replaces this pane)", editor),
+            palette.green,
+        ),
         ("n", "no", "close the popup".to_string(), palette.subtext0),
     ];
     for (key, label, desc, color) in &choices {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {} ", key), Style::default().fg(*color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("  {} ", key),
+                Style::default().fg(*color).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("{:<6} ", label), Style::default().fg(palette.text)),
             Span::styled(desc, Style::default().fg(palette.overlay0)),
         ]));
@@ -1184,12 +1333,20 @@ fn draw_editor_prompt(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, pa
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_preview(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, palette: &theme::Palette) {
+fn draw_preview(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    form: &mut CaptureForm,
+    palette: &theme::Palette,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette.surface1))
-        .title(Span::styled(" Live preview ", Style::default().fg(palette.subtext0)))
+        .title(Span::styled(
+            " Live preview ",
+            Style::default().fg(palette.subtext0),
+        ))
         .style(Style::default().bg(palette.surface0));
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -1198,12 +1355,10 @@ fn draw_preview(f: &mut ratatui::Frame, area: Rect, form: &mut CaptureForm, pale
     let yaml = match form.build_preview_yaml() {
         Some(y) => y,
         None => {
-            let lines = vec![
-                Line::from(Span::styled(
-                    "(enter a name to see the preview)",
-                    Style::default().fg(palette.overlay0),
-                )),
-            ];
+            let lines = vec![Line::from(Span::styled(
+                "(enter a name to see the preview)",
+                Style::default().fg(palette.overlay0),
+            ))];
             f.render_widget(Paragraph::new(lines), inner);
             return;
         }
@@ -1267,12 +1422,18 @@ fn highlight_yaml_line(line: &str, palette: &theme::Palette) -> Line<'static> {
         ];
         if !val.is_empty() {
             spans.push(Span::styled(" ", Style::default()));
-            spans.push(Span::styled(val.to_string(), Style::default().fg(palette.text)));
+            spans.push(Span::styled(
+                val.to_string(),
+                Style::default().fg(palette.text),
+            ));
         }
         return Line::from(spans);
     }
 
-    Line::from(Span::styled(line.to_string(), Style::default().fg(palette.text)))
+    Line::from(Span::styled(
+        line.to_string(),
+        Style::default().fg(palette.text),
+    ))
 }
 
 // ── Footer ──────────────────────────────────────────────────────
@@ -1280,7 +1441,10 @@ fn highlight_yaml_line(line: &str, palette: &theme::Palette) -> Line<'static> {
 fn draw_footer(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: &theme::Palette) {
     let (left, right) = match form.step {
         Step::ScopeConfirm => (
-            vec![Span::styled("esc abort", Style::default().fg(palette.overlay0))],
+            vec![Span::styled(
+                "esc abort",
+                Style::default().fg(palette.overlay0),
+            )],
             vec![Span::styled(
                 "⏎ continue",
                 Style::default().fg(palette.subtext0),
@@ -1295,12 +1459,17 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, form: &CaptureForm, palette: 
                 Span::styled("↑↓ scroll   ", Style::default().fg(palette.overlay0)),
                 Span::styled(
                     "⏎ write",
-                    Style::default().fg(palette.green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(palette.green)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ],
         ),
         Step::ClashPrompt => (
-            vec![Span::styled("esc cancel", Style::default().fg(palette.overlay0))],
+            vec![Span::styled(
+                "esc cancel",
+                Style::default().fg(palette.overlay0),
+            )],
             vec![Span::styled(
                 "o overwrite   r rename   c cancel",
                 Style::default().fg(palette.overlay0),
