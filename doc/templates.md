@@ -36,7 +36,9 @@ default: false          # true = the fallback when no match glob fits
 match:                   # optional; globs that auto-preselect this template
   - "**/Cargo.toml"
 
-# Tabs — each becomes a herdr tab
+# Tabs — each becomes a herdr tab; `name` is set as the tab's label
+# (the first tab is renamed after workspace.create; later tabs get
+# `label` at tab.create time).
 tabs:
   - name: editor
     cwd: ~/code           # TAB-level cwd: every pane in this tab starts here
