@@ -409,6 +409,36 @@ fn collect_pane_ids_rec(node: &serde_json::Value, ids: &mut Vec<String>) {
     }
 }
 
+/// Walk an export tree and collect each leaf pane's live `label` (empty
+/// string when the pane has no label), in left-to-right depth-first
+/// order — the same order `map_split`/`map_child` walk, so `pane_names`
+/// indices align with `map_pane`'s `pane_idx`. Used to pre-fill the
+/// wizard's per-pane name fields.
+pub fn collect_pane_labels(root: &serde_json::Value) -> Vec<String> {
+    let mut labels = Vec::new();
+    collect_pane_labels_rec(root, &mut labels);
+    labels
+}
+
+fn collect_pane_labels_rec(node: &serde_json::Value, labels: &mut Vec<String>) {
+    let kind = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match kind {
+        "pane" => {
+            let label = node.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            labels.push(label.to_string());
+        }
+        "split" => {
+            if let Some(first) = node.get("first") {
+                collect_pane_labels_rec(first, labels);
+            }
+            if let Some(second) = node.get("second") {
+                collect_pane_labels_rec(second, labels);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Find the cwd for a specific pane_id in an export tree.
 fn pane_cwd_for(root: &serde_json::Value, target_pane_id: &str) -> Option<String> {
     let kind = root.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -435,12 +465,14 @@ fn pane_cwd_for(root: &serde_json::Value, target_pane_id: &str) -> Option<String
 /// `tab_names` overrides the live tab labels (first entry → first tab,
 /// etc.); entries beyond the tab count are ignored, missing entries
 /// fall back to the live label.
+#[allow(clippy::too_many_arguments)]
 pub fn build_template(
     raw: &RawCapture,
     name: &str,
     cwd_policy: CwdPolicy,
     command_policy: CommandPolicy,
     tab_names: &[String],
+    pane_names: &[Vec<String>],
     match_globs: Vec<String>,
     default: bool,
 ) -> (Template, Vec<Annotation>) {
@@ -451,7 +483,19 @@ pub fn build_template(
         .enumerate()
         .map(|(i, tab)| {
             let label = tab_names.get(i).cloned().unwrap_or_else(|| tab.tab_label.clone());
-            map_tab(tab, &raw.base_cwd, cwd_policy, command_policy, &raw.pane_commands, &mut annotations, label)
+            let tab_pane_names = pane_names.get(i).cloned().unwrap_or_default();
+            let mut pane_idx = 0usize;
+            map_tab(
+                tab,
+                &raw.base_cwd,
+                cwd_policy,
+                command_policy,
+                &raw.pane_commands,
+                &mut annotations,
+                label,
+                &tab_pane_names,
+                &mut pane_idx,
+            )
         })
         .collect();
 
@@ -474,7 +518,7 @@ pub fn capture_template(
     command_policy: CommandPolicy,
 ) -> Result<(Template, Vec<Annotation>), String> {
     let raw = fetch_raw(socket_path)?;
-    Ok(build_template(&raw, name, cwd_policy, command_policy, &[], Vec::new(), false))
+    Ok(build_template(&raw, name, cwd_policy, command_policy, &[], &[], Vec::new(), false))
 }
 
 /// Fetch the `layout.export` root for one tab.
@@ -517,6 +561,7 @@ fn first_leaf_cwd(root: &serde_json::Value) -> Option<String> {
 ///
 /// `tab_name` overrides the live label. `annotations` is appended to
 /// in pane order (left-to-right, depth-first).
+#[allow(clippy::too_many_arguments)]
 fn map_tab(
     tab: &RawTab,
     base_cwd: &str,
@@ -525,14 +570,34 @@ fn map_tab(
     pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
     tab_name: String,
+    pane_names: &[String],
+    pane_idx: &mut usize,
 ) -> TemplateTab {
     let kind = tab.root.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let layout = match kind {
-        "split" => map_split(&tab.root, base_cwd, cwd_policy, command_policy, pane_commands, annotations),
+        "split" => map_split(
+            &tab.root,
+            base_cwd,
+            cwd_policy,
+            command_policy,
+            pane_commands,
+            annotations,
+            pane_names,
+            pane_idx,
+        ),
         _ => Layout {
             direction: "v".to_string(),
             ratio: 0,
-            panes: vec![map_pane(&tab.root, base_cwd, cwd_policy, command_policy, pane_commands, annotations)],
+            panes: vec![map_pane(
+                &tab.root,
+                base_cwd,
+                cwd_policy,
+                command_policy,
+                pane_commands,
+                annotations,
+                pane_names,
+                pane_idx,
+            )],
         },
     };
     TemplateTab {
@@ -542,6 +607,7 @@ fn map_tab(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_split(
     node: &serde_json::Value,
     base_cwd: &str,
@@ -549,15 +615,35 @@ fn map_split(
     command_policy: CommandPolicy,
     pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
+    pane_names: &[String],
+    pane_idx: &mut usize,
 ) -> Layout {
     let direction = node.get("direction").and_then(|v| v.as_str()).unwrap_or("right");
     let ratio = node.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.5);
     let mut panes = Vec::new();
     if let Some(first) = node.get("first") {
-        panes.push(map_child(first, base_cwd, cwd_policy, command_policy, pane_commands, annotations));
+        panes.push(map_child(
+            first,
+            base_cwd,
+            cwd_policy,
+            command_policy,
+            pane_commands,
+            annotations,
+            pane_names,
+            pane_idx,
+        ));
     }
     if let Some(second) = node.get("second") {
-        panes.push(map_child(second, base_cwd, cwd_policy, command_policy, pane_commands, annotations));
+        panes.push(map_child(
+            second,
+            base_cwd,
+            cwd_policy,
+            command_policy,
+            pane_commands,
+            annotations,
+            pane_names,
+            pane_idx,
+        ));
     }
     Layout {
         direction: map_direction(direction),
@@ -566,6 +652,7 @@ fn map_split(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_child(
     node: &serde_json::Value,
     base_cwd: &str,
@@ -573,19 +660,49 @@ fn map_child(
     command_policy: CommandPolicy,
     pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
+    pane_names: &[String],
+    pane_idx: &mut usize,
 ) -> PaneNode {
     let kind = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
         "split" => PaneNode::Nested {
-            layout: map_split(node, base_cwd, cwd_policy, command_policy, pane_commands, annotations),
+            layout: map_split(
+                node,
+                base_cwd,
+                cwd_policy,
+                command_policy,
+                pane_commands,
+                annotations,
+                pane_names,
+                pane_idx,
+            ),
         },
-        _ => map_pane(node, base_cwd, cwd_policy, command_policy, pane_commands, annotations),
+        _ => map_pane(
+            node,
+            base_cwd,
+            cwd_policy,
+            command_policy,
+            pane_commands,
+            annotations,
+            pane_names,
+            pane_idx,
+        ),
     }
 }
 
 /// Map a `pane` export node → a leaf `PaneNode::Pane`. The `command`
 /// comes from the pre-computed `pane_commands` map (fetched during
 /// `fetch_raw`), or `None` when the policy is `Blank`.
+///
+/// `pane_names`/`pane_idx` apply the wizard's per-pane name override
+/// (Phase: combined Names step). The pane at `pane_names[*pane_idx]`
+/// wins over the live `label`: a non-empty entry becomes `Some(name)`;
+/// an empty entry becomes `None` (the "missing name" — no `name:` field
+/// written); an absent entry (defensive, when the wizard has fewer entries
+/// than panes) falls back to the live `label` (current behavior).
+/// `*pane_idx` is advanced once per leaf pane, in the same left-to-right
+/// depth-first order `collect_pane_labels` walks, so indices align.
+#[allow(clippy::too_many_arguments)]
 fn map_pane(
     node: &serde_json::Value,
     base_cwd: &str,
@@ -593,6 +710,8 @@ fn map_pane(
     command_policy: CommandPolicy,
     pane_commands: &HashMap<String, PaneCommandResult>,
     annotations: &mut Vec<Annotation>,
+    pane_names: &[String],
+    pane_idx: &mut usize,
 ) -> PaneNode {
     let raw_cwd = node.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
     let label = node.get("label").and_then(|v| v.as_str());
@@ -612,10 +731,17 @@ fn map_pane(
         }
     };
 
+    let name = match pane_names.get(*pane_idx) {
+        Some(s) if !s.is_empty() => Some(s.clone()),
+        Some(_) => None,
+        None => label.map(str::to_string),
+    };
+    *pane_idx += 1;
+
     PaneNode::Pane {
         command,
         cwd: apply_cwd_policy(raw_cwd, base_cwd, cwd_policy),
-        name: label.map(str::to_string),
+        name,
     }
 }
 
@@ -1014,7 +1140,7 @@ mod tests {
     #[test]
     fn map_tab_nested_split_preserves_structure() {
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string());
+        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string(), &[], &mut 0);
         assert_eq!(tt.name, "main");
         assert_eq!(tt.layout.direction, "v"); // right → v
         assert_eq!(tt.layout.ratio, 50);
@@ -1042,10 +1168,144 @@ mod tests {
     fn map_tab_single_pane_wraps_in_one_pane_layout() {
         let root = json!({"type": "pane", "pane_id": "p1", "cwd": "/x"});
         let tab = captured_tab(root);
-        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "tab1".to_string());
+        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "tab1".to_string(), &[], &mut 0);
         assert_eq!(tt.layout.direction, "v");
         assert_eq!(tt.layout.ratio, 0);
         assert_eq!(tt.layout.panes.len(), 1);
+    }
+
+    // ── Combined Names step: per-pane name override ──
+
+    #[test]
+    fn collect_pane_labels_walks_left_to_right_depth_first() {
+        // right-split over a down-split: p3, then p4, p5.
+        let root = export_nested_tree();
+        let labels = collect_pane_labels(&root);
+        assert_eq!(labels, vec!["editor", "testhel", ""]); // p5 has no label
+    }
+
+    #[test]
+    fn map_pane_override_non_empty_wins_over_live_label() {
+        // A pane with a live label "editor"; override to "my-editor".
+        let root = json!({"type": "pane", "pane_id": "p3", "cwd": "/a", "label": "editor"});
+        let tab = captured_tab(root);
+        let tt = map_tab(
+            &tab, "/a", CwdPolicy::Absolute, CommandPolicy::Blank,
+            &HashMap::new(), &mut Vec::new(), "main".to_string(),
+            &["my-editor".to_string()], &mut 0,
+        );
+        match &tt.layout.panes[0] {
+            PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("my-editor")),
+            other => panic!("expected Pane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_pane_override_empty_blanks_to_none() {
+        // A pane with a live label "editor"; override to empty → None
+        // (the "missing name" — no `name:` field written).
+        let root = json!({"type": "pane", "pane_id": "p3", "cwd": "/a", "label": "editor"});
+        let tab = captured_tab(root);
+        let tt = map_tab(
+            &tab, "/a", CwdPolicy::Absolute, CommandPolicy::Blank,
+            &HashMap::new(), &mut Vec::new(), "main".to_string(),
+            &[String::new()], &mut 0,
+        );
+        match &tt.layout.panes[0] {
+            PaneNode::Pane { name, .. } => assert_eq!(*name, None),
+            other => panic!("expected Pane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_pane_override_absent_falls_back_to_live_label() {
+        // No override entry for this pane → live label wins (current
+        // behavior, defensive when the wizard has fewer entries than panes).
+        let root = json!({"type": "pane", "pane_id": "p3", "cwd": "/a", "label": "editor"});
+        let tab = captured_tab(root);
+        let tt = map_tab(
+            &tab, "/a", CwdPolicy::Absolute, CommandPolicy::Blank,
+            &HashMap::new(), &mut Vec::new(), "main".to_string(),
+            &[], &mut 0,
+        );
+        match &tt.layout.panes[0] {
+            PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("editor")),
+            other => panic!("expected Pane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_pane_override_indices_align_with_tree_walk_order() {
+        // Nested tree: p3 (label "editor"), p4 (label "testhel"), p5 (no label).
+        // Overrides: ["a", "", "c"] → p3=a, p4=None (blanked), p5=c.
+        let root = export_nested_tree();
+        let tab = captured_tab(root);
+        let tt = map_tab(
+            &tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank,
+            &HashMap::new(), &mut Vec::new(), "main".to_string(),
+            &["a".to_string(), String::new(), "c".to_string()], &mut 0,
+        );
+        // first = pane p3
+        match &tt.layout.panes[0] {
+            PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("a")),
+            other => panic!("expected Pane, got {other:?}"),
+        }
+        // second = nested down-split → p4, p5
+        match &tt.layout.panes[1] {
+            PaneNode::Nested { layout } => {
+                assert_eq!(layout.panes.len(), 2);
+                match &layout.panes[0] {
+                    PaneNode::Pane { name, .. } => assert_eq!(*name, None, "p4 blanked"),
+                    other => panic!("expected Pane, got {other:?}"),
+                }
+                match &layout.panes[1] {
+                    PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("c")),
+                    other => panic!("expected Pane, got {other:?}"),
+                }
+            }
+            other => panic!("expected Nested, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_template_round_trips_mixed_pane_names_through_read_templates() {
+        // p3 → "a", p4 → blanked (None), p5 → "c" (was unlabeled).
+        let root = export_nested_tree();
+        let raw = RawCapture {
+            workspace_id: "wP".to_string(),
+            workspace_label: "ws".to_string(),
+            base_cwd: "/code/proj".to_string(),
+            tabs: vec![RawTab { tab_label: "main".to_string(), root }],
+            pane_commands: HashMap::new(),
+        };
+        let (template, _anns) = build_template(
+            &raw, "roundtrip", CwdPolicy::Relative, CommandPolicy::Blank,
+            &["main".to_string()],
+            &[vec!["a".to_string(), String::new(), "c".to_string()]],
+            Vec::new(), false,
+        );
+        let yaml = template_to_yaml(&template, &[]).unwrap();
+        let parsed: source::Template = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.tabs.len(), 1);
+        // p3 = a
+        match &parsed.tabs[0].layout.panes[0] {
+            PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("a")),
+            other => panic!("expected Pane, got {other:?}"),
+        }
+        // p4 blanked, p5 = c
+        match &parsed.tabs[0].layout.panes[1] {
+            PaneNode::Nested { layout } => {
+                match &layout.panes[0] {
+                    PaneNode::Pane { name, .. } => assert_eq!(*name, None),
+                    other => panic!("expected Pane, got {other:?}"),
+                }
+                match &layout.panes[1] {
+                    PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("c")),
+                    other => panic!("expected Pane, got {other:?}"),
+                }
+            }
+            other => panic!("expected Nested, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1103,7 +1363,7 @@ mod tests {
     fn template_to_yaml_round_trips_through_read_templates() {
         // Build a template from the nested fixture, serialize, parse back.
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string());
+        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string(), &[], &mut 0);
         let template = Template {
             name: "roundtrip".to_string(),
             match_globs: vec![],
