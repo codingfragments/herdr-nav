@@ -143,9 +143,21 @@ pub fn parse_tabs_for_workspace(
             if ws != workspace_id {
                 return None;
             }
-            let tab_id = t.get("tab_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let label = t.get("label").and_then(|v| v.as_str()).unwrap_or(&tab_id).to_string();
-            let number = t.get("number").and_then(|v| v.as_u64()).map(|n| n as u32).unwrap_or(0);
+            let tab_id = t
+                .get("tab_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let label = t
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&tab_id)
+                .to_string();
+            let number = t
+                .get("number")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32)
+                .unwrap_or(0);
             Some((tab_id, label, number))
         })
         .collect();
@@ -159,10 +171,7 @@ pub fn parse_tabs_for_workspace(
 /// maximum nesting of split nodes (0 = root is a pane, 1 = one level of
 /// splits, …). Phase C2 will return the full tree; C1 only needs the
 /// counts for the summary print.
-fn layout_export(
-    socket_path: &str,
-    tab_id: &str,
-) -> Result<(usize, usize), String> {
+fn layout_export(socket_path: &str, tab_id: &str) -> Result<(usize, usize), String> {
     let resp = socket_client::request(
         socket_path,
         "layout.export",
@@ -194,8 +203,14 @@ fn count_and_depth(node: &serde_json::Value, pane_count: &mut usize) -> usize {
             0
         }
         "split" => {
-            let first = node.get("first").map(|n| count_and_depth(n, pane_count)).unwrap_or(0);
-            let second = node.get("second").map(|n| count_and_depth(n, pane_count)).unwrap_or(0);
+            let first = node
+                .get("first")
+                .map(|n| count_and_depth(n, pane_count))
+                .unwrap_or(0);
+            let second = node
+                .get("second")
+                .map(|n| count_and_depth(n, pane_count))
+                .unwrap_or(0);
             1 + first.max(second)
         }
         _ => 0,
@@ -250,7 +265,9 @@ impl CwdPolicy {
             "relative" | "" => Ok(Self::Relative),
             "absolute" => Ok(Self::Absolute),
             "inherit" | "blank" => Ok(Self::Inherit),
-            other => Err(format!("unknown cwd policy '{other}' (relative|absolute|inherit)")),
+            other => Err(format!(
+                "unknown cwd policy '{other}' (relative|absolute|inherit)"
+            )),
         }
     }
 }
@@ -354,7 +371,13 @@ pub fn fetch_raw(socket_path: &str) -> Result<RawCapture, String> {
             let cwd = pane_cwd_for(&tab.root, &pane_id).unwrap_or_default();
             match best_effort_command(socket_path, &pane_id, &cwd) {
                 Ok((command, annotation)) => {
-                    pane_commands.insert(pane_id.clone(), PaneCommandResult { command, annotation });
+                    pane_commands.insert(
+                        pane_id.clone(),
+                        PaneCommandResult {
+                            command,
+                            annotation,
+                        },
+                    );
                 }
                 Err(e) => {
                     pane_commands.insert(
@@ -454,7 +477,10 @@ fn pane_cwd_for(root: &serde_json::Value, target_pane_id: &str) -> Option<String
         "split" => root
             .get("first")
             .and_then(|n| pane_cwd_for(n, target_pane_id))
-            .or_else(|| root.get("second").and_then(|n| pane_cwd_for(n, target_pane_id))),
+            .or_else(|| {
+                root.get("second")
+                    .and_then(|n| pane_cwd_for(n, target_pane_id))
+            }),
         _ => None,
     }
 }
@@ -482,7 +508,10 @@ pub fn build_template(
         .iter()
         .enumerate()
         .map(|(i, tab)| {
-            let label = tab_names.get(i).cloned().unwrap_or_else(|| tab.tab_label.clone());
+            let label = tab_names
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| tab.tab_label.clone());
             let tab_pane_names = pane_names.get(i).cloned().unwrap_or_default();
             let mut pane_idx = 0usize;
             map_tab(
@@ -518,7 +547,16 @@ pub fn capture_template(
     command_policy: CommandPolicy,
 ) -> Result<(Template, Vec<Annotation>), String> {
     let raw = fetch_raw(socket_path)?;
-    Ok(build_template(&raw, name, cwd_policy, command_policy, &[], &[], Vec::new(), false))
+    Ok(build_template(
+        &raw,
+        name,
+        cwd_policy,
+        command_policy,
+        &[],
+        &[],
+        Vec::new(),
+        false,
+    ))
 }
 
 /// Fetch the `layout.export` root for one tab.
@@ -540,10 +578,7 @@ fn fetch_layout_root(socket_path: &str, tab_id: &str) -> Result<serde_json::Valu
 fn first_leaf_cwd(root: &serde_json::Value) -> Option<String> {
     let kind = root.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
-        "pane" => root
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        "pane" => root.get("cwd").and_then(|v| v.as_str()).map(str::to_string),
         "split" => root
             .get("first")
             .and_then(first_leaf_cwd)
@@ -618,7 +653,10 @@ fn map_split(
     pane_names: &[String],
     pane_idx: &mut usize,
 ) -> Layout {
-    let direction = node.get("direction").and_then(|v| v.as_str()).unwrap_or("right");
+    let direction = node
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("right");
     let ratio = node.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.5);
     let mut panes = Vec::new();
     if let Some(first) = node.get("first") {
@@ -825,11 +863,13 @@ pub fn best_effort_command(
     let cwd_match: Vec<&serde_json::Value> = candidates
         .iter()
         .copied()
-        .filter(|p| {
-            p.get("cwd").and_then(|v| v.as_str()).unwrap_or("") == pane_cwd
-        })
+        .filter(|p| p.get("cwd").and_then(|v| v.as_str()).unwrap_or("") == pane_cwd)
         .collect();
-    let pool: Vec<&serde_json::Value> = if !cwd_match.is_empty() { cwd_match } else { candidates };
+    let pool: Vec<&serde_json::Value> = if !cwd_match.is_empty() {
+        cwd_match
+    } else {
+        candidates
+    };
     // Smallest pid tiebreak (clone to a sortable vec).
     let mut sorted: Vec<&serde_json::Value> = pool;
     sorted.sort_by_key(|p| p.get("pid").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
@@ -843,7 +883,9 @@ pub fn best_effort_command(
                     None,
                     Some(Annotation {
                         pane_id: pane_id.to_string(),
-                        text: format!("best-effort: pane {pane_id} process {name}; no cmdline; verify"),
+                        text: format!(
+                            "best-effort: pane {pane_id} process {name}; no cmdline; verify"
+                        ),
                     }),
                 ))
             } else {
@@ -851,7 +893,9 @@ pub fn best_effort_command(
                     Some(cmdline.to_string()),
                     Some(Annotation {
                         pane_id: pane_id.to_string(),
-                        text: format!("best-effort: captured from pane {pane_id} process {name}; verify"),
+                        text: format!(
+                            "best-effort: captured from pane {pane_id} process {name}; verify"
+                        ),
                     }),
                 ))
             }
@@ -919,11 +963,9 @@ fn apply_cwd_policy(raw_cwd: &str, base_cwd: &str, policy: CwdPolicy) -> Option<
 /// order — the Nth annotation belongs to the Nth pane that has a
 /// `command:` key, in document order. This is fragile but correct for
 /// the deterministic output serde_yaml produces.
-pub fn template_to_yaml(
-    template: &Template,
-    annotations: &[Annotation],
-) -> Result<String, String> {
-    let yaml = serde_yaml::to_string(template).map_err(|e| format!("YAML serialize failed: {e}"))?;
+pub fn template_to_yaml(template: &Template, annotations: &[Annotation]) -> Result<String, String> {
+    let yaml =
+        serde_yaml::to_string(template).map_err(|e| format!("YAML serialize failed: {e}"))?;
     if annotations.is_empty() {
         return Ok(yaml);
     }
@@ -1134,13 +1176,26 @@ mod tests {
     }
 
     fn captured_tab(root: serde_json::Value) -> RawTab {
-        RawTab { tab_label: "main".to_string(), root }
+        RawTab {
+            tab_label: "main".to_string(),
+            root,
+        }
     }
 
     #[test]
     fn map_tab_nested_split_preserves_structure() {
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string(), &[], &mut 0);
+        let tt = map_tab(
+            &tab,
+            "/code/proj",
+            CwdPolicy::Absolute,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "main".to_string(),
+            &[],
+            &mut 0,
+        );
         assert_eq!(tt.name, "main");
         assert_eq!(tt.layout.direction, "v"); // right → v
         assert_eq!(tt.layout.ratio, 50);
@@ -1168,7 +1223,17 @@ mod tests {
     fn map_tab_single_pane_wraps_in_one_pane_layout() {
         let root = json!({"type": "pane", "pane_id": "p1", "cwd": "/x"});
         let tab = captured_tab(root);
-        let tt = map_tab(&tab, "/x", CwdPolicy::Absolute, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "tab1".to_string(), &[], &mut 0);
+        let tt = map_tab(
+            &tab,
+            "/x",
+            CwdPolicy::Absolute,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "tab1".to_string(),
+            &[],
+            &mut 0,
+        );
         assert_eq!(tt.layout.direction, "v");
         assert_eq!(tt.layout.ratio, 0);
         assert_eq!(tt.layout.panes.len(), 1);
@@ -1190,9 +1255,15 @@ mod tests {
         let root = json!({"type": "pane", "pane_id": "p3", "cwd": "/a", "label": "editor"});
         let tab = captured_tab(root);
         let tt = map_tab(
-            &tab, "/a", CwdPolicy::Absolute, CommandPolicy::Blank,
-            &HashMap::new(), &mut Vec::new(), "main".to_string(),
-            &["my-editor".to_string()], &mut 0,
+            &tab,
+            "/a",
+            CwdPolicy::Absolute,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "main".to_string(),
+            &["my-editor".to_string()],
+            &mut 0,
         );
         match &tt.layout.panes[0] {
             PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("my-editor")),
@@ -1207,9 +1278,15 @@ mod tests {
         let root = json!({"type": "pane", "pane_id": "p3", "cwd": "/a", "label": "editor"});
         let tab = captured_tab(root);
         let tt = map_tab(
-            &tab, "/a", CwdPolicy::Absolute, CommandPolicy::Blank,
-            &HashMap::new(), &mut Vec::new(), "main".to_string(),
-            &[String::new()], &mut 0,
+            &tab,
+            "/a",
+            CwdPolicy::Absolute,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "main".to_string(),
+            &[String::new()],
+            &mut 0,
         );
         match &tt.layout.panes[0] {
             PaneNode::Pane { name, .. } => assert_eq!(*name, None),
@@ -1224,9 +1301,15 @@ mod tests {
         let root = json!({"type": "pane", "pane_id": "p3", "cwd": "/a", "label": "editor"});
         let tab = captured_tab(root);
         let tt = map_tab(
-            &tab, "/a", CwdPolicy::Absolute, CommandPolicy::Blank,
-            &HashMap::new(), &mut Vec::new(), "main".to_string(),
-            &[], &mut 0,
+            &tab,
+            "/a",
+            CwdPolicy::Absolute,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "main".to_string(),
+            &[],
+            &mut 0,
         );
         match &tt.layout.panes[0] {
             PaneNode::Pane { name, .. } => assert_eq!(name.as_deref(), Some("editor")),
@@ -1241,9 +1324,15 @@ mod tests {
         let root = export_nested_tree();
         let tab = captured_tab(root);
         let tt = map_tab(
-            &tab, "/code/proj", CwdPolicy::Absolute, CommandPolicy::Blank,
-            &HashMap::new(), &mut Vec::new(), "main".to_string(),
-            &["a".to_string(), String::new(), "c".to_string()], &mut 0,
+            &tab,
+            "/code/proj",
+            CwdPolicy::Absolute,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "main".to_string(),
+            &["a".to_string(), String::new(), "c".to_string()],
+            &mut 0,
         );
         // first = pane p3
         match &tt.layout.panes[0] {
@@ -1275,14 +1364,21 @@ mod tests {
             workspace_id: "wP".to_string(),
             workspace_label: "ws".to_string(),
             base_cwd: "/code/proj".to_string(),
-            tabs: vec![RawTab { tab_label: "main".to_string(), root }],
+            tabs: vec![RawTab {
+                tab_label: "main".to_string(),
+                root,
+            }],
             pane_commands: HashMap::new(),
         };
         let (template, _anns) = build_template(
-            &raw, "roundtrip", CwdPolicy::Relative, CommandPolicy::Blank,
+            &raw,
+            "roundtrip",
+            CwdPolicy::Relative,
+            CommandPolicy::Blank,
             &["main".to_string()],
             &[vec!["a".to_string(), String::new(), "c".to_string()]],
-            Vec::new(), false,
+            Vec::new(),
+            false,
         );
         let yaml = template_to_yaml(&template, &[]).unwrap();
         let parsed: source::Template = serde_yaml::from_str(&yaml).unwrap();
@@ -1363,7 +1459,17 @@ mod tests {
     fn template_to_yaml_round_trips_through_read_templates() {
         // Build a template from the nested fixture, serialize, parse back.
         let tab = captured_tab(export_nested_tree());
-        let tt = map_tab(&tab, "/code/proj", CwdPolicy::Relative, CommandPolicy::Blank, &HashMap::new(), &mut Vec::new(), "main".to_string(), &[], &mut 0);
+        let tt = map_tab(
+            &tab,
+            "/code/proj",
+            CwdPolicy::Relative,
+            CommandPolicy::Blank,
+            &HashMap::new(),
+            &mut Vec::new(),
+            "main".to_string(),
+            &[],
+            &mut 0,
+        );
         let template = Template {
             name: "roundtrip".to_string(),
             match_globs: vec![],
@@ -1405,14 +1511,18 @@ mod tests {
         // best_effort_command takes a socket; test the pure logic by
         // reconstructing the decision from the parsed procs.
         let only_shell = procs.len() == 1
-            && procs[0].get("name").and_then(|v| v.as_str()).map(|n| SHELLS.contains(&n)).unwrap_or(false);
+            && procs[0]
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|n| SHELLS.contains(&n))
+                .unwrap_or(false);
         assert!(only_shell);
     }
 
     #[test]
     fn best_effort_non_shell_picks_cwd_match() {
         // Two non-shell procs, one matches the pane cwd → pick it.
-        let procs = vec![
+        let procs = [
             json!({"pid": 200, "name": "bun",   "cmdline": "bun server.mjs", "cwd": "/other"}),
             json!({"pid": 100, "name": "pi",    "cmdline": "pi",            "cwd": "/code"}),
         ];
@@ -1429,18 +1539,24 @@ mod tests {
         let mut sorted: Vec<&serde_json::Value> = cwd_match;
         sorted.sort_by_key(|p| p.get("pid").and_then(|v| v.as_u64()).unwrap_or(u64::MAX));
         let picked = sorted.first().unwrap();
-        assert_eq!(picked.get("cmdline").and_then(|v| v.as_str()).unwrap(), "pi");
+        assert_eq!(
+            picked.get("cmdline").and_then(|v| v.as_str()).unwrap(),
+            "pi"
+        );
     }
 
     #[test]
     fn best_effort_no_match_returns_none_with_annotation() {
         // Only a shell present but multiple → no non-shell candidate.
-        let procs = vec![json!({"pid": 1, "name": "fish", "cmdline": "fish", "cwd": "/code"})];
+        let procs = [json!({"pid": 1, "name": "fish", "cmdline": "fish", "cwd": "/code"})];
         let candidates: Vec<&serde_json::Value> = procs
             .iter()
             .filter(|p| !SHELLS.contains(&p.get("name").and_then(|v| v.as_str()).unwrap_or("")))
             .collect();
-        assert!(candidates.is_empty(), "no non-shell candidates → no confident match");
+        assert!(
+            candidates.is_empty(),
+            "no non-shell candidates → no confident match"
+        );
     }
 
     #[test]
@@ -1461,7 +1577,10 @@ mod tests {
         let result = inject_comments(yaml, &annotations);
         // The comment should appear immediately above the `command: pi` line.
         let lines: Vec<&str> = result.lines().collect();
-        let cmd_idx = lines.iter().position(|l| l.contains("command: pi")).unwrap();
+        let cmd_idx = lines
+            .iter()
+            .position(|l| l.contains("command: pi"))
+            .unwrap();
         assert!(lines[cmd_idx - 1].contains("# best-effort:"));
         assert!(lines[cmd_idx - 1].contains("process pi"));
     }

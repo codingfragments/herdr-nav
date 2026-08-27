@@ -1080,7 +1080,10 @@ pub struct TemplateTab {
 pub struct Layout {
     /// `"v"` (vertical/side-by-side: left | right) or
     /// `"h"` (horizontal/stacked: top / bottom).
-    #[serde(default = "default_direction", skip_serializing_if = "is_default_direction")]
+    #[serde(
+        default = "default_direction",
+        skip_serializing_if = "is_default_direction"
+    )]
     pub direction: String,
     /// Split ratio (0–100). 0 = even.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
