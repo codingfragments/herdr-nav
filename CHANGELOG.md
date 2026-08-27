@@ -7,6 +7,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-27
+
+### Bugfix
+
+- **Apply template tab names when building a workspace.**
+  `build_workspace_from_template` read each tab's `name` from the
+  template but never passed it to the daemon, so tabs kept their default
+  numeric labels (`1`, `2`, …) even when the template declared
+  `name: editor` etc. The first tab is now renamed via `tab.rename`
+  after `workspace.create`; later tabs get `label` at `tab.create` time
+  (the socket API accepts it — confirmed live). Verified end-to-end
+  against the live daemon with a 2-tab template.
+
+### Changed
+
+- **Fold the template picker into `Enter`; drop the `^t` binding.**
+  `Enter` on a dir / zox / DirNav entry is now the single combined
+  action: when templates are configured it opens the template picker
+  (default preselected via match-glob → `default: true` → first), then
+  the name prompt, then builds + opens; when no templates are
+  configured it skips the picker and opens the name prompt directly
+  with the hardcoded 1-tab/1-pane default. `Esc` at either step
+  cancels back to the navigator. The separate `^t` (Ctrl-T) binding is
+  removed; footer / DirNav-footer / help-dialog hints and docs updated.
+  The capture-wizard binding (`prefix+ctrl+t` → `nav-capture`) is a
+  separate feature and is unchanged.
+
 ## [0.4.0] — 2026-08-26
 
 ### Combined Names step (tab + pane naming)
