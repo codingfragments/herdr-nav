@@ -48,6 +48,25 @@ id = "nav-open"
 title = "nav: switcher"
 command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-nav", "--entrypoint", "switcher", "--placement", "popup"]
 
+# The agents-only switcher (feature/group-tag-filter): the same popup,
+# seeded with the `@agents` group tag so it opens directly as a flat,
+# fuzzy-searchable list of agent leaves (preview pane intact). Esc
+# clears the seed back to the full Browse tree; second Esc closes.
+# Other groups work the same way — e.g. `--seed "@zoxide"` — see
+# doc/query-filters.md and doc/keybinding.md.
+[[panes]]
+id = "agents"
+title = "herdr agents"
+command = ["./target/release/herdr-nav", "--seed", "@agents"]
+placement = "popup"
+width = "80%"
+height = "80%"
+
+[[actions]]
+id = "nav-agents"
+title = "nav: agents only"
+command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-nav", "--entrypoint", "agents", "--placement", "popup"]
+
 [[actions]]
 id = "nav-capture"
 title = "nav: capture workspace as template"

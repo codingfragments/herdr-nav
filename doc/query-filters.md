@@ -34,6 +34,38 @@ agents nvim    → Agents leaves only, fuzzy "nvim"
 session cargo  → Session leaves only, fuzzy "cargo"
 ```
 
+### Group tag (`@<group>`)
+
+The plural group names also work as **position-independent** `@` tags —
+sugar for the group scope:
+
+| Token | Group |
+|-------|-------|
+| `@session` | live panes in the current session |
+| `@agents` | agent panes, sorted by status |
+| `@pinned` | pinned directories |
+| `@zoxide` | zoxide frecency directories |
+| `@plugins` | installed plugins |
+
+```
+@agents nvim   → Agents leaves only, fuzzy "nvim"
+nvim @agents   → same (position-independent)
+@zoxide src    → Zoxide leaves only, fuzzy "src"
+@pinned        → all pinned dirs, no fuzzy filter
+```
+
+The singular/plural difference is the cue: `@agent` (singular) is a
+*kind* filter, `@agents` (plural) is the *group* scope; same for
+`@zox` vs `@zoxide` and `@plugin` vs `@plugins`. Only one group scope
+is allowed in total (leading token **or** tag): a repeat of the same
+group is a dedup no-op, a second *different* group tag becomes fuzzy
+text.
+
+> The `@agents` tag is what the shipped `nav-agents` action uses: it
+> opens the popup pre-seeded with `@agents`, i.e. directly as a flat,
+> fuzzy-searchable agent list — see
+> [`doc/keybinding.md`](keybinding.md#binding-the-agents-key).
+
 ### Kind filter (`kind:X` or `@X`)
 
 Position-independent tokens that restrict to leaves of a specific
@@ -99,7 +131,8 @@ result = group_scope ∩ union(positive_kinds) − union(negations) |› nucleo(
 
 ### Rules
 
-- Only **one** positive group scope. A second group token → fuzzy text.
+- Only **one** positive group scope (leading token or `@<group>` tag).
+  A second, different group token → fuzzy text.
 - Multiple positive kinds = **OR**.
 - Group scope **intersects** with the kind union.
 - Negations **subtract** from the result.
@@ -117,6 +150,9 @@ result = group_scope ∩ union(positive_kinds) − union(negations) |› nucleo(
 |-------|---------|
 | `nvim` | plain fuzzy across all leaves |
 | `agents nvim` | group scope Agents, fuzzy `nvim` |
+| `@agents nvim` | same, via the position-independent group tag |
+| `nvim @agents` | same again — tag works anywhere in the query |
+| `@zoxide` | all zoxide leaves, no fuzzy filter |
 | `@pane` | all pane leaves, no fuzzy filter |
 | `@pane nvim` | pane leaves fuzzy-matched with `nvim` |
 | `@pane @dir` | panes OR directory-like entries (pinned+zoxide) |
@@ -124,6 +160,7 @@ result = group_scope ∩ union(positive_kinds) − union(negations) |› nucleo(
 | `@dir !zox` | directory-like minus zoxide = pinned dirs only |
 | `!plugin !zox nvim` | everything except plugins and zoxide, fuzzy `nvim` |
 | `agents @pane` | contradiction → no matches (Agents has no Pane leaves) |
+| `@agents @zoxide nvim` | second group tag → needle = `@zoxide nvim` |
 | `@pnae nvim` | `@pnae` unrecognised → needle = `@pnae nvim` |
 
 ## Status strip

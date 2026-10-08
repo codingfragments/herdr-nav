@@ -1371,6 +1371,12 @@ fn draw_help_dialog(frame: &mut Frame, area: Rect, c: &Colors) {
         ]),
         Line::from(vec![
             Span::raw("  "),
+            Span::styled("@zoxide src", ks),
+            sep.clone(),
+            Span::styled("group tag (any position)", ds),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
             Span::styled("@pane", ks),
             sep.clone(),
             Span::styled("kind filter (kind:pane = @pane)", ds),

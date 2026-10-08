@@ -8,14 +8,16 @@ normative keymap is spec §8 / [PLANNING.md](../PLANNING.md) §10.
 
 ## Shipped actions
 
-`herdr-plugin.toml` declares two `[[actions]]` — `nav-open` (the
-switcher) and `nav-capture` (capture the current workspace as a
+`herdr-plugin.toml` declares three `[[actions]]` — `nav-open` (the
+switcher), `nav-agents` (the switcher pre-seeded to the Agents group)
+and `nav-capture` (capture the current workspace as a
 template). Each is a thin launcher that opens its interactive popup
 (`herdr plugin pane open`).
 
 | Action id | Description |
 | --- | --- |
 | `nav-open` | Open the switcher popup |
+| `nav-agents` | Open the switcher pre-seeded with `@agents` — a flat, fuzzy-searchable agent list |
 | `nav-capture` | Capture the current workspace as a template (see [`spec/capture-template-spec.md`](../spec/capture-template-spec.md)) |
 
 ## Binding the open key
@@ -43,6 +45,29 @@ action = "nav-capture"
 type = "plugin_action"
 description = "capture workspace as template"
 ```
+
+## Binding the agents key
+
+`nav-agents` opens the same popup seeded with the `@agents` group tag,
+so it lands directly on a flat list of agent leaves (preview pane
+intact). Typing fuzzies within Agents; `Esc` clears the seed back to
+the full Browse tree, second `Esc` closes:
+
+```toml
+[[keys.command]]
+key = "prefix+ctrl+a"
+action = "nav-agents"
+type = "plugin_action"
+description = "agent switcher"
+```
+
+Other groups work the same way via the switcher's `--seed` flag — add
+a pane entry to your own plugin copy, or bind a custom action running
+`herdr plugin pane open` on an entrypoint whose command includes e.g.
+`--seed "@zoxide"`. The seed can be any valid query, e.g.
+`--seed "@pane nvim"`. See
+[`doc/query-filters.md`](query-filters.md#group-tag-group) for the
+group-tag syntax.
 
 ## In-popup keymap
 
@@ -85,7 +110,8 @@ the full in-popup dialog.
 ## Query filters
 
 In search mode, the query supports filter tokens: group scope
-(`agents nvim`), kind filters (`@pane`, `kind:dir`), and negation
+(`agents nvim`), group tags (`@agents nvim`, position-independent),
+kind filters (`@pane`, `kind:dir`), and negation
 (`!plugin`). See [`doc/query-filters.md`](query-filters.md) for the
 full syntax, composition rules, and worked examples.
 

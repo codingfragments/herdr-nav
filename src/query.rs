@@ -10,6 +10,10 @@
 //! - **Group scope prefix** (leading token only): `agents nvim` → only
 //!   Agents leaves, then fuzzy `nvim`. Groups: `session`, `agents`,
 //!   `pinned`, `zoxide`, `plugins`.
+//! - **Group tag** `@<group>` (position-independent): the plural group
+//!   names under `@` are sugar for the group scope. `@zoxide src` →
+//!   Zoxide leaves, fuzzy `src`. Singular names stay kind filters, so
+//!   `@agent` (kind) ≠ `@agents` (group) and `@zox` ≠ `@zoxide`.
 //! - **Kind filter** `kind:X` or `@X` (position-independent): restricts
 //!   to leaves of that `Kind`. Kinds: `pane`, `agent`, `dir`, `zox`,
 //!   `plugin`, `tab`, `workspace`. `@` is sugar for `kind:`.
@@ -24,7 +28,9 @@
 //! result = group_scope ∩ union(positive_kinds) − union(negations) |› nucleo(needle)
 //! ```
 //!
-//! - Only one positive group scope (leading token). A second is fuzzy text.
+//! - Only one positive group scope (leading token or first `@<group>`
+//!   tag). A second, different one is fuzzy text; a repeat of the same
+//!   group is a dedup no-op.
 //! - Multiple positive kinds are OR (a node has one Kind).
 //! - Group scope intersects with the kind union.
 //! - Negations subtract afterward.
@@ -113,7 +119,8 @@ impl ParsedQuery {
     /// - The first whitespace-delimited token may be a group scope
     ///   (must match a known group name). If it does, it's consumed as
     ///   the scope; otherwise it's part of the needle.
-    /// - `kind:X` and `@X` tokens (anywhere) are positive kind filters.
+    /// - `kind:X` and `@X` tokens (anywhere) are positive kind filters;
+    ///   `@<group>` (plural group name) sets the group scope.
     ///   Unrecognised ones stay in the needle.
     /// - `!X` tokens (anywhere) are negations. Unrecognised ones stay
     ///   in the needle.
@@ -163,6 +170,17 @@ impl ParsedQuery {
                     add_kind(&mut positive_kinds, Kind::Zox);
                 } else if let Some(k) = resolve_kind(kind_name) {
                     add_kind(&mut positive_kinds, k);
+                } else if let Some(g) = resolve_group(kind_name) {
+                    // Plural group tag → group scope (position-
+                    // independent). One scope only: a repeat of the
+                    // same group is a no-op; a different second group
+                    // is fuzzy text (same rule as a second bare group
+                    // token).
+                    if group_scope.is_none() {
+                        group_scope = Some(g);
+                    } else if group_scope != Some(g) {
+                        needle_parts.push((*tok).to_string());
+                    }
                 } else {
                     needle_parts.push((*tok).to_string());
                 }
@@ -375,6 +393,98 @@ mod tests {
         let p = pq("kind:xyz nvim");
         assert!(p.positive_kinds.is_empty());
         assert_eq!(p.needle, "kind:xyz nvim");
+    }
+
+    // ── Group tags (`@<group>`) ─────────────────────────────────────────
+
+    #[test]
+    fn group_tag_sets_scope() {
+        let p = pq("@agents");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert!(p.positive_kinds.is_empty());
+        assert_eq!(p.needle, "");
+        assert!(p.has_filters());
+    }
+
+    #[test]
+    fn group_tag_position_independent() {
+        let p = pq("nvim @agents");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert_eq!(p.needle, "nvim");
+    }
+
+    #[test]
+    fn group_tag_all_groups() {
+        assert_eq!(pq("@session").group_scope, Some(Group::Session));
+        assert_eq!(pq("@pinned").group_scope, Some(Group::Pinned));
+        assert_eq!(pq("@zoxide").group_scope, Some(Group::Zoxide));
+        assert_eq!(pq("@plugins").group_scope, Some(Group::Plugins));
+    }
+
+    #[test]
+    fn singular_at_stays_kind_filter() {
+        // `@agent` (kind) ≠ `@agents` (group); `@zox` ≠ `@zoxide`.
+        let p = pq("@agent");
+        assert_eq!(p.group_scope, None);
+        assert_eq!(p.positive_kinds, vec![Kind::Agent]);
+        let p = pq("@zox");
+        assert_eq!(p.group_scope, None);
+        assert_eq!(p.positive_kinds, vec![Kind::Zox]);
+    }
+
+    #[test]
+    fn group_tag_repeat_is_noop() {
+        let p = pq("@agents @agents nvim");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert_eq!(p.needle, "nvim");
+    }
+
+    #[test]
+    fn second_different_group_tag_is_fuzzy() {
+        let p = pq("@agents @zoxide nvim");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert_eq!(p.needle, "@zoxide nvim");
+    }
+
+    #[test]
+    fn leading_token_plus_same_tag_is_noop() {
+        let p = pq("agents @agents nvim");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert_eq!(p.needle, "nvim");
+    }
+
+    #[test]
+    fn leading_token_plus_different_tag_is_fuzzy() {
+        let p = pq("agents @zoxide nvim");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert_eq!(p.needle, "@zoxide nvim");
+    }
+
+    #[test]
+    fn group_tag_composes_with_kind_and_negation() {
+        let p = pq("@agents @pane !zox nvim");
+        assert_eq!(p.group_scope, Some(Group::Agents));
+        assert_eq!(p.positive_kinds, vec![Kind::Pane]);
+        assert_eq!(p.negations, vec![Negation::Kind(Kind::Zox)]);
+        assert_eq!(p.needle, "nvim");
+    }
+
+    #[test]
+    fn status_label_group_tag() {
+        let p = pq("@zoxide src");
+        assert_eq!(p.status_label(), "zoxide");
+    }
+
+    #[test]
+    fn filter_group_tag() {
+        let h = vec![
+            leaf("p1", Kind::Pane, Group::Session),
+            leaf("a1", Kind::Agent, Group::Agents),
+            leaf("z1", Kind::Zox, Group::Zoxide),
+        ];
+        let p = pq("nvim @agents");
+        let r = p.filter_haystack(&h);
+        assert_eq!(r, vec![1]); // only the Agents leaf
     }
 
     // ── Negations ────────────────────────────────────────────────────────────
