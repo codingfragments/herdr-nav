@@ -7,6 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--seed` queries get a trailing space so typed characters go to
+  the fuzzy needle.** `--seed "@agents"` + typing `nvim` fused into
+  the unrecognised token `@agentsnvim` (→ fuzzy text, effectively no
+  match). The seed is now normalized to end in whitespace, so the
+  first typed character starts the needle: `@agents nvim` → scope +
+  fuzzy `nvim`. Applies to every seed (manifest entrypoints and
+  user-defined keybinds alike); an explicit trailing space is kept as-is.
+
 ## [0.5.1] — 2026-10-08
 
 ### Fixed

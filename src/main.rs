@@ -144,7 +144,19 @@ fn parse_seed_flag() -> Option<String> {
         }
         i += 1;
     }
-    seed
+    seed.map(normalize_seed)
+}
+
+/// A seed must end in whitespace so the first typed character starts a
+/// new needle token: `@agents ` + `nvim` → scope + fuzzy `nvim`, whereas
+/// `@agents` + `nvim` would fuse into the unrecognised token
+/// `@agentsnvim` (→ fuzzy text, effectively no match). An empty or
+/// whitespace-only seed stays as-is (empty query → browse).
+fn normalize_seed(mut s: String) -> String {
+    if !s.trim().is_empty() && !s.ends_with(char::is_whitespace) {
+        s.push(' ');
+    }
+    s
 }
 
 fn run() -> Result<(), String> {
@@ -152,8 +164,10 @@ fn run() -> Result<(), String> {
     // derived (`query.is_empty()` → Browse else Search), so a seed like
     // "@agents" opens the popup directly as a flat, group-scoped list —
     // this is what the `agents` pane entrypoint in herdr-plugin.toml
-    // uses. Standard two-stage Esc still applies: clearing the seed
-    // returns to the full Browse tree.
+    // uses. The seed is normalized to end in a space so typing goes to
+    // the needle ("@agents nvim"), not fused into the tag token.
+    // Standard two-stage Esc still applies: clearing the seed returns
+    // to the full Browse tree.
     let seed = parse_seed_flag();
     // Launch context and socket path are best-effort in Phase 1: if Herdr
     // isn't running, the Session provider degrades to an "unavailable"
@@ -1435,4 +1449,27 @@ fn run_capture() -> Result<(), String> {
     let path = capture::write_template(&name, &yaml)?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::normalize_seed;
+
+    #[test]
+    fn appends_space_when_missing() {
+        assert_eq!(normalize_seed("@agents".into()), "@agents ");
+        assert_eq!(normalize_seed("@zoxide src".into()), "@zoxide src ");
+    }
+
+    #[test]
+    fn keeps_existing_trailing_space() {
+        assert_eq!(normalize_seed("@agents ".into()), "@agents ");
+        assert_eq!(normalize_seed("@agents\t".into()), "@agents\t");
+    }
+
+    #[test]
+    fn empty_seed_unchanged() {
+        assert_eq!(normalize_seed(String::new()), "");
+        assert_eq!(normalize_seed("  ".into()), "  ");
+    }
 }
