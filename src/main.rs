@@ -129,7 +129,32 @@ fn launch_context() -> Result<LaunchContext, String> {
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
+/// Parse the switcher's `--seed "<query>"` flag (hand-rolled, matching
+/// the capture subcommand's flag loop — no clap). Unknown args are
+/// ignored, preserving the historical "any arg → switcher" fall-through
+/// in `main`.
+fn parse_seed_flag() -> Option<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut seed: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--seed" {
+            i += 1;
+            seed = args.get(i).cloned();
+        }
+        i += 1;
+    }
+    seed
+}
+
 fn run() -> Result<(), String> {
+    // `--seed "<query>"`: pre-fill the query bar at startup. Mode is
+    // derived (`query.is_empty()` → Browse else Search), so a seed like
+    // "@agents" opens the popup directly as a flat, group-scoped list —
+    // this is what the `agents` pane entrypoint in herdr-plugin.toml
+    // uses. Standard two-stage Esc still applies: clearing the seed
+    // returns to the full Browse tree.
+    let seed = parse_seed_flag();
     // Launch context and socket path are best-effort in Phase 1: if Herdr
     // isn't running, the Session provider degrades to an "unavailable"
     // stub and the popup still opens (useful for dev). The real plugin
@@ -164,6 +189,7 @@ fn run() -> Result<(), String> {
         &group_order,
         &config,
         ctx.as_ref(),
+        seed,
     );
 
     // Restore terminal regardless of how the loop exited.
@@ -185,6 +211,9 @@ fn run() -> Result<(), String> {
 /// `←` collapses or jumps to the parent; `Enter` toggles a branch
 /// (inert on a leaf — the leaf default action lands in Phase 3); `Esc`
 /// closes the popup.
+// The loop owns the whole popup state; passing its inputs individually
+// is deliberate (one-shot process, no arg struct worth the indirection).
+#[allow(clippy::too_many_arguments)]
 fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tree: &mut nav::Tree,
@@ -193,6 +222,7 @@ fn event_loop<B: ratatui::backend::Backend>(
     group_order: &[String],
     cfg: &config::Config,
     ctx: Option<&LaunchContext>,
+    seed: Option<String>,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
     let mut last_cursor_change: Option<std::time::Instant> = None;
@@ -223,7 +253,11 @@ fn event_loop<B: ratatui::backend::Backend>(
     // don't refresh mid-invocation in Phase 4).
     let mut haystack = search::build_haystack(tree);
     // Search view: None = browse mode, Some = search mode (query non-empty).
-    let mut search_view: Option<search::SearchView> = None;
+    // A non-empty `--seed` starts the popup in search mode directly
+    // (e.g. "@agents" → flat list of all agent leaves, cursor at 0).
+    let mut search_view: Option<search::SearchView> = seed
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| search::view(&haystack, s, &cfg.bias));
     // Phase 16 "extend zoxide": once the user presses `Tab` in search
     // mode to extend the zoxide list beyond `zoxide_limit`, this flag
     // sticks for the rest of the invocation so we don't re-run the

@@ -7,6 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Group tags: `@agents`, `@pinned`, `@zoxide`, `@plugins`,
+  `@session`.** The plural group names now work as position-independent
+  `@` tags — sugar for the group scope, which previously only existed
+  as a bare *leading* token (`agents nvim`). `@zoxide src` and
+  `src @zoxide` are equivalent. Singular names stay kind filters
+  (`@agent` ≠ `@agents`, `@zox` ≠ `@zoxide`). One scope per query: a
+  repeat of the same group is a no-op, a second different group tag is
+  fuzzy text (same rule as a second bare group token).
+- **`--seed "<query>"` flag + `nav-agents` entrypoint.** The switcher
+  accepts `--seed` to pre-fill the query bar at startup; since mode is
+  derived from the query, a seed like `@agents` opens the popup
+  directly as a flat, group-scoped, fuzzy-searchable list with the
+  preview pane intact. Standard two-stage `Esc` applies (clear seed →
+  full Browse tree; second `Esc` closes). `herdr-plugin.toml` ships a
+  new `agents` pane + `nav-agents` action using `--seed "@agents"`;
+  other groups work the same way from user-defined keybinds.
+
 ## [0.4.1] — 2026-08-27
 
 ### Bugfix
