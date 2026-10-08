@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-10-08
+
+### Fixed
+
+- **`herdr-plugin.toml` plugin version was stale.** The manifest still
+  declared `version = "0.3.0"` — it was never bumped through the
+  0.4.x releases. It now tracks the crate release (0.5.1).
+
 ## [0.5.0] — 2026-10-08
 
 ### Added
