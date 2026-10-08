@@ -48,6 +48,7 @@ struct Colors {
     subtext0: Color,
     mauve: Color,
     red: Color,
+    green: Color,
     peach: Color,
 }
 
@@ -61,6 +62,7 @@ impl Colors {
             subtext0: p.subtext0,
             mauve: p.mauve,
             red: p.red,
+            green: p.green,
             peach: p.peach,
         }
     }
@@ -82,6 +84,24 @@ fn kind_glyph(kind: Kind) -> char {
 /// Kind colour (spec §9), derived from the active palette.
 fn kind_color(p: &Palette, kind: Kind) -> Color {
     crate::theme::kind_color(p, kind)
+}
+
+/// Agent status dot — the side-panel-style indicator prepended to
+/// agent rows in both the browse tree and the flat search list:
+/// `●` red when waiting on you, `●` green when working, `○` dim
+/// for idle / unknown. The right-aligned meta text stays as-is.
+fn agent_status_dot(meta: &str, c: &Colors) -> Span<'static> {
+    match meta {
+        "waiting" => Span::styled(
+            "● ",
+            Style::default().fg(c.red).add_modifier(Modifier::BOLD),
+        ),
+        "working" => Span::styled(
+            "● ",
+            Style::default().fg(c.green).add_modifier(Modifier::BOLD),
+        ),
+        _ => Span::styled("○ ", Style::default().fg(c.surface2)),
+    }
 }
 
 /// Draw the whole popup (spec §2): four bands inside a bordered frame,
@@ -815,6 +835,9 @@ fn draw_search_row(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
+    if leaf.kind == Kind::Agent {
+        spans.push(agent_status_dot(&leaf.meta, c));
+    }
 
     let mut run = String::new();
     let mut run_style = Style::default();
@@ -903,6 +926,9 @@ fn draw_row(
                 .add_modifier(Modifier::BOLD)
         },
     ));
+    if row.kind == Kind::Agent {
+        spans.push(agent_status_dot(&row.meta, c));
+    }
     spans.push(Span::styled(
         row.label.clone(),
         if is_hint {
@@ -1473,4 +1499,37 @@ fn draw_plugin_action_picker(
     );
 
     frame.render_widget(Paragraph::new(rows), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn colors() -> Colors {
+        let p = crate::theme::Palette::default();
+        Colors::from(&p)
+    }
+
+    #[test]
+    fn agent_status_dot_waiting_red() {
+        let span = agent_status_dot("waiting", &colors());
+        assert_eq!(span.content, "● ");
+        assert_eq!(span.style.fg, Some(colors().red));
+    }
+
+    #[test]
+    fn agent_status_dot_working_green() {
+        let span = agent_status_dot("working", &colors());
+        assert_eq!(span.content, "● ");
+        assert_eq!(span.style.fg, Some(colors().green));
+    }
+
+    #[test]
+    fn agent_status_dot_idle_hollow_dim() {
+        for meta in ["idle", "unknown", ""] {
+            let span = agent_status_dot(meta, &colors());
+            assert_eq!(span.content, "○ ", "meta {meta:?}");
+            assert_eq!(span.style.fg, Some(colors().surface2));
+        }
+    }
 }

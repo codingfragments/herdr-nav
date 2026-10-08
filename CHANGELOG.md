@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Agent status dot on agent rows** — the side-panel-style
+  indicator, prepended to agent leaves in both the browse tree and
+  the flat search list (including the seeded `@agents` popup):
+  `●` red when the agent is waiting on you, `●` green when working,
+  `○` dim for idle / unknown. The right-aligned status text in the
+  meta column stays as-is.
+
 ## [0.5.2] — 2026-10-08
 
 ### Fixed
