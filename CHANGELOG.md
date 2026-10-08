@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-10-08
+
 ### Fixed
 
 - **`--seed` queries get a trailing space so typed characters go to

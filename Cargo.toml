@@ -1,6 +1,6 @@
 [package]
 name = "herdr-nav"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 license = "MIT"
 description = "Herdr plugin: fuzzy navigation between panes, agents, directories, and plugins with rich preview"

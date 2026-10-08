@@ -1,6 +1,6 @@
 id = "herdr-nav"
 name = "herdr-nav"
-version = "0.5.1"
+version = "0.5.2"
 min_herdr_version = "0.8.0"
 platforms = ["macos", "linux"]
 
