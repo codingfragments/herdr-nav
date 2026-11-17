@@ -1,4 +1,4 @@
-# herdr-nav — Claude Code conventions
+# herdr-nav — agent conventions (Claude Code, pi, …)
 
 This is a new Herdr plugin (not a port), so the gitflow below is adapted
 from the sister `herdr-flash` / `herdr-zextract` repos — same shape, minus
@@ -25,15 +25,17 @@ the migration-from-Zellij angle.
   for "push" / "looks good".
 - End each phase with: what to test, how to trigger it, what works vs
   what's still a stub.
-- Implementation follows the phase sequence in PLANNING.md §17, one
-  `phase/` branch/PR per phase, in order. There are **15 phases**: each
-  is a vertical, end-to-end testable slice delivering one independent
-  improvement and focused on a single aspect. The last three are
-  hardening (edge cases + performance), then docs + public-facing, then
-  release/CI-CD — deliberately last. Open questions in §15 are resolved
-  in the Phase 1 spike (session daemon IPC) and per-provider phases
-  (agents/zoxide/plugins data sources) before the phases that depend on
-  them.
+- **Current work: [rex-migration.md](rex-migration.md)**: make this one
+  binary serve both Herdr and Rex on the shared `muxhost` crate (Rex
+  backend, jump handoff to a Lua handler, Lua launcher, mise
+  distribution). Read it first, work its phases in order (one
+  `phase/rex-N-…` branch/PR each), and update its Status lines, checkboxes
+  and spike table as you go. Phase R0 (the jump spike) comes first and
+  can start now; Phase R1 onwards is blocked on `muxhost` v0.1, which
+  herdr-flash's plan creates. Herdr behaviour must not regress.
+- PLANNING.md §17 phases (the original herdr plugin) are complete; PLANNING.md
+  and `spec/` remain the design reference for the switcher, groups,
+  templates and capture.
 
 ## Release process
 
