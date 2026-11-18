@@ -264,10 +264,12 @@ copies or symlinks it to `~/.config/rex/plugins/nav.lua` and adds
   matching record by layer id, carries out the jump, deletes the file,
   and ignores stale or unknown records. With R1 the handler is a no-op
   and nav carries out the jump itself.
-- [ ] Bindings: `ctrl+k` opens the switcher. An agents-only binding uses
-  `{ seed = "@agents" }`. Capture gets a binding in Phase R5. Check for
-  conflicts with the user's `conf/keys.lua` (for example `ctrl+s>w` is
-  `session.switch`).
+- [ ] Bindings: ~~`ctrl+k`~~ **`ctrl+s>s`** opens the switcher —
+  `ctrl+k` belongs to vim-herdr-navigation's Rex port (navigate up,
+  see `../vim-herdr-navigation/rex-migration.md` D3). An agents-only
+  binding uses `{ seed = "@agents" }`. Capture gets a binding in Phase
+  R5. Check for conflicts with the user's `conf/keys.lua` (for example
+  `ctrl+s>w` is `session.switch`).
 - [ ] Docs: `doc/rex.md` and a README "Hosts" section.
 
 ### Phase R5: templates and capture on Rex, in `phase/rex-5-templates-capture` (go/no-go)
