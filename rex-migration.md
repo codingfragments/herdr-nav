@@ -66,7 +66,17 @@ herdr-plugin.toml   ~/.config/rex/plugins/nav.lua
   ```
   Verified: `mise ls-remote github:codingfragments/herdr-nav` resolves
   `… 0.5.1, 0.5.2, 0.6.0`. This repo has no rolling `latest` tag, so
-  nothing needs cleaning up.
+  nothing needs cleaning up. That is the **Rex** install path.
+- **herdr install stays self-sufficient (option B, decided 2026-11 for
+  all plugins, see `../herdr-zextract/rex-migration.md` "Decisions"):**
+  `herdr plugin install codingfragments/herdr-nav` stays a single
+  command and needs no mise. Its `[[build]]` runs `bin/fetch-binary`
+  (download the release binary matching the checked-out version into
+  `target/release/`, sha256-checked, fall back to `cargo build
+  --release`), and every pane starts `bin/nav-launch [args…]` (prefer
+  the plugin's own binary, then `herdr-nav` on `PATH`, passing the
+  pane's arguments through). herdr and Rex each keep their own copy;
+  update both. Reuse zextract's scripts, renamed.
 - **Concept mapping:** a herdr **workspace** is a Rex **session**, a herdr
   **tab** is a Rex **window**, and a herdr **pane** is a Rex **block**.
   Labels follow the user's terms: "session", "tab", "pane".
@@ -223,8 +233,14 @@ Status: ☐ not started
   calls and one `rex do` Lua script returning JSON.
 - [ ] `--version` and `--host-api` (an integer, starting at 1) so the
   launcher can check compatibility.
-- [ ] **Herdr manifest:** `[[panes]].command = ["herdr-nav", …]` (from
-  PATH or mise), and drop `[[build]]`, the same as the sister repos.
+- [ ] **Herdr install, option B** (copy from zextract's Phase 3):
+  - `bin/fetch-binary` with the asset name `herdr-nav-<triple>.tar.gz`;
+    `[[build]] command = ["sh", "bin/fetch-binary"]`.
+  - `bin/nav-launch "$@"`: exec `./target/release/herdr-nav` if present,
+    else `herdr-nav` on `PATH`, else an install hint. All three panes
+    use it: `["sh", "bin/nav-launch"]`, `["sh", "bin/nav-launch",
+    "capture"]`, `["sh", "bin/nav-launch", "--seed", "@agents"]`.
+  - Launcher actions pass `--env NAV_HOST=herdr`.
 
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
@@ -287,11 +303,12 @@ Status: ☐ not started
 
 - [ ] Check that `mise use -g github:codingfragments/herdr-nav@<ver>`
   works on macOS arm64 and on one Linux host.
-- [ ] Rewrite the README Install section: mise first, `cargo install --git`
-  as the build-from-source fallback, herdr-specific steps under "Herdr".
+- [ ] Rewrite the README Install section: "Herdr" (`herdr plugin install`,
+  no Rust needed for tagged versions) and "Rex" (mise), with
+  `cargo install --git` as the build-from-source fallback.
 - [ ] Version bump and CHANGELOG entries: "Rex support", "muxhost",
-  "neutral config, pinned and template paths", "herdr runs the binary
-  from PATH". Tag following the CLAUDE.md release process.
+  "neutral config, pinned and template paths", "herdr plugin install
+  downloads the release binary". Tag following the CLAUDE.md release process.
 - [ ] Update the user's Rex `migration-plan.md` (`~/.config/rex/`, in
   the dotfiles repo, as a separate PR there): move herdr-nav (switcher,
   pinned dirs, nav-agents and nav-capture if Phase R5 went ahead) from
@@ -308,7 +325,7 @@ Status: ☐ not started
 | S4 | Cost of building the tree: N × `rex` CLI calls compared with one `rex do script.lua` returning JSON, measured with 5 sessions and 40 blocks | ☐ |
 | S5 | Templates: is `session.new_window` with a layout tree (ratios, commands, cwd) enough to build a window in one call? | ☐ |
 | S6 | vt preview edge cases (after a clear, full-screen apps): shared with flash S1 | ☐ |
-| S7 | Does Herdr's popup PATH include mise installs (bare `herdr-nav` in the manifest)? Shared with zextract S5 | ☐ |
+| S7 | Does Herdr's popup PATH include mise installs (bare `herdr-nav` in the manifest)? Shared with zextract S5 | ☑ answered in zextract S5 (yes, via the mise shims dir); with option B only relevant for `nav-launch`'s PATH fallback |
 
 ## Rex facts an agent needs (verified 2026-11, rex 0.1.0-preview.19, api rev 14)
 
