@@ -103,37 +103,58 @@ all three via GitHub Actions — see
 
 ## Install
 
-Requires [Herdr](https://herdr.dev/install.sh) itself, and a working
-Rust/`cargo` toolchain on the machine running the install command.
+### Herdr (the native host)
 
-**Option A — `herdr plugin install` (recommended):**
+Requires [Herdr](https://herdr.dev) itself. On a tagged version, **no
+Rust toolchain is needed** — the `[[build]]` step downloads the release
+binary for your platform (sha256-checked) and only builds from source on
+untagged commits or if the download fails:
+
 ```sh
-herdr plugin install codingfragments/herdr-nav --ref v0.1.0
+herdr plugin install codingfragments/herdr-nav --ref v0.6.0
 ```
-Clones the repo at that ref, runs the `[[build]]` step
-(`cargo build --release`) `herdr-plugin.toml` declares, and registers the
-plugin — one command, no separate build step. Pin `--ref` to a tagged
-version (`v0.1.0`) for a reproducible install, or use `--ref latest` to
-track the newest tagged release (a rolling tag, force-moved on every
-release — see [CHANGELOG.md](CHANGELOG.md) for what's in it). Omit `--ref`
-entirely to track `main`. Add `--yes` to skip the confirmation prompt
-(needed for non-interactive/scripted installs, e.g. from dotfiles).
 
-To update later, just re-run the same command — it re-resolves the ref
-and rebuilds in place; there's no separate `herdr plugin update`.
+Pin `--ref` to a tagged version for a reproducible install, or `--ref
+latest` to track the newest tagged release (a rolling tag, force-moved
+on every release — see [CHANGELOG.md](CHANGELOG.md) for what's in it).
+Omit `--ref` entirely to track `main` (builds from source). Add `--yes`
+to skip the confirmation prompt (non-interactive/scripted installs,
+e.g. from dotfiles). To update, re-run the same command — it re-resolves
+the ref and rebuilds in place; there is no `herdr plugin update`.
 
 Once installed, bind a key — see [`doc/keybinding.md`](doc/keybinding.md).
+
+### Rex
+
+Requires the `herdr-nav` binary on the login `PATH` and the Rex app's
+**Remote Control** enabled once (needed for the switcher to make the app
+follow your jumps — see [`doc/rex.md`](rex.md) for the details):
+
+```sh
+mise use -g github:codingfragments/herdr-nav   # pins the newest release
+```
+
+Then copy the launcher — [`rex/nav.lua`](rex/nav.lua) →
+`~/.config/rex/plugins/nav.lua` — and add `require("plugins.nav")` to
+`init.lua`. Bindings: `ctrl+s>s` / `cmd+k` (switcher), `ctrl+s>a` /
+`cmd+shift+k` (agents), `ctrl+s>ctrl+t` (capture). Full Rex guide:
+[`doc/rex.md`](doc/rex.md).
+
+### Build from source (either host)
+
+```sh
+cargo install --git https://github.com/codingfragments/herdr-nav --tag v0.6.0
+```
 
 ## Hosts
 
 `herdr-nav` runs under [Herdr](https://herdr.dev) (its native host) and
-[Rex](https://rex.dev) (from the R3 migration on): the same binary, one
-host layer ([`muxhost`](https://github.com/codingfragments/muxhost) +
-nav's `src/host_ext/`). Herdr needs no setup; under Rex the plugin
-group is hidden (Rex has no plugin system) and jumps are carried out by
-the Rex launcher (`rex/nav.lua`), which reads the jump record the
-switcher writes — install steps and the jump mechanics in
-[`doc/rex.md`](doc/rex.md).
+[Rex](https://rex.dev) (from the v0.7.0 Rex migration on): the same
+binary, one host layer ([`muxhost`](https://github.com/codingfragments/muxhost)
++ nav's `src/host_ext/`). Under Rex the Plugins group is hidden (Rex has
+no plugin system), and jumps go through Remote Control. Install:
+[`doc/rex.md`](doc/rex.md); the host layer in detail:
+[`doc/host-layer.md`](doc/host-layer.md).
 
 ## Platform support
 
