@@ -160,3 +160,20 @@ plugin = -2
 # Reserved. The narrow-terminal behavior (drop preview < min_cols,
 # footer → ? < 20 rows) uses the [preview] keys above. Additional
 # narrow-terminal config keys may land here in Phase 9.
+
+# ── Theme + per-host overrides (rex-migration R2) ─────────────────────────────
+# The palette follows the [theme] setting: `[host.<host>].theme`, then
+# [theme] in this file, then herdr's config, then the default. Both
+# sections are optional — uncomment to use.
+
+# [theme]
+# name = "tokyo-night"
+# [theme.custom]
+# red = "#ff0000"
+
+# [host.rex]
+# groups = ["session", "agents", "pinned", "zoxide"]   # no plugins on Rex
+# theme = "tokyo-night"
+
+# [host.herdr]
+# theme = "vesper"

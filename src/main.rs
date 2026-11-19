@@ -19,6 +19,7 @@ mod config;
 mod dirnav;
 mod host_ext;
 mod nav;
+mod paths;
 mod preview;
 mod query;
 mod render;
@@ -154,12 +155,12 @@ fn run() -> Result<(), String> {
     // (see doc/env-vars.md).
     let host = host_ext::detect();
     let config = config::Config::load();
-    let group_order = config.resolved_groups();
+    let group_order = config.resolved_groups(host.name());
     // Auto-follow Herdr's theme (spec §9 amended): read
     // ~/.config/herdr/config.toml, resolve the theme name, apply
     // [theme.custom] overrides. Falls back to catppuccin (Herdr's
     // default) if the file is missing or malformed.
-    let palette = theme::load();
+    let palette = theme::load(host.name());
 
     let mut tree = nav::Tree::new(source::build_tree(host.as_ref(), &group_order, &config));
 

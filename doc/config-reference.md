@@ -1,19 +1,27 @@
 # Config reference
 
-`herdr-nav` reads its config from `$HERDR_PLUGIN_CONFIG_DIR/config.toml`.
+`herdr-nav` reads its config from the first existing of (rex-migration
+R2):
+
+1. `$NAV_CONFIG` (a full file path — for launchers and tests),
+2. `~/.config/nav/config.toml`,
+3. `$HERDR_PLUGIN_CONFIG_DIR/config.toml` (the legacy plugin dir).
+
 A missing or malformed config never crashes the plugin — parse errors are
 reported on stderr and built-in defaults are used. Copy
-[`config.example.toml`](../config.example.toml) to the config dir as
-`config.toml` to customize.
+[`config.example.toml`](../config.example.toml) to `~/.config/nav/` as
+`config.toml` to customize (the legacy location still works unchanged).
 
 ```sh
-herdr plugin config-dir herdr-nav   # prints the target directory
+herdr plugin config-dir herdr-nav   # prints the legacy (plugin) directory
+mkdir -p ~/.config/nav              # the new preferred location
 ```
 
-The palette auto-follows Herdr's `[theme]` setting (spec §9 amended) —
-it is **not** configurable here. See [`doc/env-vars.md`](env-vars.md) for
-how the theme is resolved. Config covers group order, zoxide limit,
-preview, browse expansion, search scoring, and provider bias (spec §13).
+The palette follows the `[theme]` setting — resolved from
+`[host.<host>].theme` (below), then `[theme]`/`[theme.custom]` in nav's
+own config, then Herdr's `~/.config/herdr/config.toml`, then the default
+(catppuccin). Config covers group order, zoxide limit, preview, browse
+expansion, search scoring, and provider bias (spec §13).
 
 ## Top-level keys
 
@@ -64,10 +72,33 @@ Provider bias — a flat additive nudge, not a dominate (spec §6.3).
 | `zoxide` | `0` | zoxide entry. |
 | `plugin` | `-2` | Plugin (rarely reached mid-flow). |
 
+## `[host]` — per-host overrides
+
+Optional tables scoped to the running host (`herdr` or `rex`), starting
+with `groups` and `theme` only:
+
+```toml
+[host.rex]
+groups = ["session", "agents", "pinned", "zoxide"]  # no plugins group on Rex
+theme  = "tokyo-night"
+
+[host.herdr]
+groups = ["session", "agents", "plugins", "pinned", "zoxide"]
+```
+
+`[host.<host>].groups` overrides the top-level `groups` for that host;
+`[host.<host>].theme` (a theme name) overrides the whole `[theme]`
+chain. Unknown hosts (e.g. the no-multiplexer dev fallback) use the
+top-level values.
+
 ## Pinned dirs — `targets.toml`
 
-Pinned directories live in `~/.config/herdr/targets.toml`, separate from
-the switcher config (spec §13):
+Pinned directories live in the first existing of
+`~/.config/nav/targets.toml` and the legacy
+`~/.config/herdr/targets.toml` (shared by both hosts — it is pure user
+data), separate from the switcher config (spec §13). Writes go to
+`~/.config/nav/targets.toml` unless only the legacy file exists, in
+which case they stay there:
 
 ```toml
 [[pin]]

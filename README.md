@@ -44,7 +44,9 @@ keymap.
 
 ## Configuration
 
-Optional — the plugin works with zero config, using built-in defaults
+Optional — the plugin works with zero config, using built-in defaults.
+Config is looked up at `$NAV_CONFIG`, then `~/.config/nav/config.toml`,
+then the legacy plugin dir (rex-migration R2)
 (the five groups in spec order, default scoring/bias, preview on). To
 change group order, zoxide limit, preview width, search scoring, or
 provider bias, copy [`config.example.toml`](config.example.toml) to:

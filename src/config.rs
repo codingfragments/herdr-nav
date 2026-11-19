@@ -1,10 +1,14 @@
 //! Config loading for `herdr-nav` (spec §13).
 //!
-//! Config lives at `$HERDR_PLUGIN_CONFIG_DIR/config.toml`. A missing or
-//! malformed config never crashes the plugin — parse errors are reported
-//! on stderr and built-in defaults are used. The palette (§9) is
-//! auto-followed from Herdr's `[theme]` setting (see `theme.rs`), not
-//! configurable here.
+//! Config lookup order (rex-migration.md R2): `$NAV_CONFIG`, then
+//! `~/.config/nav/config.toml`, then the legacy plugin dir
+//! (`$HERDR_PLUGIN_CONFIG_DIR/config.toml`) — the first existing file
+//! wins. A missing or malformed config never crashes the plugin —
+//! parse errors are reported on stderr and built-in defaults are used.
+//!
+//! `[host.rex]` / `[host.herdr]` tables override `groups` and `theme`
+//! per host. The palette (§9) is resolved by `theme.rs` (nav's config
+//! `[theme]` → herdr's config → the default).
 //!
 //! **Phase 10:** the schema is now wired. `groups` controls display
 //! order; `bias` feeds the search ranking; `zoxide_limit` caps the
@@ -85,6 +89,32 @@ pub struct Config {
     pub scoring: ScoringCfg,
     #[serde(default = "default_bias")]
     pub bias: BiasCfg,
+    /// Per-host overrides (rex-migration.md R2): `[host.rex]` and
+    /// `[host.herdr]` tables, each optionally carrying `groups` and
+    /// `theme`. Applied on top of the top-level keys for that host.
+    #[serde(default)]
+    pub host: HostOverrides,
+}
+
+/// One host's override table (`[host.rex]` / `[host.herdr]`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HostCfg {
+    /// Override the display order / set of root groups for this host.
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// A theme name (resolved by `theme.rs`; overrides the `[theme]`
+    /// sections for this host).
+    #[serde(default)]
+    pub theme: Option<String>,
+}
+
+/// The `[host]` table.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HostOverrides {
+    #[serde(default)]
+    pub rex: HostCfg,
+    #[serde(default)]
+    pub herdr: HostCfg,
 }
 
 fn default_zoxide_limit() -> u32 {
@@ -121,6 +151,7 @@ impl Default for Config {
             expand: default_expand(),
             scoring: DEFAULT_SCORING,
             bias: DEFAULT_BIAS,
+            host: HostOverrides::default(),
         }
     }
 }
@@ -247,15 +278,14 @@ impl Default for BiasCfg {
 // ── Loading ─────────────────────────────────────────────────────────────────
 
 impl Config {
-    /// Load config from `$HERDR_PLUGIN_CONFIG_DIR/config.toml`, falling
-    /// back to built-in defaults on any error (missing file, parse error).
-    /// Parse errors are reported on stderr.
+    /// Load config from the R2 lookup order (`$NAV_CONFIG` →
+    /// `~/.config/nav/config.toml` → the legacy plugin dir), falling
+    /// back to built-in defaults on any error (missing file, parse
+    /// error). Parse errors are reported on stderr.
     pub fn load() -> Self {
-        let config_dir = match std::env::var("HERDR_PLUGIN_CONFIG_DIR") {
-            Ok(d) if !d.is_empty() => d,
-            _ => return Config::default(),
+        let Some(path) = crate::paths::config_file() else {
+            return Config::default();
         };
-        let path = std::path::Path::new(&config_dir).join("config.toml");
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(_) => return Config::default(),
@@ -263,28 +293,50 @@ impl Config {
         match toml::from_str::<Config>(&text) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("herdr-nav: config.toml parse error: {e}");
+                eprintln!("herdr-nav: {} parse error: {e}", path.display());
                 Config::default()
             }
         }
     }
 
-    /// Resolve the `groups` list to a validated set of group names in
-    /// display order. Unknown names are dropped (stderr warning); an
-    /// empty list yields the spec default order.
-    pub fn resolved_groups(&self) -> Vec<String> {
-        if self.groups.is_empty() {
+    /// The `[host.<host>]` override table for a host name ("herdr",
+    /// "rex"); unknown hosts get an empty table (no overrides).
+    fn host_cfg(&self, host: &str) -> &HostCfg {
+        match host {
+            "rex" => &self.host.rex,
+            "herdr" => &self.host.herdr,
+            _ => &EMPTY_HOST_CFG,
+        }
+    }
+
+    /// The theme name override for a host (`[host.<host>].theme`),
+    /// when set.
+    pub fn host_theme(&self, host: &str) -> Option<String> {
+        self.host_cfg(host).theme.clone()
+    }
+
+    /// Resolve the `groups` list for a host to a validated set of
+    /// group names in display order: the `[host.<host>].groups`
+    /// override when set, else the top-level `groups`, else the spec
+    /// default order. Unknown names are dropped (stderr warning).
+    pub fn resolved_groups(&self, host: &str) -> Vec<String> {
+        let host_groups = self.host_cfg(host).groups.clone();
+        let configured: &[String] = if host_groups.is_empty() {
+            &self.groups
+        } else {
+            &host_groups
+        };
+        if configured.is_empty() {
             return DEFAULT_GROUPS.iter().map(|s| s.to_string()).collect();
         }
-        let valid: Vec<String> = self
-            .groups
+        let valid: Vec<String> = configured
             .iter()
             .filter(|g| DEFAULT_GROUPS.contains(&g.as_str()))
             .cloned()
             .collect();
-        if valid.len() != self.groups.len() {
+        if valid.len() != configured.len() {
             eprintln!(
-                "herdr-nav: config.toml has unknown groups in `groups` (ignored); valid: {:?}",
+                "herdr-nav: config has unknown groups in `groups` (ignored); valid: {:?}",
                 DEFAULT_GROUPS
             );
         }
@@ -295,6 +347,11 @@ impl Config {
         }
     }
 }
+
+static EMPTY_HOST_CFG: HostCfg = HostCfg {
+    groups: Vec::new(),
+    theme: None,
+};
 
 #[cfg(test)]
 mod tests {
@@ -359,15 +416,41 @@ plugin = -5
             "bogus".to_string(),
             "agents".to_string(),
         ];
-        let r = c.resolved_groups();
+        let r = c.resolved_groups("herdr");
         assert_eq!(r, vec!["session", "agents"]);
     }
 
     #[test]
     fn resolved_groups_empty_uses_default_order() {
         let c = Config::default();
-        let r = c.resolved_groups();
+        let r = c.resolved_groups("herdr");
         assert_eq!(r, DEFAULT_GROUPS);
+    }
+
+    #[test]
+    fn host_override_wins_for_that_host_only() {
+        let toml = r#"
+groups = ["session", "agents"]
+[host.rex]
+groups = ["session", "agents", "pinned", "zoxide"]
+theme = "tokyo-night"
+[host.herdr]
+theme = "vesper"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        // rex: the override groups, not the top-level ones.
+        assert_eq!(
+            c.resolved_groups("rex"),
+            vec!["session", "agents", "pinned", "zoxide"]
+        );
+        // herdr: the top-level groups; the rex override doesn't leak.
+        assert_eq!(c.resolved_groups("herdr"), vec!["session", "agents"]);
+        // theme overrides are host-scoped too.
+        assert_eq!(c.host_theme("rex").as_deref(), Some("tokyo-night"));
+        assert_eq!(c.host_theme("herdr").as_deref(), Some("vesper"));
+        assert_eq!(c.host_theme("none"), None);
+        // unknown hosts get the top-level groups.
+        assert_eq!(c.resolved_groups("none"), vec!["session", "agents"]);
     }
 
     #[test]

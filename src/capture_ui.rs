@@ -302,7 +302,7 @@ pub fn run(host: &dyn NavFull) -> Result<(), String> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).map_err(|e| format!("Terminal::new: {e}"))?;
 
-    let palette = theme::load();
+    let palette = theme::load(host.name());
     let result = wizard_loop(&mut terminal, &mut form, &palette);
 
     disable_raw_mode().ok();
