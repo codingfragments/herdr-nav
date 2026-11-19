@@ -12,11 +12,7 @@ path = "src/main.rs"
 [dependencies]
 ansi-to-tui = "8.0.1"
 crossterm = "0.29"
-# Dev note: pinned to the local checkout until muxhost v0.2.1
-# (raw_request + with_socket) is tagged on origin — flip back to
-#   git = "https://github.com/codingfragments/muxhost", tag = "v0.2.1"
-# before merging.
-muxhost = { path = "../muxhost", features = ["topology", "navigate"] }
+muxhost = { git = "https://github.com/codingfragments/muxhost", tag = "v0.2.1", features = ["topology", "navigate"] }
 nucleo-matcher = "0.3.1"
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }

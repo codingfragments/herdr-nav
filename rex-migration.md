@@ -205,14 +205,13 @@ Status: ☑ done (2026-11-20) — no behaviour change on Herdr; all
   focused/active flags + agents with status; `navigate`: the `Jump`
   enum, close and rename), the capability flags, and the `HerdrHost`
   implementations with today's socket calls.
-- ☑ In `muxhost` (v0.2.1, local `feat/raw-request` branch): 
+- ☑ In `muxhost` (v0.2.1, tagged on origin 2026-11-20): 
   `HerdrHost::raw_request` — the documented escape hatch nav's
   host-local glue makes its herdr-only calls through (one socket
   client, muxhost's, keeps the fresh-connection contract) — and
   `HerdrHost::with_socket` (a lenient constructor: a live socket
-  without a launch context, preserving nav's dev path). PENDING
-  PUSH: tag `v0.2.1` on origin, then flip nav's `Cargo.toml` from the
-  local path back to the git+tag pin.
+  without a launch context, preserving nav's dev path). nav's
+  `Cargo.toml` pins `git+tag = v0.2.1`.
 - ☑ In nav, depend on `muxhost` with `features = ["topology",
   "navigate"]`. Every socket call in `source.rs`, `main.rs`,
   `preview.rs` (and `capture.rs`/`capture_ui.rs`, which the plan's
