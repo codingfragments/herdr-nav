@@ -387,7 +387,41 @@ Original checklist:
 
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
-Status: ☐ not started
+Status: ☑ implemented, installed in the user's Rex config
+(2026-11-20) — config reload clean (generation 27, no
+ diagnostics). **Awaiting the live jump test**: ctrl+s>s in the Rex
+ app, Enter on a target → the app switches session + the server-side
+ focus lands on the block; Esc → focus returns to the source pane.
+
+- ☑ Action `nav{ seed = "string?" }` in `rex/nav.lua` (the shipped
+  reference; installed at `~/.config/rex/plugins/nav.lua` +
+  `require("plugins.nav")`): reads the source block/window before the
+  layer takes focus, opens the 80%×80% floating layer with the login
+  PATH + `NAV_HOST=rex` `REX_CLI` `REX_SESSION` `NAV_SOURCE_BLOCK`
+  `NAV_SOURCE_WINDOW` `NAV_CLIENT_ID` `NAV_INTENT_FILE`, preflights
+  `command herdr-nav` (mise hint) and `--host-api` ≥ 1.
+- ☑ The R0-simplified design: no config-load jump handler — the action
+  waits the popup out with the inline CLI wait (`rex.exec` — the
+  action stays app-invoked, which is what lets `rex.client.queue`
+  reach the app), then reads the intent record and performs the jump:
+  `session.select` for the app, `rex focus -s S B` for the server
+  side. Esc-close re-focuses the source pane. The intent file is
+  deleted before each open, so a stale record can never jump.
+- ☑ Bindings: `ctrl+s>s` (switcher) + `ctrl+s>a` (agents seed) —
+  `ctrl+k` stays vim-herdr-navigation's, `ctrl+s>w` is
+  session.switch; no conflicts in the user's conf/keys.lua. The R0
+  spike (`conf/zz-nav-r0.lua`) is deleted from the user's config.
+- ☑ Docs: `doc/rex.md` + README Hosts section.
+- ☑ nav side: focus intents now carry `session_id` too (resolved from
+  the cached topology snapshot), so the launcher doesn't need to
+  resolve block→session.
+- Dev note: `~/.local/bin/herdr-nav` symlinks to this checkout's
+  `target/release/herdr-nav` for the live test (the login PATH finds
+  it); R6 replaces that with the mise pin once v0.7.0 releases —
+  the RELEASE v0.6.0 binary is too old for the launcher's
+  `--host-api` preflight by design.
+
+Original checklist:
 
 A reference implementation ships in this repo as `rex/nav.lua`. The user
 copies or symlinks it to `~/.config/rex/plugins/nav.lua` and adds

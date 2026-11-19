@@ -40,6 +40,7 @@ keymap.
 | [`doc/query-filters.md`](doc/query-filters.md) | Query filter syntax: `@pane`, `kind:`, `!`, group scope, composition |
 | [`doc/templates.md`](doc/templates.md) | Workspace template file syntax + capturing a workspace as a template |
 | [`doc/use-cases.md`](doc/use-cases.md) | Worked walkthroughs |
+| [`doc/rex.md`](doc/rex.md) | Running under Rex: install, bindings, the delegated jump |
 | [`doc/env-vars.md`](doc/env-vars.md) | The environment variables involved |
 
 ## Configuration
@@ -129,8 +130,9 @@ Once installed, bind a key — see [`doc/keybinding.md`](doc/keybinding.md).
 host layer ([`muxhost`](https://github.com/codingfragments/muxhost) +
 nav's `src/host_ext/`). Herdr needs no setup; under Rex the plugin
 group is hidden (Rex has no plugin system) and jumps are carried out by
-the Rex launcher, which reads the jump intent the switcher writes —
-see [`doc/env-vars.md`](doc/env-vars.md) and `rex-migration.md`.
+the Rex launcher (`rex/nav.lua`), which reads the jump record the
+switcher writes — install steps and the jump mechanics in
+[`doc/rex.md`](doc/rex.md).
 
 ## Platform support
 

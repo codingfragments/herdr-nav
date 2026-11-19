@@ -207,7 +207,7 @@ pub fn jump(
         let path = std::env::var("NAV_INTENT_FILE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| crate::paths::nav_dir().join("intent.json"));
-        let record = intent_record(&jump);
+        let record = intent_record(host, &jump);
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -218,11 +218,26 @@ pub fn jump(
 }
 
 /// The launcher's jump record (R0 spike: the action opens the popup,
-/// waits it out, then reads this file and carries the jump out).
-fn intent_record(jump: &muxhost::navigate::Jump) -> serde_json::Value {
+/// waits it out, then reads this file and carries the jump out). A
+/// focus record carries the block's session too — the launcher queues
+/// `session.select` for the APP and runs `rex focus -s S B` for the
+/// server side; both need the session, and the cached topology
+/// snapshot makes resolving it free.
+fn intent_record(host: &dyn NavFull, jump: &muxhost::navigate::Jump) -> serde_json::Value {
+    let session_of_block = |block_id: &str| -> Option<String> {
+        host.list_all_panes()
+            .ok()?
+            .into_iter()
+            .find(|p| p.pane_id == block_id)
+            .map(|p| p.session_id)
+    };
     match jump {
         muxhost::navigate::Jump::FocusPane { pane_id } => {
-            serde_json::json!({"kind": "focus", "block_id": pane_id})
+            serde_json::json!({
+                "kind": "focus",
+                "block_id": pane_id,
+                "session_id": session_of_block(pane_id),
+            })
         }
         muxhost::navigate::Jump::SelectSession {
             session_id,
