@@ -17,10 +17,12 @@ hardcoded 1-tab/1-pane default.
 
 ### File layout
 
-Templates are read from `~/.config/nav/templates/` when that dir exists,
-else from the legacy `~/.config/herdr/templates/` (rex-migration R2).
-Captured templates (`herdr-nav capture`) are written to the first of the
-two that exists, else to nav's (created):
+Templates are **host-scoped** (R5): herdr reads `~/.config/nav/templates/`
+when it exists, else the legacy `~/.config/herdr/templates/`; **Rex reads
+its own set** — `~/.config/nav/rex/templates/` — with no herdr fallback,
+because a layout tuned for one multiplexer is rarely what you want in the
+other. Captures (`herdr-nav capture`) write to the first dir in the
+running host's chain, creating it when none exists:
 
 ```
 ~/.config/nav/templates/          # preferred

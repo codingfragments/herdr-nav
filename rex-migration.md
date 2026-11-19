@@ -459,6 +459,28 @@ copies or symlinks it to `~/.config/rex/plugins/nav.lua` and adds
 
 ### Phase R5: templates and capture on Rex, in `phase/rex-5-templates-capture` (go/no-go)
 
+Status: ▐ in progress (2026-11-20, started early on user direction:
+"the templates should be different from the herdr templates"):
+- ☑ Template dirs are host-scoped: herdr keeps the R2 chain
+  (`~/.config/nav/templates/` → the legacy herdr dir); **Rex gets its
+  own set** — `~/.config/nav/rex/templates/` — read and write, no
+  herdr fallback. Capture writes follow the host's chain.
+- ☑ Fixed the Rex template build (found live, 2026-11-20):
+  `rex split --ratio` is an INTEGER PERCENT (nav's 0–1 fraction was a
+  flag parse error — "the split doesn't work at all"); the new block
+  comes back as top-level `block_ids[0]` (nav parsed a nested
+  `block.pane_id`-style object); `rex window new --json` is flat
+  (`window_id` + `block_ids`), same fix.
+- ☑ muxhost v0.3.3: `RexHost::run` drops the cached topology snapshot
+  after every escape-hatch call, so a session created by `rex new` is
+  visible to the jump that follows (the stale 250 ms cache made the
+  dir-open jump fail with "no session holds block").
+- ☐ The rest of R5 (layout export via `session.view`, process info via
+  `block call process`, capture fixtures, the go/no-go gate) is still
+  open.
+
+Original checklist:
+
 Status: ☐ not started
 
 - [ ] **Gate first:** in this phase's spike, map a 3-window session with

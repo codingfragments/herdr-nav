@@ -904,7 +904,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     let expanded = source::expand_path(&path_str);
                     let node_id = format!("dirnav:{}", path_str);
                     let name = source::workspace_name_default(&path_str);
-                    let templates = source::read_templates();
+                    let templates = source::read_templates_for(host.name());
                     if !templates.is_empty() {
                         let cursor = source::preselect_template(&templates, &path_str);
                         template_picker = Some(TemplatePicker {
@@ -952,7 +952,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         if id.starts_with("pinned:") || id.starts_with("zox:") {
                             let path = id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
                             let expanded = source::expand_path(path);
-                            let templates = source::read_templates();
+                            let templates = source::read_templates_for(host.name());
                             if !templates.is_empty() {
                                 let cursor = source::preselect_template(&templates, path);
                                 template_picker = Some(TemplatePicker {
@@ -1394,7 +1394,7 @@ fn run_capture() -> Result<(), String> {
     let (template, annotations) =
         capture::capture_template(host.as_ref(), &name, cwd_policy, command_policy)?;
     let yaml = capture::template_to_yaml(&template, &annotations)?;
-    let path = capture::write_template(&name, &yaml)?;
+    let path = capture::write_template(host.name(), &name, &yaml)?;
     println!("wrote {}", path.display());
     Ok(())
 }

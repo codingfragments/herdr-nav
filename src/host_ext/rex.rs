@@ -58,8 +58,8 @@ impl TemplateHost for RexHost {
         let out = self_rex(self, &args)?;
         let v: serde_json::Value =
             serde_json::from_str(&out).map_err(|e| format!("rex window new: bad JSON: {e}"))?;
-        Ok(v.get("window")
-            .and_then(|w| w.get("block_ids"))
+        // The reply is flat: top-level block_ids (verified live).
+        Ok(v.get("block_ids")
             .and_then(|b| b.as_array())
             .and_then(|b| b.first())
             .and_then(|b| b.as_str())
@@ -67,8 +67,11 @@ impl TemplateHost for RexHost {
             .to_string())
     }
 
-    /// `rex split -s S -b B --split=right|below --ratio N --json` → the
-    /// new block's id.
+    /// `rex split -s S -b B --split=right|below --ratio PCT --json` →
+    /// the new block's id. `--ratio` is an INTEGER PERCENT of the split
+    /// the new block gets (verified live — a fraction is a flag parse
+    /// error); nav's ratio is a 0–1 float. The new block comes back as
+    /// the top-level `block_ids[0]`.
     fn split_pane(
         &self,
         pane_id: &str,
@@ -81,6 +84,8 @@ impl TemplateHost for RexHost {
             "down" => "below",
             _ => "right",
         };
+        // 0–1 float → integer percent, defaulting to an even split.
+        let pct = ((ratio * 100.0).round() as i64).clamp(1, 99);
         let out = self_rex(
             self,
             &[
@@ -92,14 +97,15 @@ impl TemplateHost for RexHost {
                 "--split",
                 split,
                 "--ratio",
-                &format!("{ratio}"),
+                &pct.to_string(),
                 "--json",
             ],
         )?;
         let v: serde_json::Value =
             serde_json::from_str(&out).map_err(|e| format!("rex split: bad JSON: {e}"))?;
-        Ok(v.get("block")
-            .and_then(|b| b.get("block_id"))
+        Ok(v.get("block_ids")
+            .and_then(|b| b.as_array())
+            .and_then(|b| b.first())
             .and_then(|b| b.as_str())
             .unwrap_or("")
             .to_string())
@@ -199,4 +205,108 @@ fn self_rex(host: &RexHost, args: &[&str]) -> Result<String, String> {
 
 fn self_session(host: &RexHost) -> String {
     host.session().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muxhost::rex::{RexHost, RexRunner};
+    use muxhost::SourceRef;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    type Call = (Vec<String>, Option<String>);
+
+    /// Records every call, answers from a queue (mirrors muxhost's test
+    /// runner — that one is cfg(test)-private). The state is behind Rc
+    /// so the clone RexHost::new takes shares it.
+    #[derive(Clone, Default)]
+    struct FakeRunner {
+        calls: Rc<RefCell<Vec<Call>>>,
+        replies: Rc<RefCell<VecDeque<Result<String, String>>>>,
+    }
+
+    impl FakeRunner {
+        fn reply(self, r: Result<&str, &str>) -> Self {
+            self.replies
+                .borrow_mut()
+                .push_back(r.map(str::to_string).map_err(str::to_string));
+            self
+        }
+    }
+
+    impl RexRunner for FakeRunner {
+        fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<String, String> {
+            self.calls.borrow_mut().push((
+                args.iter().map(|a| a.to_string()).collect(),
+                stdin.map(str::to_string),
+            ));
+            self.replies
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| Ok(String::new()))
+        }
+    }
+
+    fn host(runner: &FakeRunner) -> RexHost {
+        RexHost::new(
+            Box::new(runner.clone()),
+            "session:s1".to_string(),
+            SourceRef {
+                pane_id: String::new(),
+                tab_id: String::new(),
+            },
+        )
+    }
+
+    /// The recorded `rex new --json` shape (verified live): top-level
+    /// session_id + initial_windows[].window_id/block_ids.
+    const NEW_JSON: &str = r#"{"session_id":"session:abc","initial_windows":[{"window_id":"window:w1","block_ids":["block:b1"]}]}"#;
+    const SPLIT_JSON: &str =
+        r#"{"anchor_id":"block:b1","block_ids":["block:b2"],"split_ids":[],"revision":3}"#;
+
+    #[test]
+    fn create_session_parses_rex_new_shape() {
+        let runner = FakeRunner::default().reply(Ok(NEW_JSON));
+        let h = host(&runner);
+        let created = h.create_session("/tmp/x", "work").unwrap();
+        assert_eq!(created.session_id, "session:abc");
+        assert_eq!(created.first_window_id, "window:w1");
+        assert_eq!(created.root_pane_id.as_deref(), Some("block:b1"));
+        assert_eq!(
+            runner.calls.borrow()[0].0,
+            vec!["new", "work", "-c", "/tmp/x", "--json"]
+        );
+    }
+
+    #[test]
+    fn split_pane_converts_ratio_to_integer_percent() {
+        let runner = FakeRunner::default().reply(Ok(SPLIT_JSON));
+        let h = host(&runner);
+        let block = h.split_pane("block:b1", "right", 0.5, "/tmp/x").unwrap();
+        assert_eq!(block, "block:b2");
+        assert_eq!(
+            runner.calls.borrow()[0].0,
+            vec![
+                "split",
+                "-s",
+                "session:s1",
+                "-b",
+                "block:b1",
+                "--split",
+                "right",
+                "--ratio",
+                "50", // 0.5 → integer percent (a fraction is a parse error)
+                "--json",
+            ]
+        );
+        // herdr's "down" maps to Rex's "below"; the layout ratio 60 → 60.
+        let runner = FakeRunner::default().reply(Ok(SPLIT_JSON));
+        let h = host(&runner);
+        h.split_pane("block:b1", "down", 0.6, "/tmp/x").unwrap();
+        let args = &runner.calls.borrow()[0].0;
+        assert_eq!(args[6], "below");
+        assert_eq!(args[8], "60");
+    }
 }
