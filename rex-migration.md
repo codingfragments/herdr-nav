@@ -147,10 +147,35 @@ ways of carrying it out (`ExecViaLua` / `ExecViaClient`).
 
 ### Phase R0: jump spike (R2, then R1), in `phase/rex-0-jump-spike`
 
-Status: ☐ not started. This can run before `muxhost` exists.
+Status: ☑ done (2026-11-19) — **R2 works; the design gets simpler
+than planned.**
 
-This phase decides whether a Rex switcher is viable. Do it before
-anything else.
+**Result: yes** — confirmed live in the app (the user pressed the
+bound key): popup over the focused pane → action waits out the popup →
+`queue session.select` → the app switches to the target session.
+
+**Design change found by the spike — the action jumps itself:**
+- config Lua has no `rex.wait` (script context only, like
+  `rex.exec.start`); the synchronous CLI wait
+  (`rex.exec{rex_cli, "wait", "-s", S, popup_block}`) blocks in the
+  action for the popup's lifetime and works — the action stays in its
+  app-invoked context the whole time.
+- So the launcher does NOT need the intent-file + separate watcher:
+  the action opens the popup, waits, reads nav's jump intent (the
+  JSON file nav writes before exiting), and performs the jump itself
+  (queue `session.select` / `client.tab.*` — app context, exactly what
+  vim-herdr-navigation's crossings proved; the queue no-ops from CLI
+  contexts, re-confirmed).
+- Cross-session block landing: `session.focus_block` from a
+  foreign-attached connection silently returns `nil` — landing on a
+  specific pane in the target session goes through a child CLI call
+  (`rex focus -s <target> <block>`), which attaches and works.
+- Tab-strip crossings (`client.tab.*` from the app context) were
+  already proven by vim-herdr-navigation (its shipped crossings,
+  user-confirmed).
+
+R1 (Remote Control) stays the documented fallback if the inline wait
+ever proves problematic (long-lived actions); not needed.
 
 - [ ] Throwaway Lua plus a throwaway shell script in the user's Rex
   config, nothing in nav yet:
@@ -320,7 +345,7 @@ Status: ☐ not started
 
 | # | Question | Result |
 |---|---|---|
-| S0 | Jump: does config Lua get a layer/block-closed event, can it queue `session.select` / `client.tab.*` for a recorded client, and does the app follow? If not, does R1 (Remote Control plus `rex -C`) work from a popup? | ☐ |
+| S0 | Jump: does config Lua get a layer/block-closed event, can it queue `session.select` / `client.tab.*` for a recorded client, and does the app follow? If not, does R1 (Remote Control plus `rex -C`) work from a popup? | ☑ 2026-11-19: yes via the simpler inline-wait design — the app-invoked action waits out the popup (CLI `rex wait` child via `rex.exec`) and queues `session.select` itself; user-confirmed in the app. Cross-session pane landing needs a child `rex focus` (foreign-attached `session.focus_block` no-ops). |
 | S1 | Focus returning after the popup closes, when nav does *not* jump (Esc): back on the source block? | ☐ |
 | S2 | `program_status` across blocks: what does it report for pi, Claude Code and others? Is "idle" distinguishable from "no agent"? | ☐ |
 | S3 | `session inspect --json`: how are floating-layer blocks marked, and where do block labels, titles and cwd live? | ☐ |
