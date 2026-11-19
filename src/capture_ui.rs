@@ -30,6 +30,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
 
 use crate::capture::{self, CommandPolicy, CwdPolicy, RawCapture};
+use crate::host_ext::NavFull;
 use crate::theme;
 
 const KEY_DEBOUNCE: Duration = Duration::from_millis(40);
@@ -267,9 +268,9 @@ fn edit_name_row(form: &mut CaptureForm, row: &NameRow, f: impl FnOnce(&mut Stri
 
 // ── Entry point ──────────────────────────────────────────────────
 
-pub fn run(socket_path: &str) -> Result<(), String> {
+pub fn run(host: &dyn NavFull) -> Result<(), String> {
     // Fetch all raw data once (all socket calls happen here).
-    let raw = capture::fetch_raw(socket_path)?;
+    let raw = capture::fetch_raw(host)?;
     let tab_labels: Vec<String> = raw.tabs.iter().map(|t| t.tab_label.clone()).collect();
     let pane_names: Vec<Vec<String>> = raw
         .tabs
@@ -302,7 +303,7 @@ pub fn run(socket_path: &str) -> Result<(), String> {
     let mut terminal = Terminal::new(backend).map_err(|e| format!("Terminal::new: {e}"))?;
 
     let palette = theme::load();
-    let result = wizard_loop(&mut terminal, &mut form, socket_path, &palette);
+    let result = wizard_loop(&mut terminal, &mut form, &palette);
 
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), cursor::Show).ok();
@@ -320,7 +321,6 @@ pub fn run(socket_path: &str) -> Result<(), String> {
 fn wizard_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     form: &mut CaptureForm,
-    socket_path: &str,
     palette: &theme::Palette,
 ) -> Result<(), String> {
     let mut last_key: Option<(KeyCode, std::time::Instant)> = None;
@@ -346,7 +346,7 @@ fn wizard_loop<B: ratatui::backend::Backend>(
         }
         last_key = Some((key.code, std::time::Instant::now()));
 
-        match handle_key(form, key.code, key.modifiers, socket_path)? {
+        match handle_key(form, key.code, key.modifiers)? {
             Action::Continue => {}
             Action::Abort => return Ok(()),
             Action::Done => return Ok(()),
@@ -400,12 +400,7 @@ fn exec_editor(path: &std::path::Path) {
     eprintln!("herdr-nav: exec {cmd} failed: {err}");
 }
 
-fn handle_key(
-    form: &mut CaptureForm,
-    code: KeyCode,
-    mods: KeyModifiers,
-    _socket_path: &str,
-) -> Result<Action, String> {
+fn handle_key(form: &mut CaptureForm, code: KeyCode, mods: KeyModifiers) -> Result<Action, String> {
     if code == KeyCode::Esc {
         return Ok(Action::Abort);
     }

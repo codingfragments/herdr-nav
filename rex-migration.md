@@ -196,7 +196,53 @@ ever proves problematic (long-lived actions); not needed.
 
 ### Phase R1: adopt `muxhost` and add nav's trait groups, in `phase/rex-1-muxhost`
 
-Status: ☐ not started (blocked on `muxhost` v0.1 from herdr-flash Phase 1)
+Status: ☑ done (2026-11-20) — no behaviour change on Herdr; all
+191 tests green; tree-building tests run against muxhost's
+`FakeHost` (with nav-local glue impls) and `host_ext::NoHost`.
+
+- ☑ In `muxhost` (v0.2.0): the trait groups behind cargo features
+  (`topology`: list sessions/windows/panes with labels, titles, cwd,
+  focused/active flags + agents with status; `navigate`: the `Jump`
+  enum, close and rename), the capability flags, and the `HerdrHost`
+  implementations with today's socket calls.
+- ☑ In `muxhost` (v0.2.1, local `feat/raw-request` branch): 
+  `HerdrHost::raw_request` — the documented escape hatch nav's
+  host-local glue makes its herdr-only calls through (one socket
+  client, muxhost's, keeps the fresh-connection contract) — and
+  `HerdrHost::with_socket` (a lenient constructor: a live socket
+  without a launch context, preserving nav's dev path). PENDING
+  PUSH: tag `v0.2.1` on origin, then flip nav's `Cargo.toml` from the
+  local path back to the git+tag pin.
+- ☑ In nav, depend on `muxhost` with `features = ["topology",
+  "navigate"]`. Every socket call in `source.rs`, `main.rs`,
+  `preview.rs` (and `capture.rs`/`capture_ui.rs`, which the plan's
+  file list missed — deleting `socket_client.rs` forced their hand)
+  moved onto the host. `socket_client.rs` deleted.
+  - nav's host layer lives in `src/host_ext/`: `NavHost` (the three
+    muxhost trait groups, so `dyn NavHost` is testable with
+    `muxhost::FakeHost`), `TemplateHost` + `HostExt` (the nav-local
+    glue), `NavFull` (what the binary threads), `NoHost` (the dev
+    fallback: no multiplexer → every call fails → "unavailable"
+    stubs, exactly like an empty `HERDR_SOCKET_PATH` before).
+    `TemplateHost` impls for `HerdrHost` in `src/host_ext/herdr.rs`
+    with today's calls via `raw_request`.
+  - Session/Agents tree building is typed (`PaneEntry`/
+    `SessionInfo`/`WindowInfo`/`AgentEntry`); the active markers now
+    come from the host's focused flags (they used to be re-parsed
+    from `HERDR_PLUGIN_CONTEXT_JSON` — same daemon state).
+  - Bug found and fixed in passing: `^c`/`^x` on an agent row never
+    worked — `agent_pane_id` stripped an `agent:` prefix, but agent
+    node ids are `agents:<pane_id>`. It now strips the right prefix
+    (no `agent.list` round-trip needed).
+- ☑ In nav, add the nav-local `TemplateHost` trait for create session,
+  window and split, send text (via muxhost's `Host::insert_text`),
+  layout export and process info. Implemented for `HerdrHost` in
+  `src/host_ext/herdr.rs` with today's calls.
+- ☑ No behaviour change on Herdr. `cargo test` stays green (191), and
+  the tree-building tests run against a fake host
+  (`build_tree_runs_against_muxhost_fake_host`).
+
+Original checklist:
 
 - [ ] In `muxhost`, a PR there, add the trait groups behind cargo
   features so zextract and flash stay lean:

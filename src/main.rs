@@ -2,10 +2,11 @@
 //! plugins, with a rich preview pane.
 //!
 //! The popup opens a real PTY (Herdr popup placement). This binary reads
-//! the available navigation targets via the Herdr socket API, renders a
-//! fuzzy-filterable list + preview with `ratatui` driving a `crossterm`
-//! backend directly, and runs an event loop until `Esc` closes the popup
-//! or `Enter` switches to the selected target.
+//! the available navigation targets through the host layer (`host_ext`,
+//! over muxhost — herdr today, Rex from R3 on), renders a fuzzy-filterable
+//! list + preview with `ratatui` driving a `crossterm` backend directly,
+//! and runs an event loop until `Esc` closes the popup or `Enter`
+//! switches to the selected target.
 //!
 //! **Status: Phase 1 — popup shell + Session tree browse.**
 //! The event loop renders the real tree and handles browse keys. Search
@@ -16,12 +17,12 @@ mod capture;
 mod capture_ui;
 mod config;
 mod dirnav;
+mod host_ext;
 mod nav;
 mod preview;
 mod query;
 mod render;
 mod search;
-mod socket_client;
 pub mod source;
 mod theme;
 
@@ -100,32 +101,9 @@ struct PluginActionPicker {
 
 // ── Launch context ────────────────────────────────────────────────────────────
 
-/// Launch context: which pane this popup was opened relative to.
-struct LaunchContext {
-    focused_pane_id: String,
-}
-
-/// Reads the launch context from `HERDR_PLUGIN_CONTEXT_JSON` (set by Herdr
-/// for a real plugin-pane invocation). Falls back to `HERDR_ACTIVE_PANE_ID`
-/// for manual dev-testing. (Same contract as herdr-flash / herdr-zextract.)
-fn launch_context() -> Result<LaunchContext, String> {
-    if let Ok(context_json) = std::env::var("HERDR_PLUGIN_CONTEXT_JSON") {
-        let context: serde_json::Value = serde_json::from_str(&context_json)
-            .map_err(|e| format!("invalid context JSON: {e}"))?;
-        let focused_pane_id = context
-            .get("focused_pane_id")
-            .and_then(|v| v.as_str())
-            .ok_or(
-                "context JSON has no focused_pane_id (nothing was focused before this popup opened)",
-            )?
-            .to_string();
-        return Ok(LaunchContext { focused_pane_id });
-    }
-    let focused_pane_id = std::env::var("HERDR_ACTIVE_PANE_ID").map_err(|_| {
-        "neither HERDR_PLUGIN_CONTEXT_JSON nor HERDR_ACTIVE_PANE_ID is set".to_string()
-    })?;
-    Ok(LaunchContext { focused_pane_id })
-}
+// (The launch context moved into the host layer: `host.source()`
+// carries the focused pane the popup was opened relative to, parsed
+// from the same `HERDR_PLUGIN_CONTEXT_JSON` by muxhost.)
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
@@ -169,12 +147,12 @@ fn run() -> Result<(), String> {
     // Standard two-stage Esc still applies: clearing the seed returns
     // to the full Browse tree.
     let seed = parse_seed_flag();
-    // Launch context and socket path are best-effort in Phase 1: if Herdr
-    // isn't running, the Session provider degrades to an "unavailable"
-    // stub and the popup still opens (useful for dev). The real plugin
-    // always has both set (see doc/env-vars.md).
-    let ctx = launch_context().ok();
-    let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+    // The host is best-effort in Phase 1: if no multiplexer is
+    // detected, `host_ext::NoHost` fails every call and the Session
+    // provider degrades to an "unavailable" stub — the popup still
+    // opens (useful for dev). The real plugin always has a live host
+    // (see doc/env-vars.md).
+    let host = host_ext::detect();
     let config = config::Config::load();
     let group_order = config.resolved_groups();
     // Auto-follow Herdr's theme (spec §9 amended): read
@@ -183,7 +161,7 @@ fn run() -> Result<(), String> {
     // default) if the file is missing or malformed.
     let palette = theme::load();
 
-    let mut tree = nav::Tree::new(source::build_tree(&socket_path, &group_order, &config));
+    let mut tree = nav::Tree::new(source::build_tree(host.as_ref(), &group_order, &config));
 
     // Terminal setup — same contract as the sister ports: enter raw mode,
     // hide the cursor, enter the alternate screen, then restore on exit.
@@ -198,11 +176,10 @@ fn run() -> Result<(), String> {
     let result = event_loop(
         &mut terminal,
         &mut tree,
-        &socket_path,
+        host.as_ref(),
         &palette,
         &group_order,
         &config,
-        ctx.as_ref(),
         seed,
     );
 
@@ -231,11 +208,10 @@ fn run() -> Result<(), String> {
 fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tree: &mut nav::Tree,
-    socket_path: &str,
+    host: &dyn host_ext::NavFull,
     palette: &theme::Palette,
     group_order: &[String],
     cfg: &config::Config,
-    ctx: Option<&LaunchContext>,
     seed: Option<String>,
 ) -> Result<(), String> {
     let mut last_key: Option<(event::KeyEvent, std::time::Instant)> = None;
@@ -301,7 +277,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     tree,
                     &haystack,
                     search_view.as_ref(),
-                    socket_path,
+                    host,
                     last_cursor_change,
                     flash_error.as_ref(),
                     name_prompt
@@ -481,7 +457,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                     tree,
                                     &mut search_view,
                                     &mut haystack,
-                                    socket_path,
+                                    host,
                                     group_order,
                                     &cfg.bias,
                                     cfg,
@@ -500,7 +476,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // user request). Spec §8 amended: `^p` is pin, not
                 // up-nav (up is ↑ arrow only; `^n` stays for down).
                 if let Some(node) = current_cursor(tree, &search_view, &haystack) {
-                    if let Some(path) = pin_path_for(&node, socket_path) {
+                    if let Some(path) = pin_path_for(&node, host) {
                         match source::write_pin(&path) {
                             Ok(slot) => {
                                 flash_error =
@@ -512,7 +488,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                     tree,
                                     &mut search_view,
                                     &mut haystack,
-                                    socket_path,
+                                    host,
                                     group_order,
                                     &cfg.bias,
                                     cfg,
@@ -544,7 +520,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                     tree,
                                     &mut search_view,
                                     &mut haystack,
-                                    socket_path,
+                                    host,
                                     group_order,
                                     &cfg.bias,
                                     cfg,
@@ -683,7 +659,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         if let Some((confirm_id, _)) = &kill_confirm {
                             if confirm_id == &target_id {
                                 // Confirm: execute the kill.
-                                match do_kill(socket_path, &node) {
+                                match do_kill(host, &node) {
                                     Ok(()) => {
                                         flash_error = Some((node.id.clone(), "killed".to_string()));
                                         // Rebuild the tree: the killed
@@ -693,7 +669,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                             tree,
                                             &mut search_view,
                                             &mut haystack,
-                                            socket_path,
+                                            host,
                                             group_order,
                                             &cfg.bias,
                                             cfg,
@@ -722,14 +698,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                 if let Some(node) = current_cursor(tree, &search_view, &haystack) {
                     if node.kind == nav::Kind::Pane {
                         if let Some(pid) = node.id.strip_prefix("session:pane:") {
-                            let _ = crate::socket_client::request(
-                                socket_path,
-                                "pane.send_keys",
-                                serde_json::json!({
-                                    "pane_id": pid,
-                                    "keys": ["ctrl+c"],
-                                }),
-                            );
+                            let _ = host.send_keys(pid, &["ctrl+c"]);
                             flash_error = Some((node.id.clone(), "interrupted".to_string()));
                             // Refresh so the pane's status meta
                             // updates (e.g. foreground process).
@@ -737,7 +706,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 tree,
                                 &mut search_view,
                                 &mut haystack,
-                                socket_path,
+                                host,
                                 group_order,
                                 &cfg.bias,
                                 cfg,
@@ -756,15 +725,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // Ctrl+C to the agent's pane. Stay open.
                 if let Some(node) = current_cursor(tree, &search_view, &haystack) {
                     if node.kind == nav::Kind::Agent {
-                        if let Some(pid) = agent_pane_id(&node, socket_path) {
-                            let _ = crate::socket_client::request(
-                                socket_path,
-                                "agent.send_keys",
-                                serde_json::json!({
-                                    "target": pid,
-                                    "keys": ["ctrl+c"],
-                                }),
-                            );
+                        if let Some(pid) = agent_pane_id(&node) {
+                            let _ = host.agent_send_keys(&pid, &["ctrl+c"]);
                             flash_error = Some((node.id.clone(), "interrupted".to_string()));
                             // Refresh so the agent's status meta
                             // updates (waiting → running, etc.).
@@ -772,7 +734,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 tree,
                                 &mut search_view,
                                 &mut haystack,
-                                socket_path,
+                                host,
                                 group_order,
                                 &cfg.bias,
                                 cfg,
@@ -791,12 +753,8 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // the agent from its pane. Stay open.
                 if let Some(node) = current_cursor(tree, &search_view, &haystack) {
                     if node.kind == nav::Kind::Agent {
-                        if let Some(pid) = agent_pane_id(&node, socket_path) {
-                            let _ = crate::socket_client::request(
-                                socket_path,
-                                "pane.release_agent",
-                                serde_json::json!({"pane_id": pid}),
-                            );
+                        if let Some(pid) = agent_pane_id(&node) {
+                            let _ = host.release_agent(&pid);
                             flash_error = Some((node.id.clone(), "detached".to_string()));
                             // Rebuild: the detached agent leaves
                             // the Agents list; cursor clamps.
@@ -804,7 +762,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 tree,
                                 &mut search_view,
                                 &mut haystack,
-                                socket_path,
+                                host,
                                 group_order,
                                 &cfg.bias,
                                 cfg,
@@ -833,7 +791,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     && plugin_action_picker.is_none()
                     && !help_open
                 {
-                    let cwd = focused_cwd(ctx, socket_path);
+                    let cwd = focused_cwd(host);
                     // Fall back to $HOME if the pane cwd is missing or
                     // unreadable (Phase 17 edge case).
                     dirnav = cwd.and_then(dirnav::DirNavView::at).or_else(|| {
@@ -849,14 +807,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // (spec §8.3) via plugin.action.invoke, then close.
                 if let Some(picker) = plugin_action_picker.take() {
                     let action = &picker.actions[picker.cursor.min(picker.actions.len() - 1)];
-                    let _ = crate::socket_client::request(
-                        socket_path,
-                        "plugin.action.invoke",
-                        serde_json::json!({
-                            "plugin": &picker.plugin_id,
-                            "action_id": &action.0,
-                        }),
-                    );
+                    let _ = host.invoke_plugin_action(&picker.plugin_id, &action.0);
                     break;
                 }
                 // If a template picker is active, confirm: open a name
@@ -880,17 +831,14 @@ fn event_loop<B: ratatui::backend::Backend>(
                 // picker was shown, else the hardcoded default) and close.
                 if let Some(prompt) = name_prompt.take() {
                     match source::build_workspace_from_template(
+                        host,
                         &prompt.path,
                         &prompt.name,
                         &prompt.template,
                     ) {
                         Ok(Some(pane_id)) => {
                             // Focus the first pane so the user lands in it.
-                            let _ = socket_client::request(
-                                socket_path,
-                                "pane.focus",
-                                serde_json::json!({"pane_id": pane_id}),
-                            );
+                            let _ = host.jump(muxhost::navigate::Jump::FocusPane { pane_id });
                             break;
                         }
                         Ok(None) => break,
@@ -990,13 +938,13 @@ fn event_loop<B: ratatui::backend::Backend>(
                             // Plugin: open the action picker (spec §8.3),
                             // unless the plugin has no actions (inert).
                             let pid = id.strip_prefix("plugin:").unwrap_or(&id);
-                            if let Some(picker) = build_plugin_action_picker(socket_path, pid) {
+                            if let Some(picker) = build_plugin_action_picker(host, pid) {
                                 plugin_action_picker = Some(picker);
                             } else {
                                 flash_error = Some((id, "no actions".to_string()));
                             }
                         } else {
-                            match invoke_action(socket_path, &id) {
+                            match invoke_action(host, &id) {
                                 Ok(nav::Outcome::Close { .. }) => break,
                                 Ok(nav::Outcome::Stay { .. }) => {}
                                 Err(e) => {
@@ -1105,12 +1053,12 @@ fn refresh(
     tree: &mut nav::Tree,
     search_view: &mut Option<search::SearchView>,
     haystack: &mut Vec<search::Leaf>,
-    socket_path: &str,
+    host: &dyn host_ext::NavFull,
     groups: &[String],
     bias_cfg: &config::BiasCfg,
     cfg: &config::Config,
 ) {
-    let new_root = source::build_tree(socket_path, groups, cfg);
+    let new_root = source::build_tree(host, groups, cfg);
     tree.reload(new_root);
     *haystack = search::build_haystack(tree);
     if let Some(v) = search_view.as_mut() {
@@ -1140,58 +1088,32 @@ fn current_cursor(
 }
 
 /// Resolve a pin path for `^p` (spec §8): for a dir/zox leaf, the
-/// path; for a pane, the pane's cwd (fetched via `pane.get`); for
-/// an agent, the agent's cwd. None for non-pinnable kinds.
-/// Fetch the focused pane's cwd (Phase 17 DirNav entry): reads
-/// `pane.get` for the launch context's `focused_pane_id`. Returns None
-/// if the context is missing, the socket call fails, or the pane has
-/// no cwd — the caller falls back to `$HOME`.
-fn focused_cwd(ctx: Option<&LaunchContext>, socket_path: &str) -> Option<std::path::PathBuf> {
-    let pane_id = ctx?.focused_pane_id.as_str();
-    let r = crate::socket_client::request(
-        socket_path,
-        "pane.get",
-        serde_json::json!({"pane_id": pane_id}),
-    )
-    .ok()?;
-    let cwd = r
-        .get("pane")
-        .and_then(|p| p.get("cwd"))
-        .and_then(|v| v.as_str())?;
-    Some(std::path::PathBuf::from(cwd))
+/// path; for a pane, the pane's cwd (via the host); for an agent, the
+/// agent pane's cwd. None for non-pinnable kinds.
+/// Fetch the focused pane's cwd (Phase 17 DirNav entry): the host's
+/// source pane (`host.source()`, the pane this popup was opened
+/// relative to). Returns None if the context is missing, the host
+/// call fails, or the pane has no cwd — the caller falls back to
+/// `$HOME`.
+fn focused_cwd(host: &dyn host_ext::NavFull) -> Option<std::path::PathBuf> {
+    let pane_id = host.source().pane_id.as_str();
+    if pane_id.is_empty() {
+        return None;
+    }
+    host.pane_cwd(pane_id)
+        .ok()
+        .flatten()
+        .map(std::path::PathBuf::from)
 }
 
-fn pin_path_for(node: &CursorInfo, socket_path: &str) -> Option<String> {
+fn pin_path_for(node: &CursorInfo, host: &dyn host_ext::NavFull) -> Option<String> {
     match node.kind {
         nav::Kind::Dir | nav::Kind::Zox => node.id.split_once(':').map(|(_, p)| p.to_string()),
-        nav::Kind::Pane => node.id.strip_prefix("session:pane:").and_then(|pid| {
-            crate::socket_client::request(
-                socket_path,
-                "pane.get",
-                serde_json::json!({"pane_id": pid}),
-            )
-            .ok()
-            .and_then(|r| {
-                r.get("pane")
-                    .and_then(|p| p.get("cwd"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-        }),
-        nav::Kind::Agent => agent_pane_id(node, socket_path).and_then(|pid| {
-            crate::socket_client::request(
-                socket_path,
-                "pane.get",
-                serde_json::json!({"pane_id": pid}),
-            )
-            .ok()
-            .and_then(|r| {
-                r.get("pane")
-                    .and_then(|p| p.get("cwd"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-        }),
+        nav::Kind::Pane => node
+            .id
+            .strip_prefix("session:pane:")
+            .and_then(|pid| host.pane_cwd(pid).ok().flatten()),
+        nav::Kind::Agent => agent_pane_id(node).and_then(|pid| host.pane_cwd(&pid).ok().flatten()),
         _ => None,
     }
 }
@@ -1217,66 +1139,52 @@ fn kill_target(node: &CursorInfo) -> Option<(String, String)> {
     }
 }
 
-/// Execute the kill via the right socket method.
-fn do_kill(socket_path: &str, node: &CursorInfo) -> Result<(), String> {
-    let (method, id_field, id) = match node.kind {
-        nav::Kind::Pane => (
-            "pane.close",
-            "pane_id",
-            node.id.strip_prefix("session:pane:").unwrap_or(&node.id),
-        ),
-        nav::Kind::Tab => (
-            "tab.close",
-            "tab_id",
-            node.id.strip_prefix("session:tab:").unwrap_or(&node.id),
-        ),
-        nav::Kind::Workspace => (
-            "workspace.close",
-            "workspace_id",
-            node.id.strip_prefix("session:ws:").unwrap_or(&node.id),
-        ),
-        _ => return Err("not killable".to_string()),
-    };
-    crate::socket_client::request(socket_path, method, serde_json::json!({ id_field: id }))
-        .map(|_| ())
-        .map_err(|e| format!("{method} failed: {e}"))
+/// Execute the kill via the host's close operations (herdr: pane.close
+/// / tab.close / workspace.close).
+fn do_kill(host: &dyn host_ext::NavFull, node: &CursorInfo) -> Result<(), String> {
+    match node.kind {
+        nav::Kind::Pane => node
+            .id
+            .strip_prefix("session:pane:")
+            .map(|pid| host.close_pane(pid))
+            .unwrap_or(Err("not killable".to_string())),
+        nav::Kind::Tab => node
+            .id
+            .strip_prefix("session:tab:")
+            .map(|tid| host.close_window(tid))
+            .unwrap_or(Err("not killable".to_string())),
+        nav::Kind::Workspace => node
+            .id
+            .strip_prefix("session:ws:")
+            .map(|wid| host.close_session(wid))
+            .unwrap_or(Err("not killable".to_string())),
+        _ => Err("not killable".to_string()),
+    }
 }
 
-/// Resolve the pane id for an agent (via `agent.list` → pane_id).
-fn agent_pane_id(node: &CursorInfo, socket_path: &str) -> Option<String> {
-    let terminal_id = node.id.strip_prefix("agent:")?;
-    let Ok(r) = crate::socket_client::request(socket_path, "agent.list", serde_json::json!({}))
-    else {
-        return None;
-    };
-    r.get("agents")
-        .and_then(|v| v.as_array())
-        .and_then(|agents| {
-            agents.iter().find_map(|a| {
-                if a.get("terminal_id").and_then(|v| v.as_str()) == Some(terminal_id) {
-                    a.get("pane_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+/// The pane id for an agent node — the `agents:` node id carries it
+/// (`agents:<pane_id>`), so this is a plain prefix strip. (`agent.list`
+/// used to be consulted here, keyed by the agent's `terminal_id`; that
+/// lookup never matched the node ids the Agents provider builds and was
+/// silently inert — fixed during the muxhost migration.)
+fn agent_pane_id(node: &CursorInfo) -> Option<String> {
+    node.id
+        .strip_prefix("agents:")
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
 }
 
 /// Build a plugin action picker for `plugin_id` (spec §8.3):
-/// fetches the plugin's declared actions from `plugin.list`.
+/// fetches the plugin's declared actions from the host's plugin list.
 /// Returns None if the plugin has no actions (not selectable).
-fn build_plugin_action_picker(socket_path: &str, plugin_id: &str) -> Option<PluginActionPicker> {
-    let Ok(r) = crate::socket_client::request(socket_path, "plugin.list", serde_json::json!({}))
-    else {
-        return None;
-    };
-    let plugins = r.get("plugins").and_then(|v| v.as_array());
-    let plugin = plugins.and_then(|ps| {
-        ps.iter()
-            .find(|p| p.get("plugin_id").and_then(|v| v.as_str()) == Some(plugin_id))
-    });
+fn build_plugin_action_picker(
+    host: &dyn host_ext::NavFull,
+    plugin_id: &str,
+) -> Option<PluginActionPicker> {
+    let plugins = host.list_plugins().ok()?;
+    let plugin = plugins
+        .iter()
+        .find(|p| p.get("plugin_id").and_then(|v| v.as_str()) == Some(plugin_id));
     let actions: Vec<(String, String)> = plugin
         .and_then(|p| p.get("actions").and_then(|v| v.as_array()).cloned())
         .unwrap_or_default()
@@ -1308,38 +1216,34 @@ fn build_plugin_action_picker(socket_path: &str, plugin_id: &str) -> Option<Plug
 /// Invoke the default action on a node via its provider (Phase 3).
 /// Only the Session provider is real here; other groups' providers
 /// land in later phases and return "not implemented".
-fn invoke_action(socket_path: &str, id: &str) -> Result<nav::Outcome, String> {
+fn invoke_action(host: &dyn host_ext::NavFull, id: &str) -> Result<nav::Outcome, String> {
     use crate::nav::Provider;
     // Dispatch to the right provider based on the node-id prefix.
     if id.starts_with("agents:") {
-        let provider = source::AgentsProvider::new(socket_path.to_string());
+        let provider = source::AgentsProvider::new(host);
         provider.invoke(&id.to_string(), nav::Act::Default)
     } else if id.starts_with("pinned:") || id.starts_with("zox:") {
         // Both dir groups share the same action: open a new workspace
         // at the path (spec §8.2). Dispatch by prefix to the right
         // provider so each owns its own nodes.
         if id.starts_with("pinned:") {
-            let provider = source::PinnedProvider::new();
+            let provider = source::PinnedProvider::new(host);
             provider.invoke(&id.to_string(), nav::Act::Default)
         } else {
-            let provider = source::ZoxideProvider::new();
+            let provider = source::ZoxideProvider::new(host);
             provider.invoke(&id.to_string(), nav::Act::Default)
         }
     } else {
-        let provider = source::SessionProvider::new(socket_path.to_string());
+        let provider = source::SessionProvider::new(host);
         provider.invoke(&id.to_string(), nav::Act::Default)
     }
 }
 
-/// Show a one-line toast in the host terminal via `notification.show`.
+/// Show a one-line toast in the host terminal (`notification.show`).
 #[allow(dead_code)] // toast dropped (2026-08-21) — the jump is the
                     // important part; the toast was a spec nicety the user doesn't want.
-fn show_toast(socket_path: &str, message: &str) {
-    let _ = socket_client::request(
-        socket_path,
-        "notification.show",
-        serde_json::json!({"title": "herdr-nav", "message": message, "duration_ms": 1500}),
-    );
+fn show_toast(host: &dyn host_ext::NavFull, message: &str) {
+    let _ = host.notify(message);
 }
 
 fn main() {
@@ -1376,8 +1280,8 @@ fn main() {
 ///   --command-policy <p>   keep | blank (default: keep)
 ///   --summary              print the C1 plain-text summary instead of writing
 fn run_capture() -> Result<(), String> {
-    let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
-    if socket_path.is_empty() {
+    let host = host_ext::detect();
+    if host.name() == "none" {
         return Err("HERDR_SOCKET_PATH not set — capture needs a live herdr session".to_string());
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -1414,7 +1318,7 @@ fn run_capture() -> Result<(), String> {
 
     // --summary: the C1 behavior (plain-text print, no write).
     if summary_only {
-        let summary = capture::capture_summary(&socket_path)?;
+        let summary = capture::capture_summary(host.as_ref())?;
         capture::print_summary(&summary);
         return Ok(());
     }
@@ -1425,26 +1329,22 @@ fn run_capture() -> Result<(), String> {
     // the popup binding).
     let interactive = name.is_none() && !cwd_overridden && !command_overridden;
     if interactive {
-        return capture_ui::run(&socket_path);
+        return capture_ui::run(host.as_ref());
     }
 
     // Resolve the name: --name, else the focused workspace's label.
     let name = match name {
         Some(n) if !n.is_empty() => n,
         _ => {
-            let ws_resp = crate::socket_client::request(
-                &socket_path,
-                "workspace.list",
-                serde_json::json!({}),
-            )
-            .map_err(|e| format!("workspace.list failed: {e}"))?;
-            let (_id, label) = capture::parse_focused_workspace(&ws_resp)?;
+            let sessions = muxhost::topology::HostTopology::list_sessions(host.as_ref())
+                .map_err(|e| format!("workspace.list failed: {e}"))?;
+            let (_id, label) = capture::focused_workspace(&sessions)?;
             label
         }
     };
 
     let (template, annotations) =
-        capture::capture_template(&socket_path, &name, cwd_policy, command_policy)?;
+        capture::capture_template(host.as_ref(), &name, cwd_policy, command_policy)?;
     let yaml = capture::template_to_yaml(&template, &annotations)?;
     let path = capture::write_template(&name, &yaml)?;
     println!("wrote {}", path.display());
