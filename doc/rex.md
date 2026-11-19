@@ -38,6 +38,9 @@ switcher writes a jump record and the launcher carries it out.
 
 ## How the jump works (Remote Control)
 
+> The full host-layer reference (every muxhost feature, herdr vs Rex
+> implementation) is in [`doc/host-layer.md`](host-layer.md).
+
 **Who owns what** — the jump is split by responsibility:
 
 | Half | Owner | What it does |

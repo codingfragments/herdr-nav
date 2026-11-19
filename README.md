@@ -41,6 +41,7 @@ keymap.
 | [`doc/templates.md`](doc/templates.md) | Workspace template file syntax + capturing a workspace as a template |
 | [`doc/use-cases.md`](doc/use-cases.md) | Worked walkthroughs |
 | [`doc/rex.md`](doc/rex.md) | Running under Rex: install, bindings, the delegated jump |
+| [`doc/host-layer.md`](doc/host-layer.md) | The host layer in detail: every muxhost feature + nav's `host_ext`, intent and herdr/Rex implementation |
 | [`doc/env-vars.md`](doc/env-vars.md) | The environment variables involved |
 
 ## Configuration
