@@ -387,7 +387,69 @@ Original checklist:
 
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
-Status: ☐ not started
+Status: ☑ done — **working live, user-confirmed** (2026-11-20;
+fixed three times that day, all silent-edit no-ops found by driving
+the real popup remotely (`rex do nav` + `rex send`) with stderr
+traces; the final verified sequence is documented in `doc/rex.md` — third fix: a select
+made while the popup's layer is still open is undone when the app's
+focus logic snaps back on layer close (observed live: select exit=0,
+app attached, view stayed). The carry-out now fires a SECOND select
+from a detached nohup child 0.5 s after nav exits — the layer is
+closed, the state is clean, the deferred select wins (survival +
+switch verified live). The select also carries window_id: the app's
+tab strip follows client actions, not server focus, so cross-window
+jumps need it: the R3 jump-swap edit had
+silently no-op'd for the Session pane-jump and the Agents invoke —
+they still called the raw `host.jump`, whose Delegated outcome was
+ignored, so Enter closed the popup without jumping at all. Found by
+driving the real launcher popup remotely (`rex do nav` + `rex send`
+into its block) with lifecycle traces on stderr. Also muxhost v0.3.4:
+block-scoped calls (capture/send/pwd/split/send-key) resolve the
+block's OWN session from the topology — a pane in another session
+was "block target not found" (broken previews). Diagnostics:
+/tmp/herdr-nav-jump.log + the stderr traces.) — **redesigned to the
+R1 fallback the same day**: the
+R0 inline-wait design froze the app's key delivery for the popup's
+lifetime (the popup rendered but accepted no key presses — a blocking
+`rex.exec` in an action holds the app's Lua, exactly the
+"problematic long-lived actions" case the plan reserved the fallback
+for). The launcher is now non-blocking (zextract-shaped); the
+switcher carries the jump out itself: `rex focus -s S B` (muxhost
+v0.3.2's RexHost::jump server side) + `rex -C $NAV_CLIENT_ID do
+session.select` (Remote Control — one-time enable in the app; a
+refusal keeps the popup open with a hint), Esc re-focuses
+NAV_SOURCE_BLOCK on exit. **Awaiting the live jump test** with Remote
+Control enabled.
+
+- ☑ Action `nav{ seed = "string?" }` in `rex/nav.lua` (the shipped
+  reference; installed at `~/.config/rex/plugins/nav.lua` +
+  `require("plugins.nav")`): reads the source block/window before the
+  layer takes focus, opens the 80%×80% floating layer with the login
+  PATH + `NAV_HOST=rex` `REX_CLI` `REX_SESSION` `NAV_SOURCE_BLOCK`
+  `NAV_SOURCE_WINDOW` `NAV_CLIENT_ID` `NAV_INTENT_FILE`, preflights
+  `command herdr-nav` (mise hint) and `--host-api` ≥ 1.
+- ☑ The R0-simplified design: no config-load jump handler — the action
+  waits the popup out with the inline CLI wait (`rex.exec` — the
+  action stays app-invoked, which is what lets `rex.client.queue`
+  reach the app), then reads the intent record and performs the jump:
+  `session.select` for the app, `rex focus -s S B` for the server
+  side. Esc-close re-focuses the source pane. The intent file is
+  deleted before each open, so a stale record can never jump.
+- ☑ Bindings: `ctrl+s>s` (switcher) + `ctrl+s>a` (agents seed) —
+  `ctrl+k` stays vim-herdr-navigation's, `ctrl+s>w` is
+  session.switch; no conflicts in the user's conf/keys.lua. The R0
+  spike (`conf/zz-nav-r0.lua`) is deleted from the user's config.
+- ☑ Docs: `doc/rex.md` + README Hosts section.
+- ☑ nav side: focus intents now carry `session_id` too (resolved from
+  the cached topology snapshot), so the launcher doesn't need to
+  resolve block→session.
+- Dev note: `~/.local/bin/herdr-nav` symlinks to this checkout's
+  `target/release/herdr-nav` for the live test (the login PATH finds
+  it); R6 replaces that with the mise pin once v0.7.0 releases —
+  the RELEASE v0.6.0 binary is too old for the launcher's
+  `--host-api` preflight by design.
+
+Original checklist:
 
 A reference implementation ships in this repo as `rex/nav.lua`. The user
 copies or symlinks it to `~/.config/rex/plugins/nav.lua` and adds
@@ -416,6 +478,28 @@ copies or symlinks it to `~/.config/rex/plugins/nav.lua` and adds
 - [ ] Docs: `doc/rex.md` and a README "Hosts" section.
 
 ### Phase R5: templates and capture on Rex, in `phase/rex-5-templates-capture` (go/no-go)
+
+Status: ▐ in progress (2026-11-20, started early on user direction:
+"the templates should be different from the herdr templates"):
+- ☑ Template dirs are host-scoped: herdr keeps the R2 chain
+  (`~/.config/nav/templates/` → the legacy herdr dir); **Rex gets its
+  own set** — `~/.config/nav/rex/templates/` — read and write, no
+  herdr fallback. Capture writes follow the host's chain.
+- ☑ Fixed the Rex template build (found live, 2026-11-20):
+  `rex split --ratio` is an INTEGER PERCENT (nav's 0–1 fraction was a
+  flag parse error — "the split doesn't work at all"); the new block
+  comes back as top-level `block_ids[0]` (nav parsed a nested
+  `block.pane_id`-style object); `rex window new --json` is flat
+  (`window_id` + `block_ids`), same fix.
+- ☑ muxhost v0.3.3: `RexHost::run` drops the cached topology snapshot
+  after every escape-hatch call, so a session created by `rex new` is
+  visible to the jump that follows (the stale 250 ms cache made the
+  dir-open jump fail with "no session holds block").
+- ☐ The rest of R5 (layout export via `session.view`, process info via
+  `block call process`, capture fixtures, the go/no-go gate) is still
+  open.
+
+Original checklist:
 
 Status: ☐ not started
 

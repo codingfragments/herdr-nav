@@ -166,9 +166,12 @@ impl Provider for SessionProvider<'_> {
         let pane_id = id.strip_prefix("session:pane:").map(str::to_string);
         match pane_id {
             Some(pid) => {
-                self.host.jump(muxhost::navigate::Jump::FocusPane {
-                    pane_id: pid.clone(),
-                })?;
+                crate::host_ext::jump(
+                    self.host,
+                    muxhost::navigate::Jump::FocusPane {
+                        pane_id: pid.clone(),
+                    },
+                )?;
                 Ok(crate::nav::Outcome::Close {
                     toast: format!("jumped to pane {pid}"),
                 })
@@ -233,9 +236,12 @@ impl Provider for AgentsProvider<'_> {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Jump to the pane the agent runs in — same as a pane jump.
         let pane_id = id.strip_prefix("agents:").unwrap_or(id);
-        self.host.jump(muxhost::navigate::Jump::FocusPane {
-            pane_id: pane_id.to_string(),
-        })?;
+        crate::host_ext::jump(
+            self.host,
+            muxhost::navigate::Jump::FocusPane {
+                pane_id: pane_id.to_string(),
+            },
+        )?;
         Ok(crate::nav::Outcome::Close {
             toast: format!("jumped to agent {pane_id}"),
         })
@@ -397,7 +403,7 @@ pub fn open_dir_workspace_template(
     let label = name
         .map(str::to_string)
         .unwrap_or_else(|| workspace_name_default(path));
-    let template = default_template_for(&expanded);
+    let template = default_template_for(&expanded, host.name());
     let first_pane = build_workspace_from_template(host, &expanded, &label, &template)?;
     Ok((
         crate::nav::Outcome::Close {
@@ -412,8 +418,8 @@ pub fn open_dir_workspace_template(
 /// templates exist, else the hardcoded 1-tab/1-pane default. Uses
 /// the same resolution as `preselect_template` so `Enter` builds
 /// exactly what the picker would have pre-highlighted.
-pub fn default_template_for(path: &str) -> Template {
-    let templates = read_templates();
+pub fn default_template_for(path: &str, host: &str) -> Template {
+    let templates = read_templates_for(host);
     if templates.is_empty() {
         return hardcoded_default_template();
     }
@@ -1092,13 +1098,14 @@ fn is_default_direction(d: &str) -> bool {
     d == "v"
 }
 
-/// Read every `*.yaml` in the templates dir → `Vec<Template>`. The
-/// dir is `~/.config/nav/templates/` when it exists, else the legacy
-/// `~/.config/herdr/templates/` (rex-migration.md R2). Empty if the
+/// Read every `*.yaml` in the templates dir → `Vec<Template>`.
+/// Host-scoped (R5): herdr reads `~/.config/nav/templates/` (then the
+/// legacy herdr dir); Rex reads its own `~/.config/nav/rex/templates/`
+/// — no herdr fallback. Empty if the
 /// dir is missing or empty (no crash; Enter skips the picker and uses
 /// the hardcoded default). One file per template.
-pub fn read_templates() -> Vec<Template> {
-    let dir = crate::paths::templates_read_dir();
+pub fn read_templates_for(host: &str) -> Vec<Template> {
+    let dir = crate::paths::templates_read_dir_for(host);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };

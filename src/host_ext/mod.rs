@@ -126,19 +126,16 @@ impl<T: NavHost + TemplateHost + HostExt> NavFull for T {}
 /// multiplexer) still opens the popup with "unavailable" groups,
 /// exactly as an empty `HERDR_SOCKET_PATH` did before the migration.
 pub fn detect() -> Box<dyn NavFull> {
-    let explicit = std::env::var("NAV_HOST").ok();
-    match explicit.as_deref() {
-        Some("herdr") => return detect_herdr(),
-        Some("rex") => return detect_rex(),
-        Some(_) | None => {}
+    // The detection ORDER is muxhost's (detect_kind: NAV_HOST, then
+    // HERDR_SOCKET_PATH, then REX_SESSION — innermost multiplexer
+    // first), so nav and every other muxhost consumer agree. nav only
+    // adds its own construction and the NoHost fallback instead of an
+    // error (an unknown NAV_HOST or no multiplexer → the dev path).
+    match muxhost::detect_kind("NAV") {
+        Ok(muxhost::HostKind::Herdr) => detect_herdr(),
+        Ok(muxhost::HostKind::Rex) => detect_rex(),
+        _ => Box::new(NoHost),
     }
-    if std::env::var_os("REX_SESSION").is_some() {
-        return detect_rex();
-    }
-    if std::env::var_os("HERDR_SOCKET_PATH").is_some() {
-        return detect_herdr();
-    }
-    Box::new(NoHost)
 }
 
 fn detect_herdr() -> Box<dyn NavFull> {
@@ -187,7 +184,16 @@ fn detect_rex() -> Box<dyn NavFull> {
     }
 }
 
-// ── Jump delegation (rex-migration.md R0/R3) ────────────────────────────────
+// ── Jump delegation (rex-migration.md R0/R3, R1 fallback active) ───────────
+
+/// Whether a jump was carried out this invocation — the Esc-exit
+/// focus-return in `main` skips it when the user already jumped.
+static JUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a jump has been carried out this process (see [`jump`]).
+pub fn jump_performed() -> bool {
+    JUMPED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Jump through the host. When the host DELEGATES the jump (Rex: the
 /// app's view is client-side and only the launcher's app-invoked
@@ -207,29 +213,170 @@ pub fn jump(
         let path = std::env::var("NAV_INTENT_FILE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| crate::paths::nav_dir().join("intent.json"));
-        let record = intent_record(&jump);
+        let record = intent_record(host, &jump);
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         std::fs::write(&path, serde_json::to_string(&record).unwrap_or_default())
             .map_err(|e| format!("write {}: {e}", path.display()))?;
+        // R1 (Remote Control — the plan's documented fallback, activated
+        // 2026-11-20 when the inline wait proved to block the app's key
+        // delivery): the switcher itself asks the app to follow. The
+        // server-side focus already ran inside `host.jump`; this is the
+        // client-side `session.select` only the app can perform.
+        if host.name() == "rex" {
+            carry_out_rex_select(&record)?;
+            JUMPED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     Ok(outcome)
 }
 
+/// Ask the Rex app to select the target session
+/// (`rex -C <client> do session.select`). Needs the app's Remote
+/// Control setting; without the launcher's `NAV_CLIENT_ID` (a manual
+/// dev invocation) there is no client to ask — the server-side focus
+/// has already run and the app's view simply stays (the documented
+/// CLI limit, not an error).
+fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let Some(client) = var("NAV_CLIENT_ID") else {
+        return Ok(());
+    };
+    let Some(session) = record
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        return Err("jump record has no session_id — cannot select it in the app".to_string());
+    };
+    let cli = var("REX_CLI").unwrap_or_else(|| "rex".to_string());
+    // The window matters: the app's tab strip follows client actions,
+    // not server focus — a cross-window jump needs window_id in the
+    // select too (the vim_nav lesson).
+    let window = record
+        .get("window_id")
+        .and_then(|w| w.as_str())
+        .filter(|w| !w.is_empty());
+    let mut select_args = vec![format!("session_id={session}")];
+    if let Some(w) = window {
+        select_args.push(format!("window_id={w}"));
+    }
+
+    // 1. Synchronous, for the error path: a refusal (Remote Control
+    //    off, unknown client) keeps the popup open with a hint.
+    let mut cmd = Command::new(&cli);
+    cmd.args(["-C", &client, "do", "session.select"]);
+    for a in &select_args {
+        cmd.arg(a);
+    }
+    let out = cmd.output().map_err(|e| format!("run {cli}: {e}"))?;
+    // Debug trail (the popup is gone a moment later, so this is the
+    // only place the carry-out can leave evidence): one line per jump.
+    let _ = std::fs::write(
+        "/tmp/herdr-nav-jump.log",
+        format!(
+            "{} select client={} session={} window={:?} exit={} stderr={:?}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            client,
+            session,
+            window,
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(200)
+                .collect::<String>(),
+        ),
+    );
+    if !out.status.success() {
+        return Err(
+            "Rex Remote Control is off — enable it in the Rex app's settings so the switcher can follow your jump"
+                .to_string(),
+        );
+    }
+
+    // 2. Deferred re-select, AFTER this popup's layer closes (a child
+    //    that outlives nav): while the layer is open the app's focus
+    //    logic snaps back to the source on close, undoing a select
+    //    made in step 1 (observed live 2026-11-20: exit=0, the app
+    //    attached, the view stayed). The second select lands in a
+    //    clean state and wins. Idempotent — it re-selects the same
+    //    session/window.
+    // The child escapes this popup's process group (nohup + background
+    // via a shell that exits immediately — the pattern zextract's
+    // detached watcher uses, proven on this Rex version), so the
+    // layer's teardown can't kill it.
+    //
+    // Order matters: the select switches the app's session+window, but
+    // the app may focus the window's remembered block as part of that
+    // — so the block focus is re-asserted AFTER the select (it must be
+    // the last action, or the landing pane is whatever the app
+    // remembered instead of the chosen one).
+    let q = |s: &str| s.replace('\'', "'\\''");
+    let mut inner = format!(
+        "sleep 0.5; '{}' -C '{}' do session.select",
+        q(&cli),
+        q(&client)
+    );
+    for a in &select_args {
+        inner.push_str(&format!(" '{}'", q(a)));
+    }
+    if let Some(block) = record
+        .get("block_id")
+        .and_then(|b| b.as_str())
+        .filter(|b| !b.is_empty())
+    {
+        inner.push_str(&format!(
+            "; '{}' focus -s '{}' '{}'",
+            q(&cli),
+            q(session),
+            q(block)
+        ));
+    }
+    let outer = format!("nohup /bin/sh -c '{}' >/dev/null 2>&1 &", q(&inner));
+    let _ = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(outer)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    Ok(())
+}
+
 /// The launcher's jump record (R0 spike: the action opens the popup,
-/// waits it out, then reads this file and carries the jump out).
-fn intent_record(jump: &muxhost::navigate::Jump) -> serde_json::Value {
+/// waits it out, then reads this file and carries the jump out). A
+/// focus record carries the block's session too — the launcher queues
+/// `session.select` for the APP and runs `rex focus -s S B` for the
+/// server side; both need the session, and the cached topology
+/// snapshot makes resolving it free.
+fn intent_record(host: &dyn NavFull, jump: &muxhost::navigate::Jump) -> serde_json::Value {
+    let pane = |block_id: &str| -> Option<muxhost::topology::PaneEntry> {
+        host.list_all_panes()
+            .ok()?
+            .into_iter()
+            .find(|p| p.pane_id == block_id)
+    };
     match jump {
-        muxhost::navigate::Jump::FocusPane { pane_id } => {
-            serde_json::json!({"kind": "focus", "block_id": pane_id})
-        }
+        muxhost::navigate::Jump::FocusPane { pane_id } => serde_json::json!({
+            "kind": "focus",
+            "block_id": pane_id,
+            "session_id": pane(pane_id).map(|p| p.session_id),
+            "window_id": pane(pane_id).map(|p| p.window_id),
+        }),
         muxhost::navigate::Jump::SelectSession {
             session_id,
             focus_pane,
         } => match focus_pane {
             Some(block_id) => serde_json::json!({
                 "kind": "focus", "session_id": session_id, "block_id": block_id,
+                "window_id": pane(block_id).map(|p| p.window_id),
             }),
             None => serde_json::json!({"kind": "open_session", "session_id": session_id}),
         },

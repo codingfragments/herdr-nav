@@ -95,10 +95,19 @@ pub fn targets_write_path() -> PathBuf {
 }
 
 // ── templates ───────────────────────────────────────────────────────────────
+//
+// Host-scoped (2026-11-20, R5 direction): Rex's templates are its OWN
+// set — `~/.config/nav/rex/templates/` — deliberately NOT falling back
+// to the herdr dirs. The herdr flow keeps the R2 chain
+// (`~/.config/nav/templates/` → the legacy `~/.config/herdr/templates/`).
 
-/// The template dir to READ: nav's when it exists, else the legacy
-/// herdr dir.
-pub fn templates_read_dir() -> PathBuf {
+/// The template dir to READ for a host ("rex" gets its own set; every
+/// other host follows the nav → herdr chain).
+pub fn templates_read_dir_for(host: &str) -> PathBuf {
+    let rex = nav_dir().join("rex").join("templates");
+    if host == "rex" {
+        return rex;
+    }
     let nav = nav_dir().join("templates");
     if nav.is_dir() {
         return nav;
@@ -106,18 +115,21 @@ pub fn templates_read_dir() -> PathBuf {
     herdr_dir().join("templates")
 }
 
-/// The template dir to WRITE (capture): the first of nav/herdr that
-/// exists, else nav's (created by the writer).
-pub fn templates_write_dir() -> PathBuf {
-    let nav = nav_dir().join("templates");
-    if nav.is_dir() {
-        return nav;
+/// The template dir to WRITE (capture) for a host: the first existing
+/// dir in that host's read chain, else its preferred dir (created by
+/// the writer).
+pub fn templates_write_dir_for(host: &str) -> PathBuf {
+    let chain = |host: &str| match host {
+        "rex" => vec![nav_dir().join("rex").join("templates")],
+        _ => vec![nav_dir().join("templates"), herdr_dir().join("templates")],
+    };
+    let dirs = chain(host);
+    for d in &dirs {
+        if d.is_dir() {
+            return d.clone();
+        }
     }
-    let herdr = herdr_dir().join("templates");
-    if herdr.is_dir() {
-        return herdr;
-    }
-    nav
+    dirs[0].clone()
 }
 
 #[cfg(test)]
@@ -206,7 +218,10 @@ mod tests {
         with_home("tr-nav", |home| {
             std::fs::create_dir_all(home.nav().join("templates")).unwrap();
             std::fs::create_dir_all(home.herdr().join("templates")).unwrap();
-            assert_eq!(templates_read_dir(), home.nav().join("templates"));
+            assert_eq!(
+                templates_read_dir_for("herdr"),
+                home.nav().join("templates")
+            );
         });
     }
 
@@ -214,7 +229,28 @@ mod tests {
     fn templates_read_falls_back_to_herdr() {
         with_home("tr-legacy", |home| {
             std::fs::create_dir_all(home.herdr().join("templates")).unwrap();
-            assert_eq!(templates_read_dir(), home.herdr().join("templates"));
+            assert_eq!(
+                templates_read_dir_for("herdr"),
+                home.herdr().join("templates")
+            );
+        });
+    }
+
+    #[test]
+    fn templates_are_host_scoped() {
+        with_home("tr-rex", |home| {
+            // Under Rex: its own dir, never the herdr chain — even when
+            // both herdr dirs exist and the rex dir doesn't.
+            std::fs::create_dir_all(home.nav().join("templates")).unwrap();
+            std::fs::create_dir_all(home.herdr().join("templates")).unwrap();
+            assert_eq!(
+                templates_read_dir_for("rex"),
+                home.nav().join("rex").join("templates")
+            );
+            assert_eq!(
+                templates_write_dir_for("rex"),
+                home.nav().join("rex").join("templates")
+            );
         });
     }
 
@@ -223,11 +259,17 @@ mod tests {
         with_home("tw2-legacy", |home| {
             // Only herdr's exists → write there.
             std::fs::create_dir_all(home.herdr().join("templates")).unwrap();
-            assert_eq!(templates_write_dir(), home.herdr().join("templates"));
+            assert_eq!(
+                templates_write_dir_for("herdr"),
+                home.herdr().join("templates")
+            );
         });
         with_home("tw2-new", |_home| {
             // Neither exists → nav's (created by the writer).
-            assert_eq!(templates_write_dir(), nav_dir().join("templates"));
+            assert_eq!(
+                templates_write_dir_for("herdr"),
+                nav_dir().join("templates")
+            );
         });
     }
 

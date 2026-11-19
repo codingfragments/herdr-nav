@@ -184,6 +184,21 @@ fn run() -> Result<(), String> {
         seed,
     );
 
+    // Rex, no jump (Esc): put the user back on the pane they came
+    // from. The launcher used to do this after its wait; the R1 mode
+    // (Remote Control) made the launcher non-blocking, so the
+    // switcher restores the source focus itself on its way out.
+    if result.is_ok() && !host_ext::jump_performed() && host.name() == "rex" {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        if let (Some(cli), Some(sid), Some(block)) =
+            (var("REX_CLI"), var("REX_SESSION"), var("NAV_SOURCE_BLOCK"))
+        {
+            let _ = std::process::Command::new(cli)
+                .args(["focus", "-s", &sid, &block])
+                .output();
+        }
+    }
+
     // Restore terminal regardless of how the loop exited.
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), cursor::Show).ok();
@@ -889,7 +904,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                     let expanded = source::expand_path(&path_str);
                     let node_id = format!("dirnav:{}", path_str);
                     let name = source::workspace_name_default(&path_str);
-                    let templates = source::read_templates();
+                    let templates = source::read_templates_for(host.name());
                     if !templates.is_empty() {
                         let cursor = source::preselect_template(&templates, &path_str);
                         template_picker = Some(TemplatePicker {
@@ -937,7 +952,7 @@ fn event_loop<B: ratatui::backend::Backend>(
                         if id.starts_with("pinned:") || id.starts_with("zox:") {
                             let path = id.split_once(':').map(|(_, p)| p).unwrap_or(&id);
                             let expanded = source::expand_path(path);
-                            let templates = source::read_templates();
+                            let templates = source::read_templates_for(host.name());
                             if !templates.is_empty() {
                                 let cursor = source::preselect_template(&templates, path);
                                 template_picker = Some(TemplatePicker {
@@ -1379,7 +1394,7 @@ fn run_capture() -> Result<(), String> {
     let (template, annotations) =
         capture::capture_template(host.as_ref(), &name, cwd_policy, command_policy)?;
     let yaml = capture::template_to_yaml(&template, &annotations)?;
-    let path = capture::write_template(&name, &yaml)?;
+    let path = capture::write_template(host.name(), &name, &yaml)?;
     println!("wrote {}", path.display());
     Ok(())
 }

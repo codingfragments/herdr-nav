@@ -967,17 +967,17 @@ fn inject_comments(yaml: &str, annotations: &[Annotation]) -> String {
 }
 
 /// The templates dir: `~/.config/herdr/templates/`.
-/// The templates write dir (rex-migration.md R2): the first of
-/// `~/.config/nav/templates/` and `~/.config/herdr/templates/` that
-/// exists, else nav's (created by `write_template`).
-fn templates_dir() -> Result<std::path::PathBuf, String> {
-    Ok(crate::paths::templates_write_dir())
+/// The templates write dir for a host (R5): herdr writes the first of
+/// `~/.config/nav/templates/` and the legacy herdr dir that exists;
+/// Rex writes its own `~/.config/nav/rex/templates/`.
+fn templates_dir(host: &str) -> Result<std::path::PathBuf, String> {
+    Ok(crate::paths::templates_write_dir_for(host))
 }
 
 /// Write a template to `<templates-dir>/<name>.yaml`, creating the
 /// dir if missing. Returns the written path.
-pub fn write_template(name: &str, yaml: &str) -> Result<std::path::PathBuf, String> {
-    let dir = templates_dir()?;
+pub fn write_template(host: &str, name: &str, yaml: &str) -> Result<std::path::PathBuf, String> {
+    let dir = templates_dir(host)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let path = dir.join(format!("{name}.yaml"));
     std::fs::write(&path, yaml).map_err(|e| format!("write {}: {e}", path.display()))?;
@@ -986,8 +986,8 @@ pub fn write_template(name: &str, yaml: &str) -> Result<std::path::PathBuf, Stri
 
 /// Check if a template named `<name>.yaml` already exists in the
 /// templates dir (Phase C5 clash check).
-pub fn template_exists(name: &str) -> bool {
-    templates_dir()
+pub fn template_exists(name: &str, host: &str) -> bool {
+    templates_dir(host)
         .map(|dir| dir.join(format!("{name}.yaml")).exists())
         .unwrap_or(false)
 }

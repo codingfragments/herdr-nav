@@ -91,6 +91,18 @@ groups = ["session", "agents", "plugins", "pinned", "zoxide"]
 chain. Unknown hosts (e.g. the no-multiplexer dev fallback) use the
 top-level values.
 
+## Templates — host-scoped dirs
+
+- **herdr**: reads `~/.config/nav/templates/`, else the legacy
+  `~/.config/herdr/templates/`; writes to the first that exists, else
+  nav's.
+- **Rex**: its own set, `~/.config/nav/rex/templates/` — read and
+  write, no herdr fallback (a layout tuned for one multiplexer is
+  rarely what you want in the other).
+
+The schema is identical for both hosts (tabs, layout, commands — no
+host-specific fields); see [`doc/templates.md`](templates.md).
+
 ## Pinned dirs — `targets.toml`
 
 Pinned directories live in the first existing of

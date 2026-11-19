@@ -119,6 +119,9 @@ impl Step {
 #[allow(dead_code)]
 struct CaptureForm {
     step: Step,
+    /// The host name — templates are host-scoped (R5: Rex's set is its
+    /// own), so the write/clash paths need it.
+    host: String,
     /// Cached raw capture (fetched once on wizard entry).
     raw: RawCapture,
     /// Tab labels (live, pre-filled) — editable on Names.
@@ -280,6 +283,7 @@ pub fn run(host: &dyn NavFull) -> Result<(), String> {
 
     let mut form = CaptureForm {
         step: Step::ScopeConfirm,
+        host: host.name().to_string(),
         name: raw.workspace_label.clone(),
         tab_labels,
         pane_names,
@@ -368,7 +372,7 @@ fn do_write(form: &mut CaptureForm) -> Result<(), String> {
         None => return Err("cannot build template (name empty?)".to_string()),
     };
     let name = form.name.trim().to_string();
-    let path = capture::write_template(&name, &yaml)?;
+    let path = capture::write_template(&form.host, &name, &yaml)?;
     form.written_path = Some(path);
     Ok(())
 }
@@ -523,7 +527,7 @@ fn handle_key(form: &mut CaptureForm, code: KeyCode, mods: KeyModifiers) -> Resu
                         return Ok(Action::Continue);
                     }
                     // Phase C5: clash check before write.
-                    if capture::template_exists(&name) {
+                    if capture::template_exists(&name, &form.host) {
                         form.step = Step::ClashPrompt;
                         return Ok(Action::Continue);
                     }
