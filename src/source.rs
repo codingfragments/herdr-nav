@@ -2,24 +2,22 @@
 //!
 //! Each provider is a thin adapter over its data source that produces a
 //! subtree and resolves previews for its own nodes. Providers are cheap
-//! to enumerate and lazy to preview.
-//!
-//! **Phase 1:** only `SessionProvider` is real (herdr daemon IPC via
-//! `pane.list`); the other four groups render as red "unavailable"
-//! stubs (spec §5/§11). Their providers land in later phases
-//! (Agents → 5, Pinned+zoxide → 6a, Plugins → 7).
+//! to enumerate and lazy to preview. All host access goes through
+//! `host_ext` (muxhost's `HostTopology`/`HostNavigate` plus nav's local
+//! `TemplateHost`/`HostExt` glue) — no direct socket calls anywhere.
 
+use crate::host_ext::{AgentEntry, NavFull, PaneEntry, SessionInfo, WindowInfo};
 use crate::nav::{Group, Kind, Node, NodeId, Preview, Provider};
 use serde::{Deserialize, Serialize};
 
 /// Build the five group subtrees in spec §4 fixed order, using the
 /// registered providers. A provider that fails leaves its group row in
 /// place with a red "unavailable" meta and an error preview (spec §5/§11).
-pub fn build_tree(socket_path: &str, groups: &[String], cfg: &crate::config::Config) -> Vec<Node> {
+pub fn build_tree(host: &dyn NavFull, groups: &[String], cfg: &crate::config::Config) -> Vec<Node> {
     groups
         .iter()
         .filter_map(|name| Group::from_provider_id(name))
-        .map(|g| group_node(socket_path, g, cfg))
+        .map(|g| group_node(host, g, cfg))
         .map(populate_hint_if_empty)
         .collect()
 }
@@ -54,21 +52,21 @@ fn populate_hint_if_empty(mut node: Node) -> Node {
 /// Produce one root group node. For Session, run the real provider; for
 /// every other group, render an "unavailable" stub until its phase lands.
 #[allow(unreachable_patterns)]
-fn group_node(socket_path: &str, group: Group, cfg: &crate::config::Config) -> Node {
+fn group_node(host: &dyn NavFull, group: Group, cfg: &crate::config::Config) -> Node {
     match group {
-        Group::Session => SessionProvider::new(socket_path.to_string())
+        Group::Session => SessionProvider::new(host)
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
-        Group::Agents => AgentsProvider::new(socket_path.to_string())
+        Group::Agents => AgentsProvider::new(host)
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
-        Group::Pinned => PinnedProvider::new()
+        Group::Pinned => PinnedProvider::new(host)
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
-        Group::Zoxide => ZoxideProvider::with_limit(cfg.zoxide_limit)
+        Group::Zoxide => ZoxideProvider::with_limit(host, cfg.zoxide_limit)
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
-        Group::Plugins => PluginsProvider::new(socket_path.to_string())
+        Group::Plugins => PluginsProvider::new(host)
             .enumerate()
             .unwrap_or_else(|e| unavailable_stub(group, &e)),
         _ => unavailable_stub(group, "not implemented (later phase)"),
@@ -118,56 +116,36 @@ fn group_glyph(_: Group) -> char {
 
 // ── Session provider ─────────────────────────────────────────────────────────
 
-/// The Session provider (spec §5): herdr daemon IPC — the
-/// workspace/tab/pane graph. Phase 1 reconstructs the tree from the flat
-/// `pane.list` response (the only confirmed session-graph method; see
-/// PLANNING.md §5). Panes carry `workspace_id`/`tab_id`, so the
-/// workspace → tab → pane tree is derived by grouping.
-pub struct SessionProvider {
-    socket_path: String,
+/// The Session provider (spec §5): the multiplexer's workspace/tab/pane
+/// graph via the host's topology trait group (muxhost `HostTopology`).
+/// Panes carry `session_id`/`window_id`, so the workspace → tab → pane
+/// tree is derived by grouping; session/window labels come from
+/// `list_sessions`/`list_windows`.
+pub struct SessionProvider<'a> {
+    host: &'a dyn NavFull,
 }
 
-impl SessionProvider {
-    pub fn new(socket_path: String) -> Self {
-        Self { socket_path }
+impl<'a> SessionProvider<'a> {
+    pub fn new(host: &'a dyn NavFull) -> Self {
+        Self { host }
     }
 }
 
-impl Provider for SessionProvider {
+impl Provider for SessionProvider<'_> {
     fn id(&self) -> &'static str {
         "session"
     }
 
     fn enumerate(&self) -> Result<Node, String> {
-        let result =
-            crate::socket_client::request(&self.socket_path, "pane.list", serde_json::json!({}))
-                .map_err(|e| format!("pane.list failed: {e}"))?;
+        let panes = self.host.list_all_panes()?;
 
-        let panes = result
-            .get("panes")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        // Session/window labels and the active markers come from the
+        // host's own lists. A failed label list degrades to the raw id
+        // (empty maps) — the tree still renders, as before.
+        let sessions = self.host.list_sessions().unwrap_or_default();
+        let windows = self.host.list_windows().unwrap_or_default();
 
-        // Workspace/tab labels come from workspace.list + tab.list, not
-        // from pane.list (which only carries ids). Fall back to the id
-        // if either call fails — the tree still renders.
-        let ws_names = name_map(
-            &self.socket_path,
-            "workspace.list",
-            "workspaces",
-            "workspace_id",
-        );
-        let tab_names = name_map(&self.socket_path, "tab.list", "tabs", "tab_id");
-
-        let (active_workspace, active_tab) = active_ids_from_env();
-        Ok(build_session_tree(
-            &panes,
-            &active_workspace,
-            &active_tab,
-            &ws_names,
-            &tab_names,
-        ))
+        Ok(build_session_tree(&panes, &sessions, &windows))
     }
 
     fn preview(&self, _id: &NodeId) -> Preview {
@@ -176,19 +154,16 @@ impl Provider for SessionProvider {
     }
 
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
-        // Phase 3: jump to the target. For a pane, `pane.focus` does the
+        // Phase 3: jump to the target. For a pane, the host's jump does the
         // whole switch (workspace + tab + focus) in one call. For a
         // workspace/tab node we focus the first pane under it (or the
         // active one) — same invoke path.
         let pane_id = id.strip_prefix("session:pane:").map(str::to_string);
         match pane_id {
             Some(pid) => {
-                let _ = crate::socket_client::request(
-                    &self.socket_path,
-                    "pane.focus",
-                    serde_json::json!({"pane_id": pid}),
-                )
-                .map_err(|e| e.to_string())?;
+                self.host.jump(muxhost::navigate::Jump::FocusPane {
+                    pane_id: pid.clone(),
+                })?;
                 Ok(crate::nav::Outcome::Close {
                     toast: format!("jumped to pane {pid}"),
                 })
@@ -202,12 +177,8 @@ impl Provider for SessionProvider {
                     .and_then(|n| node_for(id, &n).and_then(first_pane_under));
                 match first_pane {
                     Some(pid) => {
-                        let _ = crate::socket_client::request(
-                            &self.socket_path,
-                            "pane.focus",
-                            serde_json::json!({"pane_id": pid}),
-                        )
-                        .map_err(|e| e.to_string())?;
+                        self.host
+                            .jump(muxhost::navigate::Jump::FocusPane { pane_id: pid })?;
                         Ok(crate::nav::Outcome::Close {
                             toast: format!("switched to {id}"),
                         })
@@ -221,37 +192,26 @@ impl Provider for SessionProvider {
 
 // ── Agents provider ──────────────────────────────────────────────────────────
 
-/// The Agents provider (spec §5): agent-detect plugin hooks
-/// (agent.start/stop), else process-tree heuristic. Phase 5 uses the
-/// `agent.list` socket method (confirmed live) which returns every
-/// detected agent pane with its status. Flat list, sort waiting →
+/// The Agents provider (spec §5): every pane running an agent with its
+/// status, via the host's `list_agents`. Flat list, sort waiting →
 /// working → idle then recency. Meta = status.
-pub struct AgentsProvider {
-    socket_path: String,
+pub struct AgentsProvider<'a> {
+    host: &'a dyn NavFull,
 }
 
-impl AgentsProvider {
-    pub fn new(socket_path: String) -> Self {
-        Self { socket_path }
+impl<'a> AgentsProvider<'a> {
+    pub fn new(host: &'a dyn NavFull) -> Self {
+        Self { host }
     }
 }
 
-impl Provider for AgentsProvider {
+impl Provider for AgentsProvider<'_> {
     fn id(&self) -> &'static str {
         "agents"
     }
 
     fn enumerate(&self) -> Result<Node, String> {
-        let result =
-            crate::socket_client::request(&self.socket_path, "agent.list", serde_json::json!({}))
-                .map_err(|e| format!("agent.list failed: {e}"))?;
-
-        let agents = result
-            .get("agents")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
+        let agents = self.host.list_agents()?;
         Ok(build_agents_tree(&agents))
     }
 
@@ -266,12 +226,9 @@ impl Provider for AgentsProvider {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Jump to the pane the agent runs in — same as a pane jump.
         let pane_id = id.strip_prefix("agents:").unwrap_or(id);
-        let _ = crate::socket_client::request(
-            &self.socket_path,
-            "pane.focus",
-            serde_json::json!({"pane_id": pane_id}),
-        )
-        .map_err(|e| e.to_string())?;
+        self.host.jump(muxhost::navigate::Jump::FocusPane {
+            pane_id: pane_id.to_string(),
+        })?;
         Ok(crate::nav::Outcome::Close {
             toast: format!("jumped to agent {pane_id}"),
         })
@@ -279,39 +236,23 @@ impl Provider for AgentsProvider {
 }
 
 /// Build the Agents group node (flat list of agent leaves, spec §4/§5).
-/// Sort waiting → working → idle, then recency (focused first). Meta =
+/// Sort waiting → working → idle, then focused first. Meta =
 /// status. Each agent leaf's id is `agents:<pane_id>` so invoke can
 /// strip the prefix and focus the pane.
-fn build_agents_tree(agents: &[serde_json::Value]) -> Node {
-    let mut leaves: Vec<Node> = Vec::new();
-    for agent in agents {
-        let Some(pane_id) = agent.get("pane_id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let name = agent
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .unwrap_or("agent");
-        let status = agent
-            .get("agent_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let label = agent
-            .get("terminal_title_stripped")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(name);
-        leaves.push(Node {
-            id: format!("agents:{pane_id}"),
+fn build_agents_tree(agents: &[AgentEntry]) -> Node {
+    let mut leaves: Vec<Node> = agents
+        .iter()
+        .map(|a| Node {
+            id: format!("agents:{}", a.pane_id),
             kind: Kind::Agent,
-            label: label.to_string(),
-            meta: status.to_string(),
+            label: a.title.clone(),
+            meta: a.status.as_str().to_string(),
             crumbs: None,
             children: Vec::new(),
             preview: Preview::default(),
             actions: crate::nav::Actions::default(),
-        });
-    }
+        })
+        .collect();
     // Sort waiting → working → idle (spec §4), then focused first.
     leaves.sort_by_key(|n| match n.meta.as_str() {
         "waiting" => 0,
@@ -335,21 +276,17 @@ fn build_agents_tree(agents: &[serde_json::Value]) -> Node {
 /// The Pinned dirs provider (spec §5): reads
 /// `~/.config/herdr/targets.toml`, refresh on file mtime change.
 /// Flat list, config file order (slot ⌘1–⌘9). Meta = slot.
-pub struct PinnedProvider;
+pub struct PinnedProvider<'a> {
+    host: &'a dyn NavFull,
+}
 
-impl Default for PinnedProvider {
-    fn default() -> Self {
-        Self
+impl<'a> PinnedProvider<'a> {
+    pub fn new(host: &'a dyn NavFull) -> Self {
+        Self { host }
     }
 }
 
-impl PinnedProvider {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Provider for PinnedProvider {
+impl Provider for PinnedProvider<'_> {
     fn id(&self) -> &'static str {
         "pinned"
     }
@@ -365,7 +302,7 @@ impl Provider for PinnedProvider {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Open a new workspace at the pinned path, built from the
         // auto-resolved default template (spec §8.2 amended).
-        let (outcome, _first_pane) = open_dir_workspace_template(id, None)?;
+        let (outcome, _first_pane) = open_dir_workspace_template(self.host, id, None)?;
         Ok(outcome)
     }
 }
@@ -373,32 +310,27 @@ impl Provider for PinnedProvider {
 /// The zoxide provider (spec §5): `zoxide query --list --score`,
 /// top `limit` existing paths only. 30s cache (Phase 10 wires the cache;
 /// Phase 6a re-runs on each open). Meta = frecency score.
-pub struct ZoxideProvider {
+pub struct ZoxideProvider<'a> {
+    host: &'a dyn NavFull,
     limit: usize,
 }
 
-impl Default for ZoxideProvider {
-    fn default() -> Self {
-        Self {
-            limit: crate::config::DEFAULT_ZOXIDE_LIMIT as usize,
-        }
-    }
-}
-
-impl ZoxideProvider {
-    pub fn new() -> Self {
-        Self::default()
+impl<'a> ZoxideProvider<'a> {
+    /// Create with the default limit (spec §13 `zoxide_limit`).
+    pub fn new(host: &'a dyn NavFull) -> Self {
+        Self::with_limit(host, crate::config::DEFAULT_ZOXIDE_LIMIT)
     }
 
     /// Create with a custom limit (spec §13 `zoxide_limit`).
-    pub fn with_limit(limit: u32) -> Self {
+    pub fn with_limit(host: &'a dyn NavFull, limit: u32) -> Self {
         Self {
+            host,
             limit: limit as usize,
         }
     }
 }
 
-impl Provider for ZoxideProvider {
+impl Provider for ZoxideProvider<'_> {
     fn id(&self) -> &'static str {
         "zoxide"
     }
@@ -414,7 +346,7 @@ impl Provider for ZoxideProvider {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Open a new workspace at the zoxide path, built from the
         // auto-resolved default template (spec §8.2 amended).
-        let (outcome, _first_pane) = open_dir_workspace_template(id, None)?;
+        let (outcome, _first_pane) = open_dir_workspace_template(self.host, id, None)?;
         Ok(outcome)
     }
 }
@@ -435,6 +367,7 @@ impl Provider for ZoxideProvider {
 /// 1-tab/1-pane). Returns the first pane's id so the caller can focus
 /// it (the build itself restores focus to the previously-focused pane).
 pub fn open_dir_workspace_template(
+    host: &dyn NavFull,
     id: &str,
     name: Option<&str>,
 ) -> Result<(crate::nav::Outcome, Option<String>), String> {
@@ -444,7 +377,7 @@ pub fn open_dir_workspace_template(
         .map(str::to_string)
         .unwrap_or_else(|| workspace_name_default(path));
     let template = default_template_for(&expanded);
-    let first_pane = build_workspace_from_template(&expanded, &label, &template)?;
+    let first_pane = build_workspace_from_template(host, &expanded, &label, &template)?;
     Ok((
         crate::nav::Outcome::Close {
             toast: format!("opened workspace at {path}"),
@@ -687,35 +620,27 @@ fn parse_targets_toml(content: &str) -> Vec<(String, u32)> {
 // ── Plugins provider ───────────────────────────────────────────────────────
 
 /// The Plugins provider (spec §5/§8.3): plugin registry
-/// via `plugin.list` (confirmed live). Flat list, name order. Meta =
-/// version. Each plugin leaf's id is `plugin:<plugin_id>` so invoke
-/// can strip the prefix and run `plugin.action.invoke`.
-pub struct PluginsProvider {
-    socket_path: String,
+/// via the host's plugin surface (`plugin.list` on herdr; the group is
+/// hidden on hosts without `caps.plugins`). Flat list, name order.
+/// Meta = version. Each plugin leaf's id is `plugin:<plugin_id>` so
+/// invoke can strip the prefix and run `plugin.action.invoke`.
+pub struct PluginsProvider<'a> {
+    host: &'a dyn NavFull,
 }
 
-impl PluginsProvider {
-    pub fn new(socket_path: String) -> Self {
-        Self { socket_path }
+impl<'a> PluginsProvider<'a> {
+    pub fn new(host: &'a dyn NavFull) -> Self {
+        Self { host }
     }
 }
 
-impl Provider for PluginsProvider {
+impl Provider for PluginsProvider<'_> {
     fn id(&self) -> &'static str {
         "plugins"
     }
 
     fn enumerate(&self) -> Result<Node, String> {
-        let result =
-            crate::socket_client::request(&self.socket_path, "plugin.list", serde_json::json!({}))
-                .map_err(|e| format!("plugin.list failed: {e}"))?;
-
-        let plugins = result
-            .get("plugins")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
+        let plugins = self.host.list_plugins()?;
         Ok(build_plugins_tree(&plugins))
     }
 
@@ -885,38 +810,50 @@ pub fn workspace_name_default(path: &str) -> String {
         .unwrap_or("workspace")
         .to_string()
 }
-/// `pane.list` panes array (spec §4/§5). Panes are grouped by
-/// `workspace_id` then `tab_id`; workspaces and tabs are synthesised as
-/// interior `Workspace`/`Tab` nodes, panes as `Pane` leaves. The active
-/// workspace/tab (from the launch context) is marked `meta = "active"` so
-/// `Tree::new` pre-expands to it.
-///
-/// Defensive: missing `workspace_id`/`tab_id` fields degrade to a flat
-/// list under a single implicit workspace, so the tree never crashes on a
-/// partial daemon response.
+/// Every pane (host `list_all_panes`), grouped into the Session tree
+/// (spec §4/§5): workspaces → tabs → panes. Labels and the active
+/// markers come from the host's own session/window lists (`SessionInfo`
+/// / `WindowInfo`); a missing label degrades to the raw id, a missing
+/// session/window to empty strings, so the tree never crashes on a
+/// partial host response.
 fn build_session_tree(
-    panes: &[serde_json::Value],
-    active_workspace: &str,
-    active_tab: &str,
-    ws_names: &std::collections::HashMap<String, String>,
-    tab_names: &std::collections::HashMap<String, String>,
+    panes: &[PaneEntry],
+    sessions: &[SessionInfo],
+    windows: &[WindowInfo],
 ) -> Node {
+    let active_workspace = sessions
+        .iter()
+        .find(|s| s.active)
+        .map(|s| s.session_id.clone())
+        .unwrap_or_default();
+    let active_tab = windows
+        .iter()
+        .find(|w| w.active)
+        .map(|w| w.window_id.clone())
+        .unwrap_or_default();
+    let ws_labels: std::collections::HashMap<&str, &str> = sessions
+        .iter()
+        .map(|s| (s.session_id.as_str(), s.label.as_str()))
+        .collect();
+    let tab_labels: std::collections::HashMap<&str, &str> = windows
+        .iter()
+        .map(|w| (w.window_id.as_str(), w.label.as_str()))
+        .collect();
+
     let mut workspaces: Vec<(String, String, Vec<PaneRow>)> = Vec::new();
     for pane in panes {
-        let Some(pane_id) = pane_str(pane, "pane_id") else {
-            continue;
-        };
-        let label = pane_label(pane, &pane_id);
-        let ws_id = pane_str(pane, "workspace_id").unwrap_or_default();
-        let tab_id = pane_str(pane, "tab_id").unwrap_or_default();
-        // Real labels from workspace.list / tab.list; fall back to the id.
-        let ws_name = ws_names
-            .get(&ws_id)
-            .cloned()
+        let pane_id = pane.pane_id.clone();
+        let label = pane.title.clone();
+        let ws_id = pane.session_id.clone();
+        let tab_id = pane.window_id.clone();
+        // Real labels from the session/window lists; fall back to the id.
+        let ws_name = ws_labels
+            .get(ws_id.as_str())
+            .map(|s| s.to_string())
             .unwrap_or_else(|| ws_id.clone());
-        let tab_name = tab_names
-            .get(&tab_id)
-            .cloned()
+        let tab_name = tab_labels
+            .get(tab_id.as_str())
+            .map(|s| s.to_string())
             .unwrap_or_else(|| tab_id.clone());
 
         let entry = workspaces
@@ -949,7 +886,7 @@ fn build_session_tree(
     let ws_nodes: Vec<Node> = workspaces
         .into_iter()
         .map(|(ws_id, ws_name, panes)| {
-            workspace_node(&ws_id, &ws_name, &panes, active_workspace, active_tab)
+            workspace_node(&ws_id, &ws_name, &panes, &active_workspace, &active_tab)
         })
         .collect();
 
@@ -1190,59 +1127,29 @@ pub fn read_templates() -> Vec<Template> {
 /// layout (splits + startup commands). Returns the first pane's
 /// id so the caller can focus it.
 pub fn build_workspace_from_template(
+    host: &dyn NavFull,
     path: &str,
     name: &str,
     template: &Template,
 ) -> Result<Option<String>, String> {
-    let socket = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
     // Create the workspace (plain; worktree is handled by the caller).
-    let resp = crate::socket_client::request(
-        &socket,
-        "workspace.create",
-        serde_json::json!({"cwd": path, "label": name}),
-    )
-    .map_err(|e| e.to_string())?;
-    let ws_id = resp
-        .get("workspace")
-        .and_then(|v| v.get("workspace_id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let first_pane = resp
-        .get("root_pane")
-        .and_then(|v| v.get("pane_id"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    // The first tab is created by `workspace.create`; its id is in
-    // the response (either `tab.tab_id` or `workspace.active_tab_id`).
-    // We need it to rename the first tab to the template's tab name
-    // (the workspace is created with a default numeric label).
-    let first_tab_id = resp
-        .get("tab")
-        .and_then(|v| v.get("tab_id"))
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            resp.get("workspace")
-                .and_then(|v| v.get("active_tab_id"))
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("")
-        .to_string();
+    let created = host.create_session(path, name)?;
+    let ws_id = created.session_id;
+    let first_pane = created.root_pane_id;
+    let first_tab_id = created.first_window_id;
 
     // Focus the new workspace's root pane before any splits —
     // herdr's pane.split targets the ACTIVE pane in the ACTIVE
     // workspace, so without focusing first the split lands in
     // the current workspace (confirmed live), not the new one.
     if let Some(fp) = &first_pane {
-        let _ = crate::socket_client::request(
-            &socket,
-            "pane.focus",
-            serde_json::json!({"pane_id": fp}),
-        );
+        let _ = host.jump(muxhost::navigate::Jump::FocusPane {
+            pane_id: fp.clone(),
+        });
     }
     // Remember the pane that was focused before we built, so we
     // can restore focus to it (the user stays in the current ws).
-    let prev_focused = current_focused_pane(&socket);
+    let prev_focused = current_focused_pane(host);
 
     for (tab_i, tab) in template.tabs.iter().enumerate() {
         // Per-tab cwd (None = the workspace's cwd = the path
@@ -1258,52 +1165,32 @@ pub fn build_workspace_from_template(
             // `tab.create` for it). Best-effort: a missing tab id or
             // an empty template name is a no-op.
             if !first_tab_id.is_empty() && !tab.name.is_empty() {
-                let _ = crate::socket_client::request(
-                    &socket,
-                    "tab.rename",
-                    serde_json::json!({"tab_id": &first_tab_id, "label": &tab.name}),
-                );
+                let _ = host.rename_window(&first_tab_id, &tab.name);
             }
             (first_pane.clone().unwrap_or_default(), false)
         } else {
             // `tab.create` accepts a `label` param (confirmed live),
             // so later tabs get their template name at creation.
-            let mut params = serde_json::json!({"workspace_id": ws_id, "cwd": tab_cwd});
-            if !tab.name.is_empty() {
-                params["label"] = serde_json::json!(tab.name);
-            }
-            let r = crate::socket_client::request(&socket, "tab.create", params)
-                .map_err(|e| e.to_string())?;
-            let new_root = r
-                .get("root_pane")
-                .and_then(|v| v.get("pane_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let label = (!tab.name.is_empty()).then_some(tab.name.as_str());
+            let new_root = host.create_window(&ws_id, &tab_cwd, label)?;
             // Focus the new tab's root pane before any splits —
             // herdr's pane.split targets the ACTIVE pane in the ACTIVE tab,
             // and tab.create does NOT make the new tab active (confirmed
             // live), so without focusing first the split lands in the
             // previous tab, creating an extra pane there.
-            let _ = crate::socket_client::request(
-                &socket,
-                "pane.focus",
-                serde_json::json!({"pane_id": &new_root}),
-            );
+            let _ = host.jump(muxhost::navigate::Jump::FocusPane {
+                pane_id: new_root.clone(),
+            });
             (new_root, true)
         };
         // Recursively build the tab's layout. The first pane is
         // the workspace's root pane (tab 0) or the new tab's root.
-        build_layout(&socket, &pane_id, &tab.layout, &tab_cwd);
+        build_layout(host, &pane_id, &tab.layout, &tab_cwd);
     }
     // Restore focus to the pane that was focused before the build
     // (the user stays in the current workspace, not the new one).
     if let Some(prev) = prev_focused {
-        let _ = crate::socket_client::request(
-            &socket,
-            "pane.focus",
-            serde_json::json!({"pane_id": prev}),
-        );
+        let _ = host.jump(muxhost::navigate::Jump::FocusPane { pane_id: prev });
     }
     Ok(first_pane)
 }
@@ -1312,7 +1199,7 @@ pub fn build_workspace_from_template(
 /// (already exists); each subsequent child splits the current
 /// pane in the layout's direction. A leaf child sends its
 /// command (if non-empty); a nested split recurses.
-fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
+fn build_layout(host: &dyn NavFull, first_pane_id: &str, layout: &Layout, cwd: &str) {
     let mut current = first_pane_id.to_string();
     for (i, child) in layout.panes.iter().enumerate() {
         // Determine this child's cwd: a pane child may
@@ -1327,11 +1214,9 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
             // without focusing first the split lands on whatever pane
             // happens to be active (often the previous sibling's left side),
             // not the intended pane (confirmed live).
-            let _ = crate::socket_client::request(
-                socket,
-                "pane.focus",
-                serde_json::json!({"pane_id": &current}),
-            );
+            let _ = host.jump(muxhost::navigate::Jump::FocusPane {
+                pane_id: current.clone(),
+            });
             // Split the current pane to create the next sibling, with
             // the child's resolved cwd (so relative paths like
             // `../` expand against the tab cwd, not HOME).
@@ -1345,18 +1230,8 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
             } else {
                 0.5
             };
-            let r = crate::socket_client::request(
-                socket,
-                "pane.split",
-                serde_json::json!({"pane_id": current, "direction": direction, "ratio": ratio, "cwd": child_cwd}),
-            ).ok();
-            if let Some(r) = r {
-                current = r
-                    .get("pane")
-                    .and_then(|v| v.get("pane_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+            if let Ok(new_id) = host.split_pane(&current, direction, ratio, &child_cwd) {
+                current = new_id;
             }
         }
         match child {
@@ -1372,57 +1247,39 @@ fn build_layout(socket: &str, first_pane_id: &str, layout: &Layout, cwd: &str) {
                     if let Some(p) = pane_cwd {
                         let c = resolve_cwd(cwd, p);
                         if c != cwd {
-                            let _ = crate::socket_client::request(
-                                socket,
-                                "pane.send_text",
-                                serde_json::json!({"pane_id": current, "text": format!("cd {c}\n")}),
-                            );
+                            let _ = host.insert_text(&current, &format!("cd {c}\n"));
                         }
                     }
                 }
                 if let Some(cmd) = command {
                     if !cmd.is_empty() {
-                        let _ = crate::socket_client::request(
-                            socket,
-                            "pane.send_text",
-                            serde_json::json!({"pane_id": current, "text": format!("{cmd}\n")}),
-                        );
+                        let _ = host.insert_text(&current, &format!("{cmd}\n"));
                     }
                 }
                 // Pane name (spec §8.4): herdr's pane.split does not
                 // accept a label, so set it via pane.rename after
                 // the split (confirmed live).
                 if let Some(n) = name {
-                    let _ = crate::socket_client::request(
-                        socket,
-                        "pane.rename",
-                        serde_json::json!({"pane_id": &current, "label": n}),
-                    );
+                    let _ = host.rename_pane(&current, n);
                 }
             }
             PaneNode::Nested { layout: nested } => {
                 // Recurse into the current pane (the new split's root).
-                build_layout(socket, &current, nested, &child_cwd);
+                build_layout(host, &current, nested, &child_cwd);
             }
         }
     }
 }
 
 /// Best-effort: which pane is currently focused? (None if the
-/// socket call fails.) Used to restore focus after building a
+/// host call fails.) Used to restore focus after building a
 /// workspace from a template.
-fn current_focused_pane(socket: &str) -> Option<String> {
-    let r = crate::socket_client::request(socket, "pane.list", serde_json::json!({})).ok()?;
-    let panes = r.get("panes").and_then(|v| v.as_array())?;
-    for p in panes {
-        if p.get("focused").and_then(|v| v.as_bool()) == Some(true) {
-            return p
-                .get("pane_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-        }
-    }
-    None
+fn current_focused_pane(host: &dyn NavFull) -> Option<String> {
+    let panes = host.list_all_panes().ok()?;
+    panes
+        .iter()
+        .find(|p| p.is_focused)
+        .map(|p| p.pane_id.clone())
 }
 
 /// Preselect the template whose `match` glob fits `path`, else the
@@ -1515,85 +1372,38 @@ fn pane_leaf(pane_id: &str, label: &str) -> Node {
     }
 }
 
-/// Fetch a list method and build an `{id -> label}` map. Used to
-/// get the real workspace/tab labels (pane.list only carries ids).
-/// Returns an empty map on any socket/parse failure — the caller
-/// falls back to the id, so the tree still renders.
-fn name_map(
-    socket_path: &str,
-    method: &str,
-    array_key: &str,
-    id_key: &str,
-) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    if socket_path.is_empty() {
-        return map;
-    }
-    let Ok(result) = crate::socket_client::request(socket_path, method, serde_json::json!({}))
-    else {
-        return map;
-    };
-    if let Some(arr) = result.get(array_key).and_then(|v| v.as_array()) {
-        for item in arr {
-            if let (Some(id), Some(label)) = (
-                item.get(id_key).and_then(|v| v.as_str()),
-                item.get("label").and_then(|v| v.as_str()),
-            ) {
-                map.insert(id.to_string(), label.to_string());
-            }
-        }
-    }
-    map
-}
-
-/// Read the active workspace/tab ids from `HERDR_PLUGIN_CONTEXT_JSON`
-/// (set by Herdr for a real plugin-pane invocation). Falls back to empty
-/// strings (no active marker) when unavailable.
-fn active_ids_from_env() -> (String, String) {
-    if let Ok(json) = std::env::var("HERDR_PLUGIN_CONTEXT_JSON") {
-        if let Ok(ctx) = serde_json::from_str::<serde_json::Value>(&json) {
-            let ws = ctx
-                .get("workspace_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let tab = ctx
-                .get("tab_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            return (ws, tab);
-        }
-    }
-    (String::new(), String::new())
-}
-
-/// Extract a string field from a pane object.
-fn pane_str(pane: &serde_json::Value, key: &str) -> Option<String> {
-    pane.get(key).and_then(|v| v.as_str()).map(str::to_string)
-}
-
-/// A pane's display label (spec §4.1): `label` → `terminal_title_stripped`
-/// → `pane {id}`. Mirrors herdr-zextract's `pane_title`.
-fn pane_label(pane: &serde_json::Value, pane_id: &str) -> String {
-    pane_str(pane, "label")
-        .filter(|s| !s.is_empty())
-        .or_else(|| pane_str(pane, "terminal_title_stripped").filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| format!("pane {pane_id}"))
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports)]
     use super::*;
+    use crate::host_ext::{NoHost, PaneEntry, SessionInfo, WindowInfo};
 
-    pub(crate) fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
-        serde_json::json!({
-            "pane_id": id,
-            "tab_id": tab,
-            "workspace_id": ws,
-            "label": label,
-        })
+    pub(crate) fn pane(id: &str, tab: &str, ws: &str, label: &str) -> PaneEntry {
+        PaneEntry {
+            pane_id: id.to_string(),
+            window_id: tab.to_string(),
+            session_id: ws.to_string(),
+            title: label.to_string(),
+            is_focused: false,
+            cwd: None,
+        }
+    }
+
+    fn ws(id: &str, label: &str, active: bool) -> SessionInfo {
+        SessionInfo {
+            session_id: id.to_string(),
+            label: label.to_string(),
+            active,
+        }
+    }
+
+    fn tab(id: &str, ws_id: &str, label: &str, active: bool) -> WindowInfo {
+        WindowInfo {
+            window_id: id.to_string(),
+            session_id: ws_id.to_string(),
+            label: label.to_string(),
+            active,
+        }
     }
 
     #[test]
@@ -1604,13 +1414,7 @@ mod tests {
             pane("p3", "t2", "w1", "zsh"),
             pane("p4", "t1", "w2", "editor"),
         ];
-        let session = build_session_tree(
-            &panes,
-            "",
-            "",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let session = build_session_tree(&panes, &[], &[]);
         assert_eq!(session.kind, Kind::Group);
         assert_eq!(session.label, "Session");
         // Two workspaces.
@@ -1630,43 +1434,22 @@ mod tests {
     #[test]
     fn active_workspace_first() {
         let panes = vec![pane("p1", "t1", "w1", "a"), pane("p2", "t1", "w2", "b")];
-        let session = build_session_tree(
-            &panes,
-            "w2",
-            "t1",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        let sessions = vec![ws("w1", "w1", false), ws("w2", "w2", true)];
+        let windows = vec![tab("t1", "w1", "t1", true)];
+        let session = build_session_tree(&panes, &sessions, &windows);
         // w2 (active) first.
         assert_eq!(session.children[0].id, "session:ws:w2");
         assert_eq!(session.children[0].meta, "active");
     }
 
     #[test]
-    fn missing_workspace_id_degrades_to_flat() {
-        // No workspace_id → all panes under one implicit workspace ("").
-        let panes = vec![
-            serde_json::json!({"pane_id": "p1", "tab_id": "t1", "label": "nvim"}),
-            serde_json::json!({"pane_id": "p2", "tab_id": "t1", "label": "sh"}),
-        ];
-        let session = build_session_tree(
-            &panes,
-            "",
-            "",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+    fn missing_session_id_degrades_to_flat() {
+        // No session_id → all panes under one implicit workspace ("").
+        let panes = vec![pane("p1", "t1", "", "nvim"), pane("p2", "t1", "", "sh")];
+        let session = build_session_tree(&panes, &[], &[]);
         assert_eq!(session.children.len(), 1); // one implicit workspace
         assert_eq!(session.children[0].children.len(), 1); // one tab
         assert_eq!(session.children[0].children[0].children.len(), 2); // 2 panes
-    }
-
-    #[test]
-    fn pane_label_falls_back_to_id() {
-        let p = serde_json::json!({"pane_id": "w1:p1"});
-        assert_eq!(pane_label(&p, "w1:p1"), "pane w1:p1");
-        let p = serde_json::json!({"pane_id": "p1", "terminal_title_stripped": "nvim"});
-        assert_eq!(pane_label(&p, "p1"), "nvim");
     }
 
     #[test]
@@ -1679,11 +1462,11 @@ mod tests {
 
     #[test]
     fn build_tree_five_groups_in_spec_order() {
-        // No socket → every provider fails → 5 unavailable stubs, but
+        // No host → every provider fails → 5 unavailable stubs, but
         // the root structure (5 groups, spec §4 order, Session first) is
-        // intact. This is the dev/no-Herdr path.
+        // intact. This is the dev/no-Herdr path (host_ext::NoHost).
         let root = build_tree(
-            "",
+            &NoHost,
             &[
                 "session".to_string(),
                 "agents".to_string(),
@@ -1707,6 +1490,128 @@ mod tests {
         assert_eq!(root[1].meta, "unavailable"); // Agents
                                                  // Plugins still unavailable (Phase 7).
         assert_eq!(root[4].meta, "unavailable");
+    }
+
+    #[test]
+    fn build_tree_runs_against_muxhost_fake_host() {
+        // R1 plan item: tree-building runs against a fake host.
+        // muxhost's FakeHost carries the canned topology; nav's local
+        // glue traits are implemented below (herdr-only surface — the
+        // fake errors on all of it, which the session group never
+        // touches).
+        let sessions = vec![
+            SessionInfo {
+                session_id: "w1".into(),
+                label: "herdr-nav".into(),
+                active: true,
+            },
+            SessionInfo {
+                session_id: "w2".into(),
+                label: "other".into(),
+                active: false,
+            },
+        ];
+        let windows = vec![
+            WindowInfo {
+                window_id: "w1:t1".into(),
+                session_id: "w1".into(),
+                label: "dev".into(),
+                active: true,
+            },
+            WindowInfo {
+                window_id: "w2:t9".into(),
+                session_id: "w2".into(),
+                label: "misc".into(),
+                active: false,
+            },
+        ];
+        let panes = vec![
+            PaneEntry {
+                pane_id: "w1:p1".into(),
+                session_id: "w1".into(),
+                window_id: "w1:t1".into(),
+                title: "nvim".into(),
+                is_focused: true,
+                cwd: None,
+            },
+            PaneEntry {
+                pane_id: "w1:p2".into(),
+                session_id: "w1".into(),
+                window_id: "w1:t1".into(),
+                title: "cargo".into(),
+                is_focused: false,
+                cwd: None,
+            },
+            PaneEntry {
+                pane_id: "w2:p3".into(),
+                session_id: "w2".into(),
+                window_id: "w2:t9".into(),
+                title: "sh".into(),
+                is_focused: false,
+                cwd: None,
+            },
+        ];
+        let fake = muxhost::fake::FakeHost::with_topology(sessions, windows, panes, vec![]);
+        let root = build_tree(
+            &fake,
+            &["session".to_string()],
+            &crate::config::Config::default(),
+        );
+        let group = &root[0];
+        assert_eq!(group.meta, "3 panes");
+        // Active workspace first, real labels from the fake's lists.
+        assert_eq!(group.children[0].id, "session:ws:w1");
+        assert_eq!(group.children[0].label, "herdr-nav");
+        assert_eq!(group.children[0].meta, "active");
+        assert_eq!(group.children[0].children[0].label, "dev");
+        assert_eq!(group.children[0].children[0].children[0].label, "nvim");
+    }
+
+    // nav-local glue for muxhost's FakeHost: the session group only
+    // touches the topology traits, so every glue method just errors.
+    impl crate::host_ext::TemplateHost for muxhost::fake::FakeHost {
+        fn create_session(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::host_ext::CreatedSession, String> {
+            Err("fake: not modelled".into())
+        }
+        fn create_window(&self, _: &str, _: &str, _: Option<&str>) -> Result<String, String> {
+            Err("fake: not modelled".into())
+        }
+        fn split_pane(&self, _: &str, _: &str, _: f64, _: &str) -> Result<String, String> {
+            Err("fake: not modelled".into())
+        }
+        fn export_layout(&self, _: &str) -> Result<serde_json::Value, String> {
+            Err("fake: not modelled".into())
+        }
+        fn process_info(&self, _: &str) -> Result<serde_json::Value, String> {
+            Err("fake: not modelled".into())
+        }
+    }
+    impl crate::host_ext::HostExt for muxhost::fake::FakeHost {
+        fn list_plugins(&self) -> Result<Vec<serde_json::Value>, String> {
+            Err("fake: not modelled".into())
+        }
+        fn invoke_plugin_action(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("fake: not modelled".into())
+        }
+        fn pane_cwd(&self, _: &str) -> Result<Option<String>, String> {
+            Err("fake: not modelled".into())
+        }
+        fn send_keys(&self, _: &str, _: &[&str]) -> Result<(), String> {
+            Err("fake: not modelled".into())
+        }
+        fn agent_send_keys(&self, _: &str, _: &[&str]) -> Result<(), String> {
+            Err("fake: not modelled".into())
+        }
+        fn release_agent(&self, _: &str) -> Result<(), String> {
+            Err("fake: not modelled".into())
+        }
+        fn notify(&self, _: &str) -> Result<(), String> {
+            Err("fake: not modelled".into())
+        }
     }
 
     #[test]
@@ -1777,51 +1682,68 @@ mod tests {
 }
 
 #[cfg(test)]
-mod name_map_tests {
+mod session_label_tests {
     #![allow(unused_imports)]
     use super::*;
+    use crate::host_ext::{PaneEntry, SessionInfo, WindowInfo};
 
-    fn pane(id: &str, tab: &str, ws: &str, label: &str) -> serde_json::Value {
-        serde_json::json!({
-            "pane_id": id,
-            "tab_id": tab,
-            "workspace_id": ws,
-            "label": label,
-        })
+    fn pane(id: &str, tab: &str, ws: &str, label: &str) -> PaneEntry {
+        PaneEntry {
+            pane_id: id.to_string(),
+            window_id: tab.to_string(),
+            session_id: ws.to_string(),
+            title: label.to_string(),
+            is_focused: false,
+            cwd: None,
+        }
     }
 
     #[test]
-    fn build_session_tree_uses_name_maps() {
+    fn build_session_tree_uses_host_labels() {
         let panes = vec![
             pane("w9:p1", "w9:t1", "w9", "nvim"),
             pane("w9:p2", "w9:t1", "w9", "sh"),
             pane("wA:p3", "wA:tA", "wA", "cargo"),
         ];
-        let mut ws_names = std::collections::HashMap::new();
-        ws_names.insert("w9".to_string(), "claude-chats".to_string());
-        ws_names.insert("wA".to_string(), "herdr-nav".to_string());
-        let mut tab_names = std::collections::HashMap::new();
-        tab_names.insert("w9:t1".to_string(), "main".to_string());
-        tab_names.insert("wA:tA".to_string(), "dev".to_string());
-        let session = build_session_tree(&panes, "w9", "w9:t1", &ws_names, &tab_names);
-        // Workspace labels come from the map, not the raw id.
+        let sessions = vec![
+            SessionInfo {
+                session_id: "w9".into(),
+                label: "claude-chats".into(),
+                active: true,
+            },
+            SessionInfo {
+                session_id: "wA".into(),
+                label: "herdr-nav".into(),
+                active: false,
+            },
+        ];
+        let windows = vec![
+            WindowInfo {
+                window_id: "w9:t1".into(),
+                session_id: "w9".into(),
+                label: "main".into(),
+                active: true,
+            },
+            WindowInfo {
+                window_id: "wA:tA".into(),
+                session_id: "wA".into(),
+                label: "dev".into(),
+                active: false,
+            },
+        ];
+        let session = build_session_tree(&panes, &sessions, &windows);
+        // Workspace labels come from the host's session list.
         assert_eq!(session.children[0].label, "claude-chats");
         assert_eq!(session.children[1].label, "herdr-nav");
-        // Tab label comes from the map too.
+        // Tab label comes from the window list too.
         assert_eq!(session.children[0].children[0].label, "main");
     }
 
     #[test]
-    fn name_map_falls_back_to_id_on_empty() {
+    fn labels_fall_back_to_id_on_empty_lists() {
         let panes = vec![pane("p1", "t1", "w9", "nvim")];
-        // Empty maps → fall back to the raw id (no crash).
-        let session = build_session_tree(
-            &panes,
-            "w9",
-            "t1",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-        );
+        // Empty session/window lists → fall back to the raw id (no crash).
+        let session = build_session_tree(&panes, &[], &[]);
         assert_eq!(session.children[0].label, "w9");
         assert_eq!(session.children[0].children[0].label, "t1");
     }
@@ -1831,21 +1753,23 @@ mod name_map_tests {
 mod agents_tests {
     #![allow(unused_imports)]
     use super::*;
+    use crate::host_ext::{AgentEntry, AgentStatus};
 
-    fn agent(pane_id: &str, agent: &str, status: &str, title: &str) -> serde_json::Value {
-        serde_json::json!({
-            "pane_id": pane_id,
-            "agent": agent,
-            "agent_status": status,
-            "terminal_title_stripped": title,
-        })
+    fn agent(pane_id: &str, name: &str, status: AgentStatus, title: &str) -> AgentEntry {
+        AgentEntry {
+            pane_id: pane_id.to_string(),
+            terminal_id: format!("term_{pane_id}"),
+            name: name.to_string(),
+            title: title.to_string(),
+            status,
+        }
     }
 
     #[test]
     fn builds_flat_agent_list() {
         let agents = vec![
-            agent("wA:p1", "pi", "working", "π - herdr-nav"),
-            agent("wA:p2", "codex", "waiting", "cx - sandbox"),
+            agent("wA:p1", "pi", AgentStatus::Working, "π - herdr-nav"),
+            agent("wA:p2", "codex", AgentStatus::Waiting, "cx - sandbox"),
         ];
         let group = build_agents_tree(&agents);
         assert_eq!(group.kind, Kind::Group);
@@ -1854,13 +1778,13 @@ mod agents_tests {
         // waiting sorts before working (spec §4).
         assert_eq!(group.children[0].meta, "waiting");
         assert_eq!(group.children[1].meta, "working");
-        // Label prefers terminal_title_stripped.
+        // Label is the agent's display title.
         assert!(group.children[0].label.contains("sandbox"));
     }
 
     #[test]
     fn agent_leaf_id_strips_for_invoke() {
-        let agents = vec![agent("wA:p1", "pi", "working", "pi")];
+        let agents = vec![agent("wA:p1", "pi", AgentStatus::Working, "pi")];
         let group = build_agents_tree(&agents);
         let leaf = &group.children[0];
         assert_eq!(leaf.kind, Kind::Agent);

@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use crate::socket_client;
+use crate::host_ext::{NavFull, SessionInfo, WindowInfo};
 use crate::source::{self, Layout, PaneNode, Template, TemplateTab};
 
 /// A captured workspace summary (Phase C1): enough to prove the daemon
@@ -58,21 +58,19 @@ pub struct TabSummary {
 ///
 /// Errors are returned as a human-readable string (the binary prints
 /// them to stderr and exits 1).
-pub fn capture_summary(socket_path: &str) -> Result<Summary, String> {
+pub fn capture_summary(host: &dyn NavFull) -> Result<Summary, String> {
     // 1. Find the focused workspace.
-    let ws_resp = socket_client::request(socket_path, "workspace.list", serde_json::json!({}))
-        .map_err(|e| format!("workspace.list failed: {e}"))?;
-    let (workspace_id, workspace_label) = parse_focused_workspace(&ws_resp)?;
+    let sessions = host.list_sessions()?;
+    let (workspace_id, workspace_label) = focused_workspace(&sessions)?;
 
-    // 2. This workspace's tabs, sorted by number.
-    let tab_resp = socket_client::request(socket_path, "tab.list", serde_json::json!({}))
-        .map_err(|e| format!("tab.list failed: {e}"))?;
-    let tabs = parse_tabs_for_workspace(&tab_resp, &workspace_id);
+    // 2. This workspace's tabs, in the host's order.
+    let windows = host.list_windows()?;
+    let tabs = tabs_for_workspace(&windows, &workspace_id);
 
-    // 3. Per tab: layout.export for the real pane count + split depth.
+    // 3. Per tab: layout export for the real pane count + split depth.
     let mut tab_summaries = Vec::with_capacity(tabs.len());
-    for (tab_id, tab_label, number) in &tabs {
-        let (pane_count, split_depth) = match layout_export(socket_path, tab_id) {
+    for (i, (tab_id, tab_label)) in tabs.iter().enumerate() {
+        let (pane_count, split_depth) = match layout_export(host, tab_id) {
             Ok((panes, depth)) => (panes, depth),
             Err(e) => {
                 // A failed export shouldn't kill the whole summary —
@@ -83,10 +81,12 @@ pub fn capture_summary(socket_path: &str) -> Result<Summary, String> {
             }
         };
 
+        // Tab numbers are no longer part of the host's window list —
+        // the position in the host's (tab-number) order stands in.
         tab_summaries.push(TabSummary {
             tab_id: tab_id.clone(),
             tab_label: tab_label.clone(),
-            number: *number,
+            number: i as u32 + 1,
             pane_count,
             split_depth,
         });
@@ -99,70 +99,29 @@ pub fn capture_summary(socket_path: &str) -> Result<Summary, String> {
     })
 }
 
-/// Parse `workspace.list` response → the focused workspace's
-/// `(workspace_id, label)`. Falls back to the first workspace if none
-/// is marked `focused` (defensive — shouldn't happen in a live session).
-/// Pure (no socket) so it's unit-testable with fixture JSON.
-pub fn parse_focused_workspace(ws_resp: &serde_json::Value) -> Result<(String, String), String> {
-    let workspaces = ws_resp
-        .get("workspaces")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "workspace.list response missing workspaces[]".to_string())?;
-    let active_ws = workspaces
+/// The focused (active) session's `(session_id, label)`, from the
+/// host's session list. Falls back to the first session if none is
+/// marked active (defensive — shouldn't happen in a live session).
+/// Pure (no host calls) so it's unit-testable with fixture values.
+pub fn focused_workspace(sessions: &[SessionInfo]) -> Result<(String, String), String> {
+    let active = sessions
         .iter()
-        .find(|w| w.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
-        .or_else(|| workspaces.first())
+        .find(|s| s.active)
+        .or_else(|| sessions.first())
         .ok_or_else(|| "no workspaces in session".to_string())?;
-    let id = active_ws
-        .get("workspace_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let label = active_ws
-        .get("label")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&id)
-        .to_string();
-    Ok((id, label))
+    Ok((active.session_id.clone(), active.label.clone()))
 }
 
 /// Parse `tab.list` response → the tabs belonging to `workspace_id`,
 /// sorted by `number`, as `(tab_id, label, number)`. Pure (no socket).
-pub fn parse_tabs_for_workspace(
-    tab_resp: &serde_json::Value,
-    workspace_id: &str,
-) -> Vec<(String, String, u32)> {
-    let mut tabs: Vec<(String, String, u32)> = tab_resp
-        .get("tabs")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|t| {
-            let ws = t.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("");
-            if ws != workspace_id {
-                return None;
-            }
-            let tab_id = t
-                .get("tab_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let label = t
-                .get("label")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&tab_id)
-                .to_string();
-            let number = t
-                .get("number")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as u32)
-                .unwrap_or(0);
-            Some((tab_id, label, number))
-        })
-        .collect();
-    tabs.sort_by_key(|(_, _, n)| *n);
-    tabs
+pub fn tabs_for_workspace(windows: &[WindowInfo], workspace_id: &str) -> Vec<(String, String)> {
+    // The host lists windows in its own (tab-number) order, so the
+    // filter alone preserves the tab strip order.
+    windows
+        .iter()
+        .filter(|w| w.session_id == workspace_id)
+        .map(|w| (w.window_id.clone(), w.label.clone()))
+        .collect()
 }
 
 /// Call `layout.export {tab_id}` and return `(pane_count, split_depth)`.
@@ -171,13 +130,8 @@ pub fn parse_tabs_for_workspace(
 /// maximum nesting of split nodes (0 = root is a pane, 1 = one level of
 /// splits, …). Phase C2 will return the full tree; C1 only needs the
 /// counts for the summary print.
-fn layout_export(socket_path: &str, tab_id: &str) -> Result<(usize, usize), String> {
-    let resp = socket_client::request(
-        socket_path,
-        "layout.export",
-        serde_json::json!({"tab_id": tab_id}),
-    )
-    .map_err(|e| format!("layout.export failed: {e}"))?;
+fn layout_export(host: &dyn NavFull, tab_id: &str) -> Result<(usize, usize), String> {
+    let resp = host.export_layout(tab_id)?;
     parse_layout_export(&resp)
 }
 
@@ -337,21 +291,19 @@ pub struct RawCapture {
 /// `layout.export` per tab, and one `pane.process_info` per pane. The
 /// wizard calls this once on entry; `build_template` (pure) is then
 /// called on every render for the live preview.
-pub fn fetch_raw(socket_path: &str) -> Result<RawCapture, String> {
+pub fn fetch_raw(host: &dyn NavFull) -> Result<RawCapture, String> {
     // 1. Focused workspace.
-    let ws_resp = socket_client::request(socket_path, "workspace.list", serde_json::json!({}))
-        .map_err(|e| format!("workspace.list failed: {e}"))?;
-    let (workspace_id, workspace_label) = parse_focused_workspace(&ws_resp)?;
+    let sessions = host.list_sessions()?;
+    let (workspace_id, workspace_label) = focused_workspace(&sessions)?;
 
-    // 2. Tabs for that workspace, sorted by number.
-    let tab_resp = socket_client::request(socket_path, "tab.list", serde_json::json!({}))
-        .map_err(|e| format!("tab.list failed: {e}"))?;
-    let tabs_meta = parse_tabs_for_workspace(&tab_resp, &workspace_id);
+    // 2. Tabs for that workspace, in the host's order.
+    let windows = host.list_windows()?;
+    let tabs_meta = tabs_for_workspace(&windows, &workspace_id);
 
-    // 3. Full layout.export tree per tab.
+    // 3. Full layout tree per tab.
     let mut tabs = Vec::with_capacity(tabs_meta.len());
-    for (tab_id, tab_label, _number) in &tabs_meta {
-        let root = fetch_layout_root(socket_path, tab_id)?;
+    for (tab_id, tab_label) in &tabs_meta {
+        let root = fetch_layout_root(host, tab_id)?;
         tabs.push(RawTab {
             tab_label: tab_label.clone(),
             root,
@@ -369,7 +321,7 @@ pub fn fetch_raw(socket_path: &str) -> Result<RawCapture, String> {
     for tab in &tabs {
         for pane_id in collect_pane_ids(&tab.root) {
             let cwd = pane_cwd_for(&tab.root, &pane_id).unwrap_or_default();
-            match best_effort_command(socket_path, &pane_id, &cwd) {
+            match best_effort_command(host, &pane_id, &cwd) {
                 Ok((command, annotation)) => {
                     pane_commands.insert(
                         pane_id.clone(),
@@ -541,12 +493,12 @@ pub fn build_template(
 
 /// Convenience wrapper: fetch + build in one call (for the CLI path).
 pub fn capture_template(
-    socket_path: &str,
+    host: &dyn NavFull,
     name: &str,
     cwd_policy: CwdPolicy,
     command_policy: CommandPolicy,
 ) -> Result<(Template, Vec<Annotation>), String> {
-    let raw = fetch_raw(socket_path)?;
+    let raw = fetch_raw(host)?;
     Ok(build_template(
         &raw,
         name,
@@ -560,13 +512,10 @@ pub fn capture_template(
 }
 
 /// Fetch the `layout.export` root for one tab.
-fn fetch_layout_root(socket_path: &str, tab_id: &str) -> Result<serde_json::Value, String> {
-    let resp = socket_client::request(
-        socket_path,
-        "layout.export",
-        serde_json::json!({"tab_id": tab_id}),
-    )
-    .map_err(|e| format!("layout.export for {tab_id} failed: {e}"))?;
+fn fetch_layout_root(host: &dyn NavFull, tab_id: &str) -> Result<serde_json::Value, String> {
+    let resp = host
+        .export_layout(tab_id)
+        .map_err(|e| format!("layout.export for {tab_id} failed: {e}"))?;
     resp.get("layout")
         .and_then(|l| l.get("root"))
         .cloned()
@@ -822,16 +771,11 @@ pub struct Annotation {
 /// command can't be identified with certainty when multiple non-shell
 /// processes are present. The editor step (C5) is the verification surface.
 pub fn best_effort_command(
-    socket_path: &str,
+    host: &dyn NavFull,
     pane_id: &str,
     pane_cwd: &str,
 ) -> Result<(Option<String>, Option<Annotation>), String> {
-    let resp = socket_client::request(
-        socket_path,
-        "pane.process_info",
-        serde_json::json!({"pane_id": pane_id}),
-    )
-    .map_err(|e| format!("pane.process_info failed: {e}"))?;
+    let resp = host.process_info(pane_id)?;
     let procs = resp
         .get("process_info")
         .and_then(|p| p.get("foreground_processes"))
@@ -1054,26 +998,59 @@ mod tests {
     // Fixtures are the real daemon responses from the spike
     // (spec/spike-layout-export.md), trimmed to the fields C1 reads.
 
-    fn ws_list() -> serde_json::Value {
-        json!({
-            "workspaces": [
-                {"workspace_id": "wD", "label": ".dotfiles", "focused": true,  "tab_count": 1},
-                {"workspace_id": "wM", "label": "paperless", "focused": false, "tab_count": 2},
-                {"workspace_id": "wP", "label": "vim-herdr-navigation", "focused": false, "tab_count": 2}
-            ]
-        })
+    fn ws_list() -> Vec<SessionInfo> {
+        vec![
+            SessionInfo {
+                session_id: "wD".into(),
+                label: ".dotfiles".into(),
+                active: true,
+            },
+            SessionInfo {
+                session_id: "wM".into(),
+                label: "paperless".into(),
+                active: false,
+            },
+            SessionInfo {
+                session_id: "wP".into(),
+                label: "vim-herdr-navigation".into(),
+                active: false,
+            },
+        ]
     }
 
-    fn tab_list() -> serde_json::Value {
-        json!({
-            "tabs": [
-                {"tab_id": "wD:t1", "workspace_id": "wD", "number": 1, "label": "1"},
-                {"tab_id": "wM:t1", "workspace_id": "wM", "number": 1, "label": "1"},
-                {"tab_id": "wM:t2", "workspace_id": "wM", "number": 2, "label": "hsunt"},
-                {"tab_id": "wP:t1", "workspace_id": "wP", "number": 1, "label": "1"},
-                {"tab_id": "wP:t2", "workspace_id": "wP", "number": 2, "label": "2"}
-            ]
-        })
+    fn window_list() -> Vec<WindowInfo> {
+        vec![
+            WindowInfo {
+                window_id: "wD:t1".into(),
+                session_id: "wD".into(),
+                label: "1".into(),
+                active: true,
+            },
+            WindowInfo {
+                window_id: "wM:t1".into(),
+                session_id: "wM".into(),
+                label: "1".into(),
+                active: false,
+            },
+            WindowInfo {
+                window_id: "wM:t2".into(),
+                session_id: "wM".into(),
+                label: "hsunt".into(),
+                active: false,
+            },
+            WindowInfo {
+                window_id: "wP:t1".into(),
+                session_id: "wP".into(),
+                label: "1".into(),
+                active: false,
+            },
+            WindowInfo {
+                window_id: "wP:t2".into(),
+                session_id: "wP".into(),
+                label: "2".into(),
+                active: false,
+            },
+        ]
     }
 
     // wP:t2 from the spike: right-split over a down-split (3 panes).
@@ -1105,39 +1082,46 @@ mod tests {
     }
 
     #[test]
-    fn parse_focused_workspace_picks_focused() {
-        let (id, label) = parse_focused_workspace(&ws_list()).unwrap();
+    fn focused_workspace_picks_active() {
+        let (id, label) = focused_workspace(&ws_list()).unwrap();
         assert_eq!(id, "wD");
         assert_eq!(label, ".dotfiles");
     }
 
     #[test]
-    fn parse_focused_workspace_falls_back_to_first_when_none_focused() {
-        let resp = json!({"workspaces": [
-            {"workspace_id": "wX", "label": "x", "focused": false},
-            {"workspace_id": "wY", "label": "y", "focused": false}
-        ]});
-        let (id, _) = parse_focused_workspace(&resp).unwrap();
+    fn focused_workspace_falls_back_to_first_when_none_active() {
+        let sessions = vec![
+            SessionInfo {
+                session_id: "wX".into(),
+                label: "x".into(),
+                active: false,
+            },
+            SessionInfo {
+                session_id: "wY".into(),
+                label: "y".into(),
+                active: false,
+            },
+        ];
+        let (id, _) = focused_workspace(&sessions).unwrap();
         assert_eq!(id, "wX");
     }
 
     #[test]
-    fn parse_focused_workspace_errs_when_empty() {
-        let resp = json!({"workspaces": []});
-        assert!(parse_focused_workspace(&resp).is_err());
+    fn focused_workspace_errs_when_empty() {
+        assert!(focused_workspace(&[]).is_err());
     }
 
     #[test]
-    fn parse_tabs_for_workspace_filters_and_sorts() {
-        let tabs = parse_tabs_for_workspace(&tab_list(), "wM");
+    fn tabs_for_workspace_filters_in_host_order() {
+        let tabs = tabs_for_workspace(&window_list(), "wM");
         assert_eq!(tabs.len(), 2);
-        assert_eq!(tabs[0], ("wM:t1".into(), "1".into(), 1));
-        assert_eq!(tabs[1], ("wM:t2".into(), "hsunt".into(), 2));
+        assert_eq!(tabs[0], ("wM:t1".into(), "1".into()));
+        assert_eq!(tabs[1], ("wM:t2".into(), "hsunt".into()));
     }
 
     #[test]
-    fn parse_tabs_for_workspace_empty_for_unknown_ws() {
-        assert!(parse_tabs_for_workspace(&tab_list(), "wZ").is_empty());
+    fn tabs_for_workspace_empty_for_unknown_ws() {
+        assert!(tabs_for_workspace(&window_list(), "wZ").is_empty());
     }
 
     #[test]

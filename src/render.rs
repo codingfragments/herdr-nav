@@ -27,6 +27,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use ratatui::Frame;
 
 use crate::dirnav::DirNavView;
+use crate::host_ext::NavFull;
 use crate::nav::{Kind, Tree, Twisty};
 use crate::search::{Leaf, SearchView};
 use crate::source;
@@ -112,7 +113,7 @@ pub fn draw(
     tree: &Tree,
     haystack: &[Leaf],
     search: Option<&SearchView>,
-    socket_path: &str,
+    host: &dyn NavFull,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
     name_prompt: Option<(&str, &str)>,
@@ -163,7 +164,7 @@ pub fn draw(
         haystack,
         search,
         dirnav,
-        socket_path,
+        host,
         last_change,
         flash_error,
         palette,
@@ -314,7 +315,7 @@ fn draw_body(
     haystack: &[Leaf],
     search: Option<&SearchView>,
     dirnav: Option<&DirNavView>,
-    socket_path: &str,
+    host: &dyn NavFull,
     last_change: Option<Instant>,
     flash_error: Option<&(String, String)>,
     palette: &Palette,
@@ -324,7 +325,7 @@ fn draw_body(
     // The preview pane reuses the existing dir preview for the selected
     // entry (built from a synthetic Kind::Dir node).
     if let Some(d) = dirnav {
-        draw_dirnav_body(frame, area, d, socket_path, last_change, palette, c);
+        draw_dirnav_body(frame, area, d, host, last_change, palette, c);
         return;
     }
     // Body split: list 44% · vertical rule · preview 56% (spec §2).
@@ -373,14 +374,7 @@ fn draw_body(
             .and_then(|r| tree.node_at(&r.path))
             .map(std::borrow::Cow::Borrowed),
     };
-    crate::preview::draw(
-        frame,
-        split[2],
-        node.as_deref(),
-        socket_path,
-        last_change,
-        palette,
-    );
+    crate::preview::draw(frame, split[2], node.as_deref(), host, last_change, palette);
 }
 
 /// Dispatch to the browse tree list or the search flat list.
@@ -411,7 +405,7 @@ fn draw_dirnav_body(
     frame: &mut Frame,
     area: Rect,
     d: &DirNavView,
-    socket_path: &str,
+    host: &dyn NavFull,
     last_change: Option<Instant>,
     palette: &Palette,
     c: &Colors,
@@ -448,14 +442,7 @@ fn draw_dirnav_body(
         preview: crate::nav::Preview::default(),
         actions: crate::nav::Actions::default(),
     });
-    crate::preview::draw(
-        frame,
-        split[2],
-        node.as_ref(),
-        socket_path,
-        last_change,
-        palette,
-    );
+    crate::preview::draw(frame, split[2], node.as_ref(), host, last_change, palette);
 }
 
 /// The DirNav single-column listing + status strip (Phase 17 + 18).

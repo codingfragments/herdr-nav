@@ -21,8 +21,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use crate::host_ext::NavFull;
 use crate::nav::{Chip, ChipSemantic, Kind, Node, Preview};
-use crate::socket_client;
 
 // ── Palette (shared with render.rs; finalized in Phase 9) ───────────────────────
 
@@ -65,13 +65,13 @@ fn chip_color(s: ChipSemantic, palette: &Palette) -> Color {
 
 /// Draw the preview for the node under the cursor (spec §7). `node` is
 /// `None` when there's nothing to preview (empty tree / no cursor).
-/// `socket_path` is used for the pane scrollback fetch. The
+/// The host is used for the pane scrollback fetch. The
 /// `last_change` instant drives the 60ms debounce + stale-and-dim.
 pub fn draw(
     frame: &mut Frame,
     area: Rect,
     node: Option<&Node>,
-    socket_path: &str,
+    host: &dyn NavFull,
     last_change: Option<Instant>,
     palette: &Palette,
 ) {
@@ -83,7 +83,7 @@ pub fn draw(
 
     let (header, body, is_stale) = match node {
         Some(n) => {
-            let p = resolve_preview(n, socket_path, palette);
+            let p = resolve_preview(n, host, palette);
             (header_line(n, &p, palette), p.body, is_stale(last_change))
         }
         None => (
@@ -197,12 +197,12 @@ fn header_line(node: &Node, p: &Preview, palette: &Palette) -> Line<'static> {
 /// the perceptual latency). Pane preview fetches scrollback via
 /// `pane.read`; the others are built from the tree node itself.
 #[allow(unreachable_patterns)]
-fn resolve_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
+fn resolve_preview(node: &Node, host: &dyn NavFull, palette: &Palette) -> Preview {
     match node.kind {
-        Kind::Pane => pane_preview(node, socket_path, palette),
-        Kind::Agent => agent_preview(node, socket_path, palette),
+        Kind::Pane => pane_preview(node, host, palette),
+        Kind::Agent => agent_preview(node, host, palette),
         Kind::Dir | Kind::Zox => dir_preview(node, palette),
-        Kind::Plugin => plugin_preview(node, socket_path, palette),
+        Kind::Plugin => plugin_preview(node, host, palette),
         Kind::Group => group_preview(node, palette),
         Kind::Workspace => workspace_preview(node, palette),
         Kind::Tab => tab_preview(node, palette),
@@ -218,9 +218,9 @@ fn resolve_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview
 /// preserved; footer line = cwd + cursor position. Chips:
 /// focused/running, pid, cpu (best-effort from the pane node — Phase 5
 /// fills the live fields; here we show what the tree carries).
-fn pane_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
+fn pane_preview(node: &Node, host: &dyn NavFull, palette: &Palette) -> Preview {
     let pane_id = node.id.strip_prefix("session:pane:").unwrap_or(&node.id);
-    let body = read_pane_scrollback(socket_path, pane_id, palette);
+    let body = read_pane_scrollback(host, pane_id, palette);
     let body_label = "PANE PREVIEW";
     Preview {
         icon: kind_glyph(Kind::Pane),
@@ -237,29 +237,27 @@ fn pane_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
 /// Read the pane's scrollback via `pane.read` and parse ANSI into
 /// styled ratatui lines (spec §7; reuses the herdr-flash approach:
 /// format=ansi, strip_ansi=false, then `ansi-to-tui` IntoText).
-fn read_pane_scrollback(socket_path: &str, pane_id: &str, palette: &Palette) -> Vec<Line<'static>> {
-    if socket_path.is_empty() {
+fn read_pane_scrollback(
+    host: &dyn NavFull,
+    pane_id: &str,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
+    if host.name() == "none" {
         return vec![Line::styled(
             "(no socket — pane scrollback unavailable)",
             Style::default().fg(palette.overlay0),
         )];
     }
-    let params = serde_json::json!({
-        "pane_id": pane_id,
-        "source": "recent_unwrapped",
-        "lines": PANE_PREVIEW_LINES,
-        "format": "ansi",
-        "strip_ansi": false,
-    });
-    match socket_client::request(socket_path, "pane.read", params) {
-        Ok(result) => {
-            let text = result
-                .get("read")
-                .and_then(|v| v.get("text"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            ansi_to_lines(text)
-        }
+    // Same contract as before the migration: the scrollback, raw ANSI,
+    // capped at PANE_PREVIEW_LINES (the host maps this to herdr's
+    // `recent_unwrapped` + `format=ansi`).
+    match host.read_pane(
+        pane_id,
+        muxhost::ReadSource::Scrollback,
+        muxhost::ReadFormat::Ansi,
+        Some(PANE_PREVIEW_LINES),
+    ) {
+        Ok(text) => ansi_to_lines(&text),
         Err(e) => vec![Line::styled(
             format!("pane.read failed: {e}"),
             Style::default().fg(palette.red),
@@ -282,7 +280,7 @@ fn ansi_to_lines(text: &str) -> Vec<Line<'static>> {
 /// blocked, the pending question + its options verbatim. Chips:
 /// status + duration, token count. Phase 5 fetches the transcript
 /// via `pane.read` (the agent runs in a pane) and shows the tail.
-fn agent_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
+fn agent_preview(node: &Node, host: &dyn NavFull, palette: &Palette) -> Preview {
     let pane_id = node.id.strip_prefix("agents:").unwrap_or(&node.id);
     let status = node.meta.clone();
     let chips = vec![Chip {
@@ -293,7 +291,7 @@ fn agent_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
             _ => ChipSemantic::Info,
         },
     }];
-    let body = read_pane_scrollback(socket_path, pane_id, palette);
+    let body = read_pane_scrollback(host, pane_id, palette);
     Preview {
         icon: kind_glyph(Kind::Agent),
         title: node.label.clone(),
@@ -425,7 +423,7 @@ fn dir_entries(path: &str) -> Vec<DirEntry> {
 /// Plugin preview (spec §7): one-line description,
 /// declared actions, chips: enabled/version. Fetches
 /// the plugin's actions from `plugin.list`.
-fn plugin_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview {
+fn plugin_preview(node: &Node, host: &dyn NavFull, palette: &Palette) -> Preview {
     let pid = node.id.strip_prefix("plugin:").unwrap_or(&node.id);
     let chips = vec![Chip {
         text: node.meta.clone(),
@@ -444,33 +442,29 @@ fn plugin_preview(node: &Node, socket_path: &str, palette: &Palette) -> Preview 
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    // Fetch the plugin's actions from the socket.
-    if !socket_path.is_empty() {
-        if let Ok(r) =
-            crate::socket_client::request(socket_path, "plugin.list", serde_json::json!({}))
-        {
-            if let Some(plugins) = r.get("plugins").and_then(|v| v.as_array()) {
-                for plugin in plugins {
-                    if plugin.get("plugin_id").and_then(|v| v.as_str()) == Some(pid) {
-                        let actions = plugin
-                            .get("actions")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-                        if actions.is_empty() {
-                            body.push(Line::raw("  (no actions declared)"));
-                        } else {
-                            for a in &actions {
-                                let aid = a.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-                                let title = a.get("title").and_then(|v| v.as_str()).unwrap_or(aid);
-                                body.push(Line::from(vec![
-                                    Span::raw("  ▸ "),
-                                    Span::raw(title.to_string()),
-                                ]));
-                            }
+    // Fetch the plugin's actions from the host's plugin list.
+    if host.name() != "none" {
+        if let Ok(plugins) = host.list_plugins() {
+            for plugin in &plugins {
+                if plugin.get("plugin_id").and_then(|v| v.as_str()) == Some(pid) {
+                    let actions = plugin
+                        .get("actions")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    if actions.is_empty() {
+                        body.push(Line::raw("  (no actions declared)"));
+                    } else {
+                        for a in &actions {
+                            let aid = a.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                            let title = a.get("title").and_then(|v| v.as_str()).unwrap_or(aid);
+                            body.push(Line::from(vec![
+                                Span::raw("  ▸ "),
+                                Span::raw(title.to_string()),
+                            ]));
                         }
-                        break;
                     }
+                    break;
                 }
             }
         }
@@ -643,8 +637,8 @@ mod tests {
     #[test]
     fn pane_preview_strips_id_prefix() {
         let n = pane_node("session:pane:w1:p1", "nvim");
-        // No socket → body explains the absence, doesn't crash.
-        let p = resolve_preview(&n, "", &Palette::default());
+        // No host → body explains the absence, doesn't crash.
+        let p = resolve_preview(&n, &crate::host_ext::NoHost, &Palette::default());
         assert_eq!(p.body_label, "PANE PREVIEW");
         assert_eq!(p.subtitle, "pane w1:p1");
         assert_eq!(p.action, "jump to pane");
