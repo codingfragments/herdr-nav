@@ -91,7 +91,7 @@ impl TemplateHost for RexHost {
             &[
                 "split",
                 "-s",
-                &self_session(self),
+                &block_session(self, pane_id),
                 "-b",
                 pane_id,
                 "--split",
@@ -143,7 +143,7 @@ impl HostExt for RexHost {
                 "block",
                 "call",
                 "-s",
-                &self_session(self),
+                &block_session(self, pane_id),
                 "-b",
                 pane_id,
                 "pwd",
@@ -172,7 +172,14 @@ impl HostExt for RexHost {
         for key in keys {
             self_rex(
                 self,
-                &["send-key", "-s", &self_session(self), "-b", pane_id, key],
+                &[
+                    "send-key",
+                    "-s",
+                    &block_session(self, pane_id),
+                    "-b",
+                    pane_id,
+                    key,
+                ],
             )?;
         }
         Ok(())
@@ -196,15 +203,17 @@ impl HostExt for RexHost {
 }
 
 // RexHost's `run` is the raw-CLI escape hatch (muxhost v0.3.1, the
-// same contract as HerdrHost::raw_request); `session` is the scope
-// every -s call uses. `rex new` is the one call that doesn't take -s
-// (it makes the session).
+// same contract as HerdrHost::raw_request). Block-scoped calls must
+// use the BLOCK's session (muxhost v0.3.4's block_session — the
+// topology snapshot knows it; foreign -s is "block not found");
+// `rex new` is the one call that doesn't take -s at all.
 fn self_rex(host: &RexHost, args: &[&str]) -> Result<String, String> {
     host.run(args, None)
 }
 
-fn self_session(host: &RexHost) -> String {
-    host.session().to_string()
+fn block_session(host: &RexHost, block_id: &str) -> String {
+    host.block_session(block_id)
+        .unwrap_or_else(|| host.session().to_string())
 }
 
 #[cfg(test)]
@@ -282,12 +291,14 @@ mod tests {
 
     #[test]
     fn split_pane_converts_ratio_to_integer_percent() {
-        let runner = FakeRunner::default().reply(Ok(SPLIT_JSON));
+        // The first call is the anchor block's session lookup (empty
+        // topology → falls back to the host's own session).
+        let runner = FakeRunner::default().reply(Ok("{}")).reply(Ok(SPLIT_JSON));
         let h = host(&runner);
         let block = h.split_pane("block:b1", "right", 0.5, "/tmp/x").unwrap();
         assert_eq!(block, "block:b2");
         assert_eq!(
-            runner.calls.borrow()[0].0,
+            runner.calls.borrow()[1].0,
             vec![
                 "split",
                 "-s",
@@ -302,10 +313,10 @@ mod tests {
             ]
         );
         // herdr's "down" maps to Rex's "below"; the layout ratio 60 → 60.
-        let runner = FakeRunner::default().reply(Ok(SPLIT_JSON));
+        let runner = FakeRunner::default().reply(Ok("{}")).reply(Ok(SPLIT_JSON));
         let h = host(&runner);
         h.split_pane("block:b1", "down", 0.6, "/tmp/x").unwrap();
-        let args = &runner.calls.borrow()[0].0;
+        let args = &runner.calls.borrow()[1].0;
         assert_eq!(args[6], "below");
         assert_eq!(args[8], "60");
     }

@@ -388,7 +388,17 @@ Original checklist:
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
 Status: ☑ implemented, installed in the user's Rex config
-(2026-11-20) — **redesigned to the R1 fallback the same day**: the
+(2026-11-20; **fixed 2026-11-20 again**: the R3 jump-swap edit had
+silently no-op'd for the Session pane-jump and the Agents invoke —
+they still called the raw `host.jump`, whose Delegated outcome was
+ignored, so Enter closed the popup without jumping at all. Found by
+driving the real launcher popup remotely (`rex do nav` + `rex send`
+into its block) with lifecycle traces on stderr. Also muxhost v0.3.4:
+block-scoped calls (capture/send/pwd/split/send-key) resolve the
+block's OWN session from the topology — a pane in another session
+was "block target not found" (broken previews). Diagnostics:
+/tmp/herdr-nav-jump.log + the stderr traces.) — **redesigned to the
+R1 fallback the same day**: the
 R0 inline-wait design froze the app's key delivery for the popup's
 lifetime (the popup rendered but accepted no key presses — a blocking
 `rex.exec` in an action holds the app's Lua, exactly the

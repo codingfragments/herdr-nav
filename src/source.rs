@@ -166,9 +166,12 @@ impl Provider for SessionProvider<'_> {
         let pane_id = id.strip_prefix("session:pane:").map(str::to_string);
         match pane_id {
             Some(pid) => {
-                self.host.jump(muxhost::navigate::Jump::FocusPane {
-                    pane_id: pid.clone(),
-                })?;
+                crate::host_ext::jump(
+                    self.host,
+                    muxhost::navigate::Jump::FocusPane {
+                        pane_id: pid.clone(),
+                    },
+                )?;
                 Ok(crate::nav::Outcome::Close {
                     toast: format!("jumped to pane {pid}"),
                 })
@@ -233,9 +236,12 @@ impl Provider for AgentsProvider<'_> {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Jump to the pane the agent runs in — same as a pane jump.
         let pane_id = id.strip_prefix("agents:").unwrap_or(id);
-        self.host.jump(muxhost::navigate::Jump::FocusPane {
-            pane_id: pane_id.to_string(),
-        })?;
+        crate::host_ext::jump(
+            self.host,
+            muxhost::navigate::Jump::FocusPane {
+                pane_id: pane_id.to_string(),
+            },
+        )?;
         Ok(crate::nav::Outcome::Close {
             toast: format!("jumped to agent {pane_id}"),
         })

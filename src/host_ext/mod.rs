@@ -212,6 +212,7 @@ pub fn jump(
 ) -> Result<muxhost::navigate::JumpOutcome, String> {
     use muxhost::navigate::JumpOutcome;
     let outcome = host.jump(jump.clone())?;
+    eprintln!("nav: jump {jump:?} → {outcome:?} (host {})", host.name());
     if outcome == JumpOutcome::Delegated {
         let path = std::env::var("NAV_INTENT_FILE")
             .map(std::path::PathBuf::from)
@@ -264,6 +265,25 @@ fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
         ])
         .output()
         .map_err(|e| format!("run {cli}: {e}"))?;
+    // Debug trail (the popup is gone a moment later, so this is the
+    // only place the carry-out can leave evidence): one line per jump.
+    let _ = std::fs::write(
+        "/tmp/herdr-nav-jump.log",
+        format!(
+            "{} select client={} session={} exit={} stderr={:?}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            client,
+            session,
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(200)
+                .collect::<String>(),
+        ),
+    );
     if !out.status.success() {
         return Err(
             "Rex Remote Control is off — enable it in the Rex app's settings so the switcher can follow your jump"
