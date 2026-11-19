@@ -1,0 +1,158 @@
+{
+  "revision": 7,
+  "session_id": "session:01a1f598-e08e-7af4-a795-f449ab70a775",
+  "label": "spike5",
+  "active_window_id": "window:01a1f598-e1fa-7017-975e-6db7dd708d2d",
+  "windows": [
+    {
+      "window_id": "window:01a1f598-e0be-762a-8a12-56739f383ab2",
+      "label": "Window 9f383ab2",
+      "focused_block_id": "block:01a1f598-e1b7-787b-a00a-82ae851f1043",
+      "layers": [
+        {
+          "layer_id": "layer:01a1f598-e0be-7635-a71e-fa8f78f1b7d3",
+          "kind": "tiled",
+          "bounds": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "layout": {
+            "rect": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "split": {
+              "split_id": "split:01a1f598-e18e-7c77-b2ae-0c8a075169a5",
+              "direction": "horizontal",
+              "ratio": 0.6,
+              "before": {
+                "rect": [
+                  0,
+                  0,
+                  0.6,
+                  1
+                ],
+                "split": {
+                  "split_id": "split:01a1f598-e1c6-7927-9870-76f0e5b3d18e",
+                  "direction": "vertical",
+                  "ratio": 0.5,
+                  "before": {
+                    "rect": [
+                      0,
+                      0,
+                      0.6,
+                      0.5
+                    ],
+                    "block_id": "block:01a1f598-e08e-7c0a-ab78-3533cb36277b"
+                  },
+                  "after": {
+                    "rect": [
+                      0,
+                      0.5,
+                      0.6,
+                      0.5
+                    ],
+                    "block_id": "block:01a1f598-e1b7-787b-a00a-82ae851f1043"
+                  }
+                }
+              },
+              "after": {
+                "rect": [
+                  0.6,
+                  0,
+                  0.4,
+                  1
+                ],
+                "block_id": "block:01a1f598-e177-77ac-b645-81f8b54ee0b9"
+              }
+            }
+          },
+          "blocks": [
+            {
+              "block_id": "block:01a1f598-e08e-7c0a-ab78-3533cb36277b",
+              "label": "shell",
+              "creator_name": "com.superlogical.terminal",
+              "flavor": "com.superlogical.terminal.shell",
+              "host_id": "831b29b2-c172-4e5b-bd21-8f77cae0d577",
+              "owner": "client:01a1f598-e08c-7d0f-afc1-9368a49caf11"
+            },
+            {
+              "block_id": "block:01a1f598-e1b7-787b-a00a-82ae851f1043",
+              "label": "shell",
+              "creator_name": "com.superlogical.terminal",
+              "flavor": "com.superlogical.terminal.shell",
+              "host_id": "831b29b2-c172-4e5b-bd21-8f77cae0d577"
+            },
+            {
+              "block_id": "block:01a1f598-e177-77ac-b645-81f8b54ee0b9",
+              "label": "shell",
+              "creator_name": "com.superlogical.terminal",
+              "flavor": "com.superlogical.terminal.shell",
+              "host_id": "831b29b2-c172-4e5b-bd21-8f77cae0d577"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "window_id": "window:01a1f598-e1fa-7017-975e-6db7dd708d2d",
+      "label": "spike5-two",
+      "focused_block_id": "block:01a1f598-e1e9-74de-b0f9-7d759ace0b4d",
+      "layers": [
+        {
+          "layer_id": "layer:01a1f598-e1fa-701f-b963-7503df99c434",
+          "kind": "tiled",
+          "bounds": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "layout": {
+            "rect": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "block_id": "block:01a1f598-e1e9-74de-b0f9-7d759ace0b4d"
+          },
+          "blocks": [
+            {
+              "block_id": "block:01a1f598-e1e9-74de-b0f9-7d759ace0b4d",
+              "label": "shell",
+              "creator_name": "com.superlogical.terminal",
+              "flavor": "com.superlogical.terminal.shell",
+              "host_id": "831b29b2-c172-4e5b-bd21-8f77cae0d577"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "client_id": "client:01a1f598-ee2d-7874-a77f-d3b231350173",
+      "principal": {
+        "kind": "peer",
+        "transport": "unix",
+        "display": "uid 502",
+        "uid": 502,
+        "gid": 20,
+        "pid": 71433
+      },
+      "info": {
+        "kind": "cli",
+        "platform": "macos",
+        "name": "rex",
+        "version": "0.1.0-preview.20"
+      },
+      "connected_at": "2026-11-19T12:56:42.798034-08:00",
+      "connection_state": "connected"
+    }
+  ]
+}

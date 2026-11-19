@@ -495,9 +495,45 @@ Status: ▐ in progress (2026-11-20, started early on user direction:
   after every escape-hatch call, so a session created by `rex new` is
   visible to the jump that follows (the stale 250 ms cache made the
   dir-open jump fail with "no session holds block").
-- ☐ The rest of R5 (layout export via `session.view`, process info via
-  `block call process`, capture fixtures, the go/no-go gate) is still
-  open.
+- ☑ **Gate spike (2026-11-20, scratch session `spike5`, 2 windows +
+  3-block nested-split window): the round trip is faithful enough —
+  GO recommended.**
+  - Layout → template: `session inspect` maps cleanly — Rex
+    `horizontal` (side-by-side) ↔ nav `direction: "v"`, Rex `vertical`
+    (stacked) ↔ nav `direction: "h"`; inspect ratios are 0–1
+    fractions, nav's schema stores percents.
+  - Template → session: `session.new_window` with a layout tree
+    builds a whole tab in one call — nested splits, per-block
+    `command` + `shell:"none"`, per-block labels, `window_label`.
+    (Better than the planned `window new` + N× `split`.) Possibly the
+    whole session via `session.create`, which takes first windows.
+  - cwd: `block call … pwd` (the topology script already collects it).
+    A command block reports no pwd until its program sets one.
+  - **Command capture is name-only:** `block call … process` exposes
+    the foreground process (name/path/argv0) but **no argv**, so a
+    captured template can record `nvim`, not `nvim src/ --clean`.
+    Best-effort with an annotation, same spirit as herdr's capture.
+- ☑ Implementation (2026-11-20): `RexTemplateHost::export_layout`
+  normalizes `session inspect` into capture's herdr-export shape
+  (horizontal→right, vertical→down, before/after→first/second; the
+  ratios already agree — both hosts store the FIRST pane's share,
+  verified live against a herdr snapshot), `process_info` normalizes
+  `block call process` (cmdline = name-only, annotated). **Found and
+  fixed while implementing:** `split_pane` inverted every non-even
+  ratio — nav's ratio is the ANCHOR pane's share, `rex split --ratio`
+  is the NEW block's percent (invisible until now: live tests only
+  used 50/50); and `rex split` has no cwd flag, so the builder `cd`s
+  each split-off pane (`split_pane_carries_cwd`).
+- ☑ Fixtures: `tests/fixtures/rex/{session-inspect-splits,topology-
+  spike5}.json` (recorded from the spike's scratch session), with a
+  round-trip test through capture's real mapping into a template
+  YAML (5 tests in `host_ext/rex.rs`).
+- ☑ Live: `herdr-nav capture --name spike5` against the running
+  server wrote a correct template (nested v60/h50 split, both tabs,
+  relative cwds) to `~/.config/nav/rex/templates/`. The `nav_capture`
+  action + `ctrl+s>ctrl+t` binding are live in the user's config.
+- ☐ Left for the user: the wizard under Rex (`ctrl+s>ctrl+t` in the
+  app) and opening the captured template via the switcher.
 
 Original checklist:
 
@@ -552,7 +588,7 @@ Status: ☐ not started
 | S2 | `program_status` across blocks: what does it report for pi, Claude Code and others? Is "idle" distinguishable from "no agent"? | ☐ |
 | S3 | `session inspect --json`: how are floating-layer blocks marked, and where do block labels, titles and cwd live? | ☑ 2026-11-20: floating-layer blocks are in layers with `kind != "tiled"`; labels in `session.view`/`block ls` (new blocks are labelled `shell`); terminal titles, cwd and status via `block call title|pwd|program_status`. In muxhost `doc/topology.md`. |
 | S4 | Cost of building the tree: N × `rex` CLI calls compared with one `rex do script.lua` returning JSON, measured with 5 sessions and 40 blocks | ☑ 2026-11-20: one `rex do -` script (session.list + per-session attach + per-block methods) takes ~50 ms for several sessions; N× CLI calls would be dozens of process spawns. Shipped in muxhost v0.3.0 with a 250 ms cache. Not re-measured at 5 sessions / 40 blocks. |
-| S5 | Templates: is `session.new_window` with a layout tree (ratios, commands, cwd) enough to build a window in one call? | ☐ |
+| S5 | Templates: is `session.new_window` with a layout tree (ratios, commands, cwd) enough to build a window in one call? | ☑ 2026-11-20: **yes — better than expected.** `session.new_window` takes a full layout tree: nested splits with **fractional ratios (0–1, unlike the integer percents of the `rex split` CLI)**, per-block `command` + `shell:"none"` and per-block labels, one call per window. A tree-built 3-block window came out structurally identical (directions, ratios, nesting) to the same window built by hand with `rex split` calls. Caveats: on a command block, `block call process` reports the `login` wrapper and `pwd` is empty until a program reports one. |
 | S6 | vt preview edge cases (after a clear, full-screen apps): shared with flash S1 | ☐ |
 | S7 | Does Herdr's popup PATH include mise installs (bare `herdr-nav` in the manifest)? Shared with zextract S5 | ☑ answered in zextract S5 (yes, via the mise shims dir); with option B only relevant for `nav-launch`'s PATH fallback |
 

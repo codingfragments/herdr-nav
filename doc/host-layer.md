@@ -75,10 +75,13 @@ target is focused before every split, and focus is put back at the end.
 | `create_session` | `rex new LABEL -c DIR --json` | → `session_id`, `initial_windows[0].window_id`, `initial_windows[0].block_ids[0]` |
 | `create_window` | `rex window new -s S [LABEL] --json` | the reply is flat: `block_ids[0]` |
 | `split_pane` | `rex split -s S -b B --split right\|below --ratio PCT --json` | `--ratio` is an **integer percent** (nav's 0–1 value ×100, clamped to 1–99; a fraction is a flag parse error, which is why splits never worked before). herdr's `down` maps to `below`. The reply is flat: `block_ids[0]`. |
-| `export_layout` / `process_info` | error, coming in R5 | capture on Rex is open |
+| `export_layout` | `rex session inspect S --json` (+ the topology snapshot for cwds), normalized into the herdr `layout.export` shape capture parses: Rex `horizontal`→`right`, `vertical`→`down`, `before`/`after`→`first`/`second`; the ratio (first pane's share, 0–1) is already the same convention on both hosts | the first **tiled** layer only |
+| `process_info` | `rex block call … process`, normalized to `{"foreground_processes": [{name, cmdline, cwd, pid}]}` | **`cmdline` is name-only** (Rex reports no argv) — capture annotates the guess |
 | `pane_cwd` | `rex block call -s <block's session> -b B pwd` | `file://` URL, path part kept |
 | `send_keys` / `agent_send_keys` | `rex send-key -s <block's session> -b B KEY` | Rex addresses agents by their block |
+| `split_pane` ratio | nav's `ratio` is the **anchor pane's share**; `rex split --ratio` is the **new block's** percent — inverted (verified against a live herdr snapshot: its export ratio is the first pane's share) | passing it through inverts every non-even split |
 | plugins / `release_agent` / `notify` | error | off via `caps` |
+| `split_pane` cwd | no `--cwd` on `rex split` (`split_pane_carries_cwd` = false) | the builder `cd`s each split-off pane explicitly |
 
 ### `host_ext::jump`: the app side of a Rex jump
 

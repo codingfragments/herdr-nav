@@ -103,8 +103,12 @@ where a failed jump leaves its evidence.
 - **Plugins group** — hidden (`caps.plugins` is false); the `@plugins`
   query filter flashes "not available on Rex".
 - **`^x` detach agent** — hidden (no agent-release action).
-- **Templates/capture** — opening a pinned/zoxide dir builds the
-  hardcoded one-window-one-block default (`rex new`); full templates
-  and `herdr-nav capture` land in Phase R5.
+- **Templates/capture** — both work. Templates are Rex's own set
+  (`~/.config/nav/rex/templates/`, no herdr fallback). `capture`
+  (the wizard, `ctrl+s>ctrl+t`, or `herdr-nav capture` with flags)
+  reads the session's windows, layouts, cwds and **best-effort
+  commands — name-only**: Rex reports the foreground process name but
+  not its arguments, so a running `nvim src/ --clean` is captured as
+  `nvim` with a `best-effort: verify` annotation.
 - Config and data files live in `~/.config/nav/` with the herdr
   locations as fallbacks — see [`doc/config-reference.md`](config-reference.md).
