@@ -84,8 +84,12 @@ impl TemplateHost for RexHost {
             "down" => "below",
             _ => "right",
         };
-        // 0–1 float → integer percent, defaulting to an even split.
-        let pct = ((ratio * 100.0).round() as i64).clamp(1, 99);
+        // nav's `ratio` is the ANCHOR pane's share (herdr's
+        // layout.export convention, verified live); `rex split --ratio`
+        // is the NEW block's integer percent — so invert: 0.6 anchor →
+        // 40 % to the new block. (Passing the anchor share straight
+        // through inverts every non-even split.)
+        let pct = (((1.0 - ratio) * 100.0).round() as i64).clamp(1, 99);
         let out = self_rex(
             self,
             &[
@@ -111,15 +115,105 @@ impl TemplateHost for RexHost {
             .to_string())
     }
 
-    /// Layout export for capture — R5 (typed against Rex's layout
-    /// trees then).
-    fn export_layout(&self, _window_id: &str) -> Result<serde_json::Value, String> {
-        Err("layout export on Rex lands with templates + capture (R5)".to_string())
+    /// The window's layout, normalized from `rex session inspect` into
+    /// the herdr `layout.export` shape capture parses (`doc/host-layer.md`):
+    /// - Rex `horizontal` (side-by-side) → `"right"`, `vertical`
+    ///   (stacked) → `"down"`; `before`/`after` → `first`/`second`.
+    /// - The ratios already agree: both herdr's export (verified live
+    ///   against a herdr snapshot) and Rex's inspect store the FIRST
+    ///   pane's share as a 0–1 float.
+    /// - Pane cwds come from the topology snapshot (the inspect tree
+    ///   carries ids only). The window's FIRST TILED layer is used —
+    ///   floating layers are not part of a template.
+    fn export_layout(&self, window_id: &str) -> Result<serde_json::Value, String> {
+        use muxhost::topology::HostTopology;
+
+        // Session + per-block cwd from the (fresh) topology snapshot.
+        let panes = self.list_all_panes()?;
+        let Some(session) = panes
+            .iter()
+            .find(|p| p.window_id == window_id)
+            .map(|p| p.session_id.clone())
+        else {
+            return Err(format!("no session holds window {window_id}"));
+        };
+        let cwd_of = |id: &str| {
+            panes
+                .iter()
+                .find(|p| p.pane_id == id)
+                .and_then(|p| p.cwd.clone())
+                .unwrap_or_default()
+        };
+
+        let out = self.run(&["session", "inspect", &session, "--json"], None)?;
+        let v: serde_json::Value = serde_json::from_str(&out)
+            .map_err(|e| format!("rex session inspect: bad JSON: {e}"))?;
+        let window = v
+            .get("windows")
+            .and_then(|w| w.as_array())
+            .ok_or_else(|| "rex session inspect: no windows[]".to_string())?
+            .iter()
+            .find(|w| w.get("window_id").and_then(|i| i.as_str()) == Some(window_id))
+            .ok_or_else(|| format!("session inspect has no window {window_id}"))?;
+        let layout = window
+            .get("layers")
+            .and_then(|l| l.as_array())
+            .into_iter()
+            .flatten()
+            .find(|l| l.get("kind").and_then(|k| k.as_str()) == Some("tiled"))
+            .and_then(|l| l.get("layout").cloned())
+            .ok_or_else(|| format!("window {window_id} has no tiled layout"))?;
+
+        fn norm(node: &serde_json::Value, cwd_of: &dyn Fn(&str) -> String) -> serde_json::Value {
+            if let Some(block) = node.get("block_id").and_then(|b| b.as_str()) {
+                return serde_json::json!({
+                    "type": "pane", "pane_id": block, "cwd": cwd_of(block),
+                });
+            }
+            let s = node.get("split");
+            let dir = match s.and_then(|x| x.get("direction")).and_then(|d| d.as_str()) {
+                Some("horizontal") => "right", // side-by-side
+                Some("vertical") => "down",    // stacked
+                _ => "right",
+            };
+            serde_json::json!({
+                "type": "split",
+                "direction": dir,
+                "ratio": s.and_then(|x| x.get("ratio")).and_then(|r| r.as_f64()).unwrap_or(0.5),
+                "first": s.and_then(|x| x.get("before")).map(|n| norm(n, cwd_of)),
+                "second": s.and_then(|x| x.get("after")).map(|n| norm(n, cwd_of)),
+            })
+        }
+        let root = norm(&layout, &cwd_of);
+        Ok(serde_json::json!({"layout": {"root": root}}))
     }
 
-    /// Foreground-process info for capture — R5.
-    fn process_info(&self, _pane_id: &str) -> Result<serde_json::Value, String> {
-        Err("process info on Rex lands with templates + capture (R5)".to_string())
+    /// Foreground process info, normalized from `block call … process`
+    /// into the herdr `pane.process_info` shape capture parses. Rex
+    /// reports name/path/argv0 but **no argv**, so `cmdline` is the
+    /// process name (the best-effort heuristic annotates the guess).
+    fn process_info(&self, pane_id: &str) -> Result<serde_json::Value, String> {
+        let session = self
+            .block_session(pane_id)
+            .unwrap_or_else(|| self.session().to_string());
+        let out = self.run(
+            &["block", "call", "-s", &session, "-b", pane_id, "process"],
+            None,
+        )?;
+        let v: serde_json::Value =
+            serde_json::from_str(&out).map_err(|e| format!("rex process: bad JSON: {e}"))?;
+        let fg = v.get("foreground").cloned().unwrap_or_default();
+        let entry = |f: &serde_json::Value| {
+            serde_json::json!({
+                "name": f.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                "cmdline": f.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                "cwd": f.get("cwd").and_then(|x| x.as_str()).unwrap_or(""),
+                "pid": f.get("pid"),
+            })
+        };
+        Ok(serde_json::json!({
+            "process_info": {"foreground_processes": [entry(&fg)]}
+        }))
     }
 }
 
@@ -289,6 +383,140 @@ mod tests {
         );
     }
 
+    /// Recorded `rex session inspect` (the R5 spike's scratch session:
+    /// 2 windows, the first a 3-block nested split with per-block cwd
+    /// available through the topology script) + the matching topology
+    /// snapshot: export_layout must normalize it into the herdr
+    /// `layout.export` shape capture parses.
+    const INSPECT: &str = include_str!("../../tests/fixtures/rex/session-inspect-splits.json");
+    const TOPOLOGY: &str = include_str!("../../tests/fixtures/rex/topology-spike5.json");
+
+    #[test]
+    fn export_layout_normalizes_inspect_into_capture_shape() {
+        // The fixture's first window: horizontal root (ratio 0.6 = the
+        // left column's share), whose `before` nests a vertical split.
+        let inspect = serde_json::from_str::<serde_json::Value>(INSPECT).unwrap();
+        let window = &inspect["windows"][0];
+        let wid = window["window_id"].as_str().unwrap();
+        let sid = inspect["session_id"].as_str().unwrap().to_string();
+
+        // Topology script reply (cwd source) + the inspect reply.
+        let runner = FakeRunner::default().reply(Ok(TOPOLOGY)).reply(Ok(INSPECT));
+        let h = host(&runner);
+        let resp = h.export_layout(wid).unwrap();
+
+        let root = &resp["layout"]["root"];
+        assert_eq!(root["type"], "split");
+        // Rex horizontal (side-by-side) → herdr "right".
+        assert_eq!(root["direction"], "right");
+        // The ratio is the FIRST pane's share on both hosts — kept as-is.
+        assert_eq!(root["ratio"], 0.6);
+        assert_eq!(root["first"]["direction"], "down"); // Rex vertical → "down"
+        assert_eq!(root["first"]["first"]["type"], "pane");
+        // cwd attached from the topology snapshot (the leftmost block
+        // runs in the herdr-nav repo).
+        assert!(root["first"]["first"]["cwd"]
+            .as_str()
+            .unwrap()
+            .ends_with("herdr-nav"));
+        // And the calls: the topology script, then the inspect, scoped
+        // to the window's session.
+        let calls = runner.calls.borrow();
+        assert_eq!(calls[0].0, vec!["do", "-"]);
+        assert_eq!(
+            calls[1].0,
+            vec![
+                "session".to_string(),
+                "inspect".to_string(),
+                sid,
+                "--json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn process_info_normalizes_block_call_into_capture_shape() {
+        let process = r#"{"foreground": {"pid": 7, "name": "nvim", "cwd": "/Users/x/src"},
+            "child": {"name": "login"}, "ancestors": []}"#;
+        let runner = FakeRunner::default()
+            .reply(Ok("{}")) // block-session lookup: fall back to own session
+            .reply(Ok(process));
+        let h = host(&runner);
+        let resp = h.process_info("block:b1").unwrap();
+        let procs = &resp["process_info"]["foreground_processes"];
+        // Name-only command line (Rex reports no argv) — capture's
+        // best-effort heuristic annotates the guess.
+        assert_eq!(procs[0]["name"], "nvim");
+        assert_eq!(procs[0]["cmdline"], "nvim");
+        assert_eq!(procs[0]["cwd"], "/Users/x/src");
+        assert_eq!(procs[0]["pid"], 7);
+    }
+
+    /// The full capture round trip on the recorded fixture: normalized
+    /// export → capture's real mapping → template YAML → parsed back as
+    /// a Template whose structure matches the inspected session.
+    #[test]
+    fn capture_round_trips_the_recorded_inspect_fixture() {
+        let inspect = serde_json::from_str::<serde_json::Value>(INSPECT).unwrap();
+        // Each window's export_layout re-runs the topology script (the
+        // inspect `run` drops the snapshot cache), then the inspect.
+        let runner = FakeRunner::default()
+            .reply(Ok(TOPOLOGY))
+            .reply(Ok(INSPECT))
+            .reply(Ok(TOPOLOGY))
+            .reply(Ok(INSPECT));
+        let h = host(&runner);
+        let raw = crate::capture::RawCapture {
+            workspace_id: "session:01a1f4ed-d547-77c8-aa3f-1a9eed7375c8".into(),
+            workspace_label: "spike5".into(),
+            base_cwd: String::new(),
+            tabs: inspect["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| {
+                    let wid = w["window_id"].as_str().unwrap().to_string();
+                    let root = h
+                        .export_layout(&wid)
+                        .map(|r| r["layout"]["root"].clone())
+                        .unwrap();
+                    crate::capture::RawTab {
+                        tab_label: w["label"].as_str().unwrap().to_string(),
+                        root,
+                    }
+                })
+                .collect(),
+            pane_commands: Default::default(),
+        };
+        let (template, _annotations) = crate::capture::build_template(
+            &raw,
+            "spike5",
+            crate::capture::CwdPolicy::Relative,
+            crate::capture::CommandPolicy::Keep,
+            &[],
+            &[],
+            Vec::new(),
+            false,
+        );
+        let yaml = crate::capture::template_to_yaml(&template, &[]).unwrap();
+        let back: crate::source::Template = serde_yaml::from_str(&yaml).unwrap();
+
+        // 2 windows → 2 tabs; the first carries the nested split with
+        // its ratios (60 % first pane's share) and pane cwds.
+        assert_eq!(back.tabs.len(), 2);
+        let first = &back.tabs[0];
+        assert_eq!(first.layout.direction, "v"); // Rex horizontal → "v"
+        assert_eq!(first.layout.ratio, 60);
+        assert_eq!(first.layout.panes.len(), 2);
+        // The nested vertical split → "h", panes stacked.
+        let nested = match &first.layout.panes[0] {
+            crate::source::PaneNode::Nested { layout } => layout,
+            _ => panic!("expected the nested split first"),
+        };
+        assert_eq!(nested.direction, "h");
+        assert_eq!(nested.panes.len(), 2);
+    }
+
     #[test]
     fn split_pane_converts_ratio_to_integer_percent() {
         // The first call is the anchor block's session lookup (empty
@@ -308,16 +536,18 @@ mod tests {
                 "--split",
                 "right",
                 "--ratio",
-                "50", // 0.5 → integer percent (a fraction is a parse error)
+                "50", // 0.5 anchor share → 50 % to the new block (even)
                 "--json",
             ]
         );
-        // herdr's "down" maps to Rex's "below"; the layout ratio 60 → 60.
+        // herdr's "down" maps to Rex's "below"; the anchor share 0.6 →
+        // the NEW block gets 40 % (rex split --ratio is the new block's
+        // share, nav's is the anchor's — passing it through inverts).
         let runner = FakeRunner::default().reply(Ok("{}")).reply(Ok(SPLIT_JSON));
         let h = host(&runner);
         h.split_pane("block:b1", "down", 0.6, "/tmp/x").unwrap();
         let args = &runner.calls.borrow()[1].0;
         assert_eq!(args[6], "below");
-        assert_eq!(args[8], "60");
+        assert_eq!(args[8], "40");
     }
 }

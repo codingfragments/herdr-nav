@@ -60,9 +60,12 @@ pub trait TemplateHost: Host {
     ) -> Result<String, String>;
 
     /// Split `pane_id` in `direction` ("left"/"right"/"up"/"down") at
-    /// `ratio` (0–1), starting the new pane at `cwd` (herdr:
-    /// `pane.split`). Returns the new pane's id (empty when the host
-    /// response carries none — the build then keeps splitting `pane_id`).
+    /// `ratio` (**the first/anchor pane's share**, 0–1 — the convention
+    /// of herdr's `layout.export` ratio, verified live against a herdr
+    /// snapshot: a `down` split, ratio 0.657, first pane 41 of 63 rows),
+    /// starting the new pane at `cwd` (herdr: `pane.split`). Returns
+    /// the new pane's id (empty when the host response carries none —
+    /// the build then keeps splitting `pane_id`).
     fn split_pane(
         &self,
         pane_id: &str,
@@ -71,14 +74,28 @@ pub trait TemplateHost: Host {
         cwd: &str,
     ) -> Result<String, String>;
 
-    /// The layout tree of `window_id` (herdr: `layout.export`), as the
-    /// raw response object — the capture module's pure parsers own the
-    /// shape (R5 may type it once Rex's shape is known).
+    /// Whether [`split_pane`](TemplateHost::split_pane) actually starts
+    /// the new pane at `cwd` (herdr's `pane.split` does; Rex's `rex
+    /// split` has no cwd flag). When it doesn't, the builder sends an
+    /// explicit `cd` to every split-off pane. Default `true`.
+    fn split_pane_carries_cwd(&self) -> bool {
+        true
+    }
+
+    /// The window's layout as nav's capture parsers expect it
+    /// (`{"layout": {"root": …}}`, the herdr `layout.export` shape:
+    /// `{"type": "pane", "pane_id", "cwd"}` / `{"type": "split",
+    /// "direction": "right"|"down", "ratio" (first pane's share, 0–1),
+    /// "first", "second"}`). Hosts that shape it differently (Rex:
+    /// `session inspect`) normalize here.
     fn export_layout(&self, window_id: &str) -> Result<serde_json::Value, String>;
 
-    /// Foreground-process info for `pane_id` (herdr:
-    /// `pane.process_info`), raw response object — capture's
-    /// best-effort command heuristic owns the parsing.
+    /// Foreground-process info for `pane_id` in capture's expected
+    /// shape (`{"process_info": {"foreground_processes": [{name,
+    /// cmdline, cwd, pid}]}}`, the herdr `pane.process_info` shape).
+    /// Where the host reports no full command line (Rex: `block call
+    /// process` has name/argv0 but no argv), `cmdline` is the process
+    /// name — capture's best-effort heuristic annotates those anyway.
     fn process_info(&self, pane_id: &str) -> Result<serde_json::Value, String>;
 }
 

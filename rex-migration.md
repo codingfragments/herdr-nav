@@ -513,9 +513,27 @@ Status: ▐ in progress (2026-11-20, started early on user direction:
     the foreground process (name/path/argv0) but **no argv**, so a
     captured template can record `nvim`, not `nvim src/ --clean`.
     Best-effort with an annotation, same spirit as herdr's capture.
-- ☐ The rest of R5 (implementation of the above, capture fixtures,
-  round-trip tests, the `nav_capture` binding `ctrl+s>ctrl+t`) is
-  still open.
+- ☑ Implementation (2026-11-20): `RexTemplateHost::export_layout`
+  normalizes `session inspect` into capture's herdr-export shape
+  (horizontal→right, vertical→down, before/after→first/second; the
+  ratios already agree — both hosts store the FIRST pane's share,
+  verified live against a herdr snapshot), `process_info` normalizes
+  `block call process` (cmdline = name-only, annotated). **Found and
+  fixed while implementing:** `split_pane` inverted every non-even
+  ratio — nav's ratio is the ANCHOR pane's share, `rex split --ratio`
+  is the NEW block's percent (invisible until now: live tests only
+  used 50/50); and `rex split` has no cwd flag, so the builder `cd`s
+  each split-off pane (`split_pane_carries_cwd`).
+- ☑ Fixtures: `tests/fixtures/rex/{session-inspect-splits,topology-
+  spike5}.json` (recorded from the spike's scratch session), with a
+  round-trip test through capture's real mapping into a template
+  YAML (5 tests in `host_ext/rex.rs`).
+- ☑ Live: `herdr-nav capture --name spike5` against the running
+  server wrote a correct template (nested v60/h50 split, both tabs,
+  relative cwds) to `~/.config/nav/rex/templates/`. The `nav_capture`
+  action + `ctrl+s>ctrl+t` binding are live in the user's config.
+- ☐ Left for the user: the wizard under Rex (`ctrl+s>ctrl+t` in the
+  app) and opening the captured template via the switcher.
 
 Original checklist:
 

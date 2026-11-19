@@ -20,9 +20,9 @@
 -- Install: copy this file to ~/.config/rex/plugins/nav.lua and add
 --   require("plugins.nav")
 -- to init.lua. Bindings (herdr parity, prefix ctrl+s):
---   ctrl+s>s, cmd+k        the switcher
---   ctrl+s>a, cmd+shift+k  agents only (opens seeded with the @agents group tag)
--- Capture gets a binding in Phase R5.
+--   ctrl+s>s, cmd+k          the switcher
+--   ctrl+s>a, cmd+shift+k    agents only (opens seeded with the @agents group tag)
+--   ctrl+s>ctrl+t            capture the session as a template
 -- Check conf/keys.lua for conflicts before changing them (ctrl+s>w is
 -- session.switch, ctrl+k belongs to vim-herdr-navigation).
 --
@@ -75,11 +75,13 @@ if [ "$api" -lt %d ]; then
   read -r _
   exit 0
 fi
-exec herdr-nav --seed "$1"
+exec herdr-nav "$@"
 ]]
 
-local function popup_command(sid, block, window, client_id, seed)
-  return {
+-- `args` is what runs after the preflight: {"--seed", seed} for the
+-- switcher, {"capture"} for the capture wizard.
+local function popup_command(sid, block, window, client_id, args)
+  local cmd = {
     "env",
     "PATH=" .. login_path,
     "NAV_HOST=rex",
@@ -90,8 +92,10 @@ local function popup_command(sid, block, window, client_id, seed)
     "NAV_CLIENT_ID=" .. client_id,
     "NAV_INTENT_FILE=" .. INTENT,
     "/bin/sh", "-c", (PREFLIGHT):format(NEED_HOST_API, NEED_HOST_API),
-    "sh", seed,
+    "sh",
   }
+  for _, a in ipairs(args) do cmd[#cmd + 1] = a end
+  return cmd
 end
 
 rex.action{
@@ -124,7 +128,8 @@ rex.action{
         flavor  = "com.superlogical.terminal.shell",
         options = {
           command = popup_command(
-            ctx.session_id, source_block, window, ctx.client_id, args.seed or ""
+            ctx.session_id, source_block, window, ctx.client_id,
+            { "--seed", args.seed or "" }
           ),
           shell = "none",
         },
@@ -139,6 +144,45 @@ rex.action{
   end,
 }
 
+-- Capture (herdr parity: prefix+ctrl+t / nav-capture): analyze the
+-- current session and write a template YAML to ~/.config/nav/rex/
+-- templates/. Non-blocking like `nav`, for the same reason.
+rex.action{
+  name  = "nav_capture",
+  title = "nav: capture session as template",
+  description = "Open the capture wizard over the focused session: reads its windows, layouts, cwds and best-effort commands, and writes a template YAML to ~/.config/nav/rex/templates/.",
+  args  = {},
+  run   = function(ctx)
+    local v = rex.session.view{ session_id = ctx.session_id }
+    local source_block, window
+    for _, w in ipairs(v.windows or {}) do
+      if w.window_id == v.active_window_id then
+        source_block = w.focused_block_id
+        window = w.window_id
+      end
+    end
+    if not source_block or not window then
+      error("no focused pane to capture from", 0)
+    end
+    local layer, err = rex.session.new_layer{
+      session_id = ctx.session_id,
+      bounds     = { 0.1, 0.1, 0.8, 0.8 },
+      layout     = rex.layout.block{
+        flavor  = "com.superlogical.terminal.shell",
+        options = {
+          command = popup_command(
+            ctx.session_id, source_block, window, ctx.client_id, { "capture" }
+          ),
+          shell = "none",
+        },
+      },
+      focus = true,
+    }
+    if err then error(err, 0) end
+    return { layer_id = layer.layer_id, block_ids = layer.block_ids }
+  end,
+}
+
 -- ── Bindings (herdr parity) ──────────────────────────────────────
 -- ctrl+s>s: the switcher. ctrl+k is vim-herdr-navigation's (Rex port)
 -- and must stay free (D3); ctrl+s>w is session.switch.
@@ -148,3 +192,5 @@ rex.bind("ctrl+s>a", "nav", { seed = "@agents" })
 -- nav-open and nav-agents to them).
 rex.bind("cmd+k", "nav")
 rex.bind("cmd+shift+k", "nav", { seed = "@agents" })
+-- Capture (herdr: prefix+ctrl+t).
+rex.bind("ctrl+s>ctrl+t", "nav_capture")
