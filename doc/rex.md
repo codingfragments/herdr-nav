@@ -38,8 +38,9 @@ switcher writes a jump record and the launcher carries it out.
 
 ## How the jump works (Remote Control)
 
-> The full host-layer reference (every muxhost feature, herdr vs Rex
-> implementation) is in [`doc/host-layer.md`](host-layer.md).
+> nav's host glue is in [`doc/host-layer.md`](host-layer.md); the shared
+> layer (every muxhost feature, herdr vs Rex) is in the
+> [muxhost reference](https://github.com/codingfragments/muxhost/tree/main/doc).
 
 **Who owns what** — the jump is split by responsibility:
 

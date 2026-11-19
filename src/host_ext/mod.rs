@@ -126,19 +126,16 @@ impl<T: NavHost + TemplateHost + HostExt> NavFull for T {}
 /// multiplexer) still opens the popup with "unavailable" groups,
 /// exactly as an empty `HERDR_SOCKET_PATH` did before the migration.
 pub fn detect() -> Box<dyn NavFull> {
-    let explicit = std::env::var("NAV_HOST").ok();
-    match explicit.as_deref() {
-        Some("herdr") => return detect_herdr(),
-        Some("rex") => return detect_rex(),
-        Some(_) | None => {}
+    // The detection ORDER is muxhost's (detect_kind: NAV_HOST, then
+    // HERDR_SOCKET_PATH, then REX_SESSION — innermost multiplexer
+    // first), so nav and every other muxhost consumer agree. nav only
+    // adds its own construction and the NoHost fallback instead of an
+    // error (an unknown NAV_HOST or no multiplexer → the dev path).
+    match muxhost::detect_kind("NAV") {
+        Ok(muxhost::HostKind::Herdr) => detect_herdr(),
+        Ok(muxhost::HostKind::Rex) => detect_rex(),
+        _ => Box::new(NoHost),
     }
-    if std::env::var_os("REX_SESSION").is_some() {
-        return detect_rex();
-    }
-    if std::env::var_os("HERDR_SOCKET_PATH").is_some() {
-        return detect_herdr();
-    }
-    Box::new(NoHost)
 }
 
 fn detect_herdr() -> Box<dyn NavFull> {
@@ -212,7 +209,6 @@ pub fn jump(
 ) -> Result<muxhost::navigate::JumpOutcome, String> {
     use muxhost::navigate::JumpOutcome;
     let outcome = host.jump(jump.clone())?;
-    eprintln!("nav: jump {jump:?} → {outcome:?} (host {})", host.name());
     if outcome == JumpOutcome::Delegated {
         let path = std::env::var("NAV_INTENT_FILE")
             .map(std::path::PathBuf::from)

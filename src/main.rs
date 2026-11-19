@@ -980,15 +980,10 @@ fn event_loop<B: ratatui::backend::Backend>(
                                 flash_error = Some((id, "no actions".to_string()));
                             }
                         } else {
-                            eprintln!("nav: enter leaf {id}");
                             match invoke_action(host, &id) {
-                                Ok(nav::Outcome::Close { .. }) => {
-                                    eprintln!("nav: invoke Close → exiting");
-                                    break;
-                                }
+                                Ok(nav::Outcome::Close { .. }) => break,
                                 Ok(nav::Outcome::Stay { .. }) => {}
                                 Err(e) => {
-                                    eprintln!("nav: invoke error: {e}");
                                     flash_error = Some((id, e));
                                 }
                             }

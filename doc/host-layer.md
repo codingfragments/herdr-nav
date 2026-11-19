@@ -1,269 +1,28 @@
-# The host layer: muxhost + nav's `host_ext`
+# The host layer in herdr-nav
 
-herdr-nav runs under two multiplexers, [Herdr](https://herdr.dev) and
-[Rex](https://rex.dev), from one binary. Everything multiplexer-specific
-goes through two layers:
+herdr-nav reaches herdr and Rex through two layers:
 
 | Layer | Where | Purpose |
 |---|---|---|
-| **muxhost** | [`codingfragments/muxhost`](https://github.com/codingfragments/muxhost) (pinned by tag in `Cargo.toml`, currently **v0.3.5**) | A crate shared by herdr-nav, herdr-flash and herdr-zextract: one trait surface over herdr and Rex for things more than one tool needs (reading panes, listing them, the session tree, jumping, closing, renaming). |
-| **`host_ext`** | `src/host_ext/` in this repo | nav-only glue: template building, capture, plugins, agent keys. Kept out of muxhost on purpose (rex-migration.md "Decisions"), so nav can change it without cutting a muxhost release. |
+| **muxhost** | [`codingfragments/muxhost`](https://github.com/codingfragments/muxhost), pinned by tag in `Cargo.toml` | Shared with herdr-flash and herdr-zextract: reading and listing panes, the session tree, jump, close, rename. **Its reference docs live in that repo**, see below. |
+| **`host_ext`** | `src/host_ext/` in this repo | nav-only glue (template building, capture, plugins, agent keys) and the app side of a Rex jump. Documented here. |
 
-Rule of thumb: **if a second tool would need it, it goes in muxhost;
-if only nav needs it, it goes in `host_ext`.**
+Rule of thumb: if a second tool would need it, it goes in muxhost; if
+only nav needs it, it goes in `host_ext` and uses muxhost's escape
+hatches (`HerdrHost::raw_request`, `RexHost::run`).
 
-The rest of this document goes through each feature: what it is for,
-then how the herdr and Rex implementations work.
+## muxhost reference
 
----
-
-## 1. Design rules (muxhost)
-
-- **Dependencies:** `std`, `serde_json`, and `arboard` (for the
-  clipboard) only. Nothing from a consuming tool, and no tool types in
-  any signature.
-- **Errors** are plain `String`s and meant to be shown to the user. The
-  crate does not log.
-- **Additions don't break consumers.** New trait methods get default
-  implementations and public enums are `#[non_exhaustive]`, so a tool
-  pinned to an older tag keeps compiling against a newer muxhost.
-- **Cargo features** keep the small tools small:
-
-  | Feature | Adds | Used by |
-  |---|---|---|
-  | *(core)* | `Host`, `Caps`, `detect`, `clipboard`, `fake` | flash, zextract, nav |
-  | `topology` | `HostTopology` (sessions/windows/panes/agents, `TopologySnapshot`) | nav |
-  | `navigate` (implies `topology`) | `HostNavigate` (jump, close, rename) | nav |
-
-- **The concept mapping** (the names nav's tree and docs use):
-
-  | Neutral (muxhost) | herdr | Rex |
-  |---|---|---|
-  | session | workspace | session |
-  | window | tab | window |
-  | pane | pane | block |
-
----
-
-## 2. Core: the `Host` trait
-
-What every tool needs: where it was launched from, read a pane, list
-the panes on the tab, type into a pane.
-
-| Method | Purpose |
+| Topic | Page |
 |---|---|
-| `name()` | `"herdr"`, `"rex"` (nav's `NoHost` returns `"none"`). Used for host-scoped behaviour: template dirs, config `[host.<name>]` tables, `theme::load(host)`. |
-| `source()` | The pane the tool was opened over (`SourceRef { pane_id, tab_id }`). The popup is a pane of its own, so this has to come from the launcher, not from "the focused pane". |
-| `read_pane(pane, source, format, lines)` | A pane's text. `ReadSource::Viewport` = what is on screen; `Scrollback` = the soft-wrapped history, lines joined. `ReadFormat::Plain` or `Ansi` (with escape sequences, for coloured previews). `lines` keeps the newest N. |
-| `list_tab_panes()` | The panes on the source tab, the source pane first, without the tool's own popup. (zextract's "grab the whole tab".) |
-| `insert_text(pane, text)` | Type text into a pane as if the user typed it. |
-| `scroll_info(pane)` *(default `Ok(None)`)* | The viewport's scroll offset (flash's "follow the scroll position"). `None` means the host can't tell. |
-| `caps()` *(default: all false)* | The optional capabilities below. |
+| layers, features, design rules, escape hatches | [architecture](https://github.com/codingfragments/muxhost/blob/main/doc/architecture.md) |
+| herdr's socket vs Rex's CLI, environment, every quirk | [hosts](https://github.com/codingfragments/muxhost/blob/main/doc/hosts.md) |
+| `Host`, `Caps`, `detect_kind`, clipboard | [core](https://github.com/codingfragments/muxhost/blob/main/doc/core.md) |
+| sessions/windows/panes/agents; Rex's one-script snapshot and its cache | [topology](https://github.com/codingfragments/muxhost/blob/main/doc/topology.md) |
+| jump/close/rename; the `Delegated` contract | [navigate](https://github.com/codingfragments/muxhost/blob/main/doc/navigate.md) |
+| `FakeHost`, the runner fake, fixtures | [testing](https://github.com/codingfragments/muxhost/blob/main/doc/testing.md) |
 
-### `Caps`: what a host can do
-
-| Flag | herdr | Rex | Consumer behaviour |
-|---|---|---|---|
-| `scroll_follow` | ✅ | ❌ (scroll position is kept by the app, not the server) | flash anchors on the viewport, or degrades gracefully |
-| `legacy_keyboard` | ✅ (popup PTY runs in legacy mode) | ❌ | tools debounce duplicate key events (nav's `KEY_DEBOUNCE`) |
-| `plugins` | ✅ | ❌ (no plugin system) | nav hides the Plugins group; the `@plugins` filter shows "not available on Rex" |
-| `agent_release` | ✅ | ❌ | nav's `^x` (detach agent) does nothing on Rex |
-
-### herdr implementation (`HerdrHost`)
-
-Talks to herdr's JSON socket at `$HERDR_SOCKET_PATH`, with a **new
-connection for every request** (herdr closes the socket after each
-reply; reusing it gives `BrokenPipe`). The client is private to
-muxhost (`socket_client.rs`); everything goes through it.
-
-| Method | Socket call |
-|---|---|
-| construction | `from_env()`: launch context from `HERDR_PLUGIN_CONTEXT_JSON` (`focused_pane_id`, `tab_id`), falling back to `HERDR_ACTIVE_PANE_ID` for dev runs. `with_socket(path)`: a socket without a launch context (nav's dev path; the source is left empty). |
-| `read_pane` | `pane.read {pane_id, source: "visible" \| "recent_unwrapped", lines?, format: "ansi", strip_ansi: false}` → `read.text` |
-| `list_tab_panes` | `pane.list`, filtered to `tab_id`, source pane first. Title order: label → `terminal_title_stripped` → `pane <id>`. |
-| `insert_text` | `pane.send_text {pane_id, text}` |
-| `scroll_info` | `pane.get` → `pane.scroll {offset_from_bottom, max_offset_from_bottom, viewport_rows}` (a missing `scroll` means `None`) |
-| `raw_request(method, params)` | **Escape hatch** for tool-local glue (nav's `host_ext/herdr.rs`): any socket method, through the same client. |
-
-### Rex implementation (`RexHost`)
-
-Rex has no socket API for tools. Everything goes through the **`rex`
-CLI**, behind a `RexRunner` trait so tests can check exact argument
-lists without a server (`CliRunner` is the real one).
-
-**Construction:** `from_env(prefix)` reads the variables the Rex
-launcher sets. Inside the popup `REX_BLOCK` is the popup's own block,
-so the source pane has to be passed in explicitly:
-
-| Env var | Meaning |
-|---|---|
-| `REX_SESSION` | the session the popup opened in |
-| `<PREFIX>_SOURCE_BLOCK` | the pane the user was in (required by `from_env`; nav falls back without it, see §6) |
-| `<PREFIX>_SOURCE_WINDOW` | its window |
-| `REX_CLI` | the CLI's absolute path. The Rex server runs with launchd's minimal `PATH`, so plain `rex` is not found. |
-
-| Method | CLI call |
-|---|---|
-| `read_pane` Scrollback | `rex capture -s S -b B --unwrap --trim --format text\|vt`, then keep the last N lines |
-| `read_pane` Viewport | `rex capture -s S -b B --format …` (without `--unwrap`: screen rows are wrapped rows), then the bottom `rows` lines, with `rows` from `rex block call … size` |
-| `list_tab_panes` | `rex session inspect S --json` → the source window's **tiled** layers (floating layers, including the popup, are left out), terminal blocks only, source first. Title: a label that isn't `shell` → terminal title (`block call … title`) → label → `pane <id>`. |
-| `insert_text` | `rex send -s S -b B`, with the **text on stdin** so leading `-` and newlines arrive unchanged |
-| `scroll_info`, `caps` | the defaults: `None` and all-false |
-| `session()`, `run(args, stdin)` | **Escape hatch** for tool-local glue (nav's `host_ext/rex.rs`), the Rex counterpart of `raw_request`. `run` also **drops the topology snapshot cache** (§3), because glue calls like `rex new` or `rex split` change the topology. |
-
-**Block session scoping (v0.3.4).** A `-s SESSION -b BLOCK` call fails
-with "block target not found" if the block is in a different session.
-Block calls (`capture`, `send`, and nav's `pwd`/`split`/`send-key`)
-therefore look up the **block's own session** in the topology snapshot
-(`block_session(block)`) and fall back to the host's session. Without
-this, previews of panes in other sessions failed.
-
-**ANSI under Rex.** `--format vt` uses `CSI n C` (cursor forward) as a
-run of n spaces. `ansi-to-tui` drops it, which shifts columns. Tools
-expand it before parsing: nav's `preview::vt_prepare`, copied from
-flash. It turns `CSI n C` into spaces, keeps SGR, and drops other
-escapes. It is tested against `tests/fixtures/rex/capture-vt.txt`.
-
----
-
-## 3. `topology`: the session tree
-
-**Intent:** a tree-style switcher needs every session, window and pane,
-plus the agents, in one go, with the active and focused markers.
-
-| Item | Purpose |
-|---|---|
-| `SessionInfo {session_id, label, active}` | a session; `active` = the one the user is in |
-| `WindowInfo {window_id, session_id, label, active}` | a window and its session |
-| `PaneEntry {pane_id, session_id, window_id, title, is_focused, cwd}` | every pane in every session, floating panes left out |
-| `AgentEntry {pane_id, terminal_id, name, title, status}` | panes running an agent; `AgentStatus` is `Waiting`, `Working`, `Idle` or `Unknown` |
-| `list_sessions` / `list_windows` / `list_all_panes` / `list_agents` | the four lists |
-| `topology_snapshot()` | **all four at once** (`TopologySnapshot`). The default implementation calls the four lists; hosts where a round trip is expensive override it. nav builds its tree from this. |
-
-### herdr: four cheap socket calls
-
-| List | Socket call | Notes |
-|---|---|---|
-| sessions | `workspace.list` | `active` = `focused` |
-| windows | `tab.list` | `active` = `focused` |
-| panes | `pane.list` | herdr never lists plugin popups here, so nothing needs filtering |
-| agents | `agent.list` | `agent_status` → `AgentStatus`; title = `terminal_title_stripped`, falling back to the agent name |
-
-`topology_snapshot` is the default (the four calls). Socket calls take
-milliseconds.
-
-### Rex: one `rex do` script, cached
-
-Building the same data from separate CLI calls (`ls`, then `session
-inspect` per session, then several `block call`s per block) costs a
-process spawn and a server round trip each. For a popup that should
-build in under 150 ms that is too slow (spike S4). Instead, **one Lua
-script runs on the server** (`rex do -`, the script piped on stdin)
-and returns everything as JSON. It takes about 50 ms for several
-sessions.
-
-The script (`TOPOLOGY_SCRIPT` in `rex.rs`; the same version is kept as
-the spike fixture `tests/fixtures/rex/nav-s4-topology.lua`):
-
-1. `rex.call("session.list")`
-2. per session: `rex.call("session.attach")`, which **returns the view
-   inline**, then `session.detach`. (`rex.session.view` without an
-   attachment returns nil in script context.)
-3. per window, **tiled layers only**: the blocks
-4. per block: `rex.call("block.method", {method = "title" | "pwd" |
-   "program_status"})`. Block methods use their **short** names; the
-   creator-prefixed names return nothing.
-
-Parsing (`parse_topology`):
-
-| Field | Source |
-|---|---|
-| session `active` | `session_id == REX_SESSION` |
-| pane `is_focused` | `block_id == <PREFIX>_SOURCE_BLOCK` (the pane the user was in, which is more useful to a switcher than each window's own focused block) |
-| pane `title` | **a user label that isn't `shell`** → terminal title → label → `pane <id>`. Rex labels every new block `shell`, so only a renamed block's label wins. (Before v0.3.5 the terminal title won, so renamed panes like `A12` showed as `~`.) |
-| pane `cwd` | `pwd` returns a `file://host/path` URL; the path part is kept |
-| agents | blocks whose `program_status.records` is non-empty. The record's `status`: `blocked` → `Waiting`, `working` → `Working`, `idle` → `Idle`. gopher-lua encodes an empty table as `{}`, so both `[]` and `{}` count as "no agent". |
-| window `active` | always `false`. **Known gap:** the script returns each session's `active_window_id`, but the parser doesn't use it yet. nav's "active tab first" ordering therefore does nothing under Rex. |
-
-**The cache.** The four list methods read from one snapshot, kept for
-**250 ms** (`SNAPSHOT_TTL`) so that changes made elsewhere still show
-up. It is **dropped right away** after any change made through this
-host: closes, renames, and every `run` escape-hatch call. Without
-that, a session nav had just created with `rex new` was not in the
-cache, and the jump to it failed with "no session holds block".
-
----
-
-## 4. `navigate`: jump, close, rename
-
-**Intent:** take the user somewhere and change the layout. `jump`
-returns an outcome because the two hosts behave very differently.
-
-| Item | Purpose |
-|---|---|
-| `Jump::FocusPane {pane_id}` | land on a pane, in any session |
-| `Jump::SelectSession {session_id, focus_pane?}` | switch session, optionally to a given pane |
-| `JumpOutcome::Executed` | the host did the whole jump |
-| `JumpOutcome::Delegated` | the host did the **server side**; the **app's view** (which session it shows, the tab strip) is the tool's job |
-| `close_pane` / `close_window` / `close_session` | nav's `^d` kill |
-| `rename_pane` / `rename_window` | template building (tab and pane labels) |
-
-### herdr: one call, `Executed`
-
-| Method | Socket call |
-|---|---|
-| `jump` | `pane.focus {pane_id}` switches workspace, tab and pane in one call. For `SelectSession` without a pane: the session's first pane (from `list_all_panes`). |
-| closes | `pane.close`, `tab.close`, `workspace.close` |
-| renames | `pane.rename`, `tab.rename` |
-
-### Rex: split into server side and app side, `Delegated`
-
-A Rex **app** (the macOS client) decides what is on screen, on the
-client side. The server can move focus inside a session, but cannot
-make the app show another session. That needs a client action
-(`session.select`), and a CLI process can only trigger one through
-**Remote Control**: `rex -C <client> do …`, which has to be enabled
-once in the app's settings.
-
-`RexHost::jump` does the **server side** and then returns `Delegated`:
-
-1. resolve the target block's session from the snapshot
-2. `rex focus -s SESSION BLOCK`. This attaches to the target session
-   as a child CLI call. (`session.focus_block` from a connection
-   attached elsewhere silently does nothing; R0 finding.)
-
-The **app side** belongs to the tool. nav's implementation, including
-the ordering problems found live, is in §6.
-
-| Method | CLI call (session from the snapshot) |
-|---|---|
-| `close_pane` | `rex block close -s S B` |
-| `close_window` | `rex window close -s S W` |
-| `close_session` | `rex session kill S` |
-| `rename_pane` | `rex api call -s S session.set_block_label {"block_id", "label"}` |
-| `rename_window` | `rex window rename -s S W LABEL` |
-
-Each one drops the snapshot cache afterwards.
-
----
-
-## 5. Clipboard and tests (`clipboard`, `fake`)
-
-- **`clipboard::copy(text)`** tries the system clipboard (`arboard`)
-  first. Where there isn't one (a headless or remote Linux session
-  behind Rex or ssh), it writes an **OSC 52** sequence to `/dev/tty`,
-  which the terminal passes on to the local clipboard. It fails only
-  if both do. Used by flash and zextract.
-- **`fake::FakeHost`** is an in-memory host for consumers' unit tests:
-  canned pane texts, a tab listing, and recorded reads, inserts,
-  jumps, closes and renames. With the features on, it implements
-  `HostTopology` (`with_topology(sessions, windows, panes, agents)`)
-  and `HostNavigate`. nav's tree tests run against it, with nav-local
-  glue implementations in `source.rs`'s tests.
-
----
-
-## 6. nav's `host_ext` (`src/host_ext/`)
+## nav's `host_ext` (`src/host_ext/`)
 
 ### The traits
 
@@ -276,25 +35,20 @@ Each one drops the snapshot cache afterwards.
 
 ### `detect()` and `NoHost`
 
-nav uses its own `detect` rather than `muxhost::detect`, because it
-needs a `NavFull` and a fallback instead of an error:
-
-1. `NAV_HOST=herdr|rex` wins (launchers set it: `bin/nav-launch` pins
-   herdr, `rex/nav.lua` pins rex)
-2. else `REX_SESSION` set → Rex
-3. else `HERDR_SOCKET_PATH` set → herdr
-4. else **`NoHost`**: every call fails with one message, so the popup
-   still opens and the groups show "unavailable" (the dev path).
+nav builds its own host types (it needs a `NavFull`, and a fallback
+instead of an error), but the **order** comes from muxhost: it calls
+[`muxhost::detect_kind("NAV")`](https://github.com/codingfragments/muxhost/blob/main/doc/core.md#detection),
+which checks `NAV_HOST`, then `HERDR_SOCKET_PATH`, then `REX_SESSION`
+(the innermost multiplexer first). Launchers always set `NAV_HOST`:
+`bin/nav-launch` pins herdr, `rex/nav.lua` pins rex. An unknown
+`NAV_HOST`, or no multiplexer at all, gives **`NoHost`**: every call
+fails with one message, so the popup still opens and the groups show
+"unavailable" (the dev path).
 
 On herdr, a socket without a launch context falls back to
 `HerdrHost::with_socket`. On Rex, a missing `NAV_SOURCE_BLOCK` (running
 nav by hand in a Rex terminal) falls back to `RexHost::new` with an
 empty source.
-
-> **Inconsistency to know about:** `muxhost::detect` checks
-> `HERDR_SOCKET_PATH` **before** `REX_SESSION`; nav's checks them the
-> other way round. It only matters without `NAV_HOST`, and both
-> launchers set it.
 
 ### herdr glue (`host_ext/herdr.rs`, through `raw_request`)
 
@@ -327,6 +81,9 @@ target is focused before every split, and focus is put back at the end.
 | plugins / `release_agent` / `notify` | error | off via `caps` |
 
 ### `host_ext::jump`: the app side of a Rex jump
+
+This is the reference implementation of muxhost's
+[`Delegated` consumer contract](https://github.com/codingfragments/muxhost/blob/main/doc/navigate.md#consumer-contract-carrying-out-a-delegated-jump).
 
 Every jump the user chooses goes through `host_ext::jump(host, jump)`,
 never `host.jump` directly. (Two invoke paths calling `host.jump`
@@ -372,24 +129,3 @@ failed jump leaves its trace there.
 | pinned dirs (`targets.toml`) | shared by both hosts | shared by both hosts |
 
 ---
-
-## 7. Versions
-
-| muxhost | Change |
-|---|---|
-| v0.1.0 | `Host` (herdr + Rex), clipboard, fake (from zextract) |
-| v0.2.0 | `topology` + `navigate` for herdr |
-| v0.2.1 | `HerdrHost::raw_request`, `with_socket` |
-| v0.3.0 | Rex topology (one `rex do` snapshot, cached), Rex navigate (`Delegated`), `topology_snapshot` |
-| v0.3.1 | `RexHost::run` + `session()` (Rex escape hatch) |
-| v0.3.2 | `RexHost::jump` runs the server-side `rex focus` itself |
-| v0.3.3 | `run` drops the snapshot cache; `navigate` implies `topology` |
-| v0.3.4 | block calls use the block's own session |
-| v0.3.5 | user labels win over terminal titles; the `Delegated` contract documented |
-
-## See also
-
-- [`doc/rex.md`](rex.md): running under Rex (install, bindings, the jump)
-- [`doc/env-vars.md`](env-vars.md): every env var the launchers pass in
-- `rex-migration.md`: the phase plan, spikes and decisions
-- muxhost's own docs (`cargo doc -p muxhost --features topology,navigate`)
