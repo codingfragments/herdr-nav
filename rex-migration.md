@@ -303,7 +303,54 @@ Original checklist:
 
 ### Phase R3: Rex switcher (Session, Agents, Pinned, zoxide, preview), in `phase/rex-3-rex-switcher`
 
-Status: ☐ not started
+Status: ☑ done (2026-11-20) — live-verified against the running Rex
+server (tree, pane titles, live vt preview with colours, plugins
+hidden); 201 tests green. **Spike S4 result: one `rex do` script**
+(piped on stdin) collects the whole topology — session.list +
+per-session session.attach (returns the view inline; session.view
+without attachment returns nil) + per-block block.method title/pwd/
+program_status — ~50 ms for several sessions, cached in muxhost
+(mutation-invalidated, 250 ms TTL). Four list-methods-each-run would
+blow the popup budget; `HostTopology::topology_snapshot` (new in
+muxhost v0.3.0, default-assembled for herdr/FakeHost) is the one-call
+answer.
+
+- ☑ `RexHost` topology in muxhost v0.3.0 (tagged): sessions/windows/
+  blocks from the snapshot, floating-layer blocks left out, terminal
+  titles replacing the uninformative "shell" labels, cwd from the
+  file:// pwd (path only). Active = `REX_SESSION`; focused = the
+  source block.
+- ☑ Agents: blocks with non-empty `program_status.records` map
+  blocked→waiting/working/idle. **Caveat:** no live block reported a
+  status during the spike (records `[]`/`{}`), so the record shape is
+  parsed defensively (array or object, `status` field) — verify
+  against the user's real agents in R4 live testing.
+- ☑ Pinned/zoxide unchanged; dir-open under Rex = `rex new -c DIR` +
+  a delegated FocusPane jump (the intent file the launcher carries
+  out). The provider path now jumps to the created pane explicitly
+  (herdr relied on the daemon's auto-switch; Rex needs the intent).
+- ☑ Preview: RexHost read_pane (vt capture) + flash's `vt_prepare`
+  (CSI-n-C → spaces, SGR kept) in nav's preview, tested against the
+  recorded fixture `tests/fixtures/rex/capture-vt.txt`; live-verified
+  (captured pane content renders with colours).
+- ☑ Plugins group hidden when `!caps.plugins` (Rex + the dev NoHost);
+  the `@plugins` query filter flashes "not available on Rex".
+- ☑ Performance: S4 above — ~50 ms per snapshot, well under 150 ms.
+- ☑ `--version` and `--host-api` (integer, 1) for launcher preflight.
+- ☑ Herdr install, option B: `bin/fetch-binary` (asset
+  `herdr-nav-<triple>.tar.gz`, sha256-checked, source fallback) +
+  `bin/nav-launch` (target/release → PATH, pins `NAV_HOST=herdr`);
+  all three panes go through `nav-launch`.
+- ☑ muxhost v0.3.1: `RexHost::run` + `session` (the raw-CLI escape
+  hatch nav's Rex glue calls `rex new`/`block call pwd`/`send-key`
+  through — same contract as `HerdrHost::raw_request`).
+- ☑ Jump delegation (R0's design): `host_ext::jump` writes the intent
+  record on `JumpOutcome::Delegated` to `$NAV_INTENT_FILE` (fallback
+  `~/.config/nav/intent.json`); the final user jumps go through it,
+  template building's intermediate focus ops call the raw host jump
+  and ignore a delegated outcome.
+
+Original checklist:
 
 - [ ] `RexHost` topology lives in `muxhost` (a PR there), and nav bumps
   the tag:

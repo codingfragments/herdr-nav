@@ -4,8 +4,13 @@ version = "0.6.0"
 min_herdr_version = "0.8.0"
 platforms = ["macos", "linux"]
 
+# Puts the binary into target/release/: downloads the release binary
+# for this version (no Rust needed — install option B, rex-migration
+# R3), or builds from source on untagged commits / when the download
+# fails. See bin/fetch-binary. `herdr plugin link` skips this step —
+# run `just build` first.
 [[build]]
-command = ["cargo", "build", "--release"]
+command = ["sh", "bin/fetch-binary"]
 
 # The switcher is a single popup: one keystroke opens it, you aim, Enter
 # moves you, it closes (spec §1). There is one interactive pane and one
@@ -21,10 +26,14 @@ command = ["cargo", "build", "--release"]
 # the active pane's rect; popup leaves the surrounding workspace dimmed
 # behind the switcher.
 
+# bin/nav-launch prefers target/release/herdr-nav (fetch-binary or
+# just build put it there), then a herdr-nav on PATH (mise), and pins
+# NAV_HOST=herdr — a herdr running inside a Rex terminal must not be
+# detected as the other multiplexer.
 [[panes]]
 id = "switcher"
 title = "herdr switch"
-command = ["./target/release/herdr-nav"]
+command = ["sh", "bin/nav-launch"]
 placement = "popup"
 width = "80%"
 height = "80%"
@@ -38,7 +47,7 @@ height = "80%"
 [[panes]]
 id = "capture"
 title = "herdr capture"
-command = ["./target/release/herdr-nav", "capture"]
+command = ["sh", "bin/nav-launch", "capture"]
 placement = "popup"
 width = "80%"
 height = "80%"
@@ -57,7 +66,7 @@ command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-nav", "--entryp
 [[panes]]
 id = "agents"
 title = "herdr agents"
-command = ["./target/release/herdr-nav", "--seed", "@agents"]
+command = ["sh", "bin/nav-launch", "--seed", "@agents"]
 placement = "popup"
 width = "80%"
 height = "80%"
