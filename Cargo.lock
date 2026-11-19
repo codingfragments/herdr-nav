@@ -853,8 +853,8 @@ dependencies = [
 
 [[package]]
 name = "muxhost"
-version = "0.3.4"
-source = "git+https://github.com/codingfragments/muxhost?tag=v0.3.4#2e625c91bc3799ea7c1b3ecb72db6d896526310d"
+version = "0.3.5"
+source = "git+https://github.com/codingfragments/muxhost?tag=v0.3.5#bb421ae04d9a95725f5d1451873afacbc1e6340e"
 dependencies = [
  "arboard",
  "serde_json",

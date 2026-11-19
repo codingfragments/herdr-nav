@@ -315,14 +315,32 @@ fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
     // via a shell that exits immediately — the pattern zextract's
     // detached watcher uses, proven on this Rex version), so the
     // layer's teardown can't kill it.
+    //
+    // Order matters: the select switches the app's session+window, but
+    // the app may focus the window's remembered block as part of that
+    // — so the block focus is re-asserted AFTER the select (it must be
+    // the last action, or the landing pane is whatever the app
+    // remembered instead of the chosen one).
     let q = |s: &str| s.replace('\'', "'\\''");
     let mut inner = format!(
-        "sleep 0.5; exec '{}' -C '{}' do session.select",
+        "sleep 0.5; '{}' -C '{}' do session.select",
         q(&cli),
         q(&client)
     );
     for a in &select_args {
         inner.push_str(&format!(" '{}'", q(a)));
+    }
+    if let Some(block) = record
+        .get("block_id")
+        .and_then(|b| b.as_str())
+        .filter(|b| !b.is_empty())
+    {
+        inner.push_str(&format!(
+            "; '{}' focus -s '{}' '{}'",
+            q(&cli),
+            q(session),
+            q(block)
+        ));
     }
     let outer = format!("nohup /bin/sh -c '{}' >/dev/null 2>&1 &", q(&inner));
     let _ = Command::new("/bin/sh")
@@ -343,27 +361,26 @@ fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
 /// server side; both need the session, and the cached topology
 /// snapshot makes resolving it free.
 fn intent_record(host: &dyn NavFull, jump: &muxhost::navigate::Jump) -> serde_json::Value {
-    let session_of_block = |block_id: &str| -> Option<String> {
+    let pane = |block_id: &str| -> Option<muxhost::topology::PaneEntry> {
         host.list_all_panes()
             .ok()?
             .into_iter()
             .find(|p| p.pane_id == block_id)
-            .map(|p| p.session_id)
     };
     match jump {
-        muxhost::navigate::Jump::FocusPane { pane_id } => {
-            serde_json::json!({
-                "kind": "focus",
-                "block_id": pane_id,
-                "session_id": session_of_block(pane_id),
-            })
-        }
+        muxhost::navigate::Jump::FocusPane { pane_id } => serde_json::json!({
+            "kind": "focus",
+            "block_id": pane_id,
+            "session_id": pane(pane_id).map(|p| p.session_id),
+            "window_id": pane(pane_id).map(|p| p.window_id),
+        }),
         muxhost::navigate::Jump::SelectSession {
             session_id,
             focus_pane,
         } => match focus_pane {
             Some(block_id) => serde_json::json!({
                 "kind": "focus", "session_id": session_id, "block_id": block_id,
+                "window_id": pane(block_id).map(|p| p.window_id),
             }),
             None => serde_json::json!({"kind": "open_session", "session_id": session_id}),
         },

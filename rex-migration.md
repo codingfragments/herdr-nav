@@ -387,8 +387,10 @@ Original checklist:
 
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
-Status: ☑ implemented, installed in the user's Rex config
-(2026-11-20; **fixed twice on 2026-11-20** — third fix: a select
+Status: ☑ done — **working live, user-confirmed** (2026-11-20;
+fixed three times that day, all silent-edit no-ops found by driving
+the real popup remotely (`rex do nav` + `rex send`) with stderr
+traces; the final verified sequence is documented in `doc/rex.md` — third fix: a select
 made while the popup's layer is still open is undone when the app's
 focus logic snaps back on layer close (observed live: select exit=0,
 app attached, view stayed). The carry-out now fires a SECOND select
