@@ -20,8 +20,8 @@
 -- Install: copy this file to ~/.config/rex/plugins/nav.lua and add
 --   require("plugins.nav")
 -- to init.lua. Bindings (herdr parity, prefix ctrl+s):
---   ctrl+s>s  the switcher
---   ctrl+s>a  agents only (opens seeded with the @agents group tag)
+--   ctrl+s>s, cmd+k        the switcher
+--   ctrl+s>a, cmd+shift+k  agents only (opens seeded with the @agents group tag)
 -- Capture gets a binding in Phase R5.
 -- Check conf/keys.lua for conflicts before changing them (ctrl+s>w is
 -- session.switch, ctrl+k belongs to vim-herdr-navigation).
@@ -144,3 +144,7 @@ rex.action{
 -- and must stay free (D3); ctrl+s>w is session.switch.
 rex.bind("ctrl+s>s", "nav")
 rex.bind("ctrl+s>a", "nav", { seed = "@agents" })
+-- herdr parity: super+k / super+shift+k (herdr's config.toml binds
+-- nav-open and nav-agents to them).
+rex.bind("cmd+k", "nav")
+rex.bind("cmd+shift+k", "nav", { seed = "@agents" })

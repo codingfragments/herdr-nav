@@ -25,12 +25,12 @@ switcher writes a jump record and the launcher carries it out.
    require("plugins.nav")
    ```
 
-3. Bindings (prefix `ctrl+s`):
+3. Bindings (the same keys as under herdr):
 
-   | Key | Action |
-   |---|---|
-   | `ctrl+s>s` | the switcher |
-   | `ctrl+s>a` | agents only (opens seeded with `@agents`) |
+   | Key | Action | herdr equivalent |
+   |---|---|---|
+   | `ctrl+s>s`, `cmd+k` | the switcher | `prefix+s`, `super+k` |
+   | `ctrl+s>a`, `cmd+shift+k` | agents only (opens seeded with `@agents`) | `super+shift+k` |
 
    `ctrl+k` is [vim-herdr-navigation](https://github.com/codingfragments/vim-herdr-navigation)'s
    and stays free; `ctrl+s>w` is `session.switch`. Capture gets a
