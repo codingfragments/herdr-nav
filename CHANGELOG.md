@@ -7,6 +7,55 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-20
+
+The Rex release: the same binary now runs under [Rex](https://rex.dev)
+as under Herdr, through the shared
+[muxhost](https://github.com/codingfragments/muxhost) host layer. Guide:
+[`doc/rex.md`](doc/rex.md); the host layer in detail:
+[`doc/host-layer.md`](doc/host-layer.md).
+
+### Added — Rex support
+
+- **The switcher under Rex**: sessions, windows and panes from one
+  server-side `rex do` snapshot (~50 ms), live previews (vt capture),
+  agents, pinned dirs, zoxide, and template building/capture with
+  host-scoped template dirs (`~/.config/nav/rex/templates/`). The
+  Plugins group is hidden — Rex has no plugin system.
+- **Jumps across sessions and windows** via Remote Control: the
+  switcher runs the server-side `rex focus` and asks the app to follow
+  (`rex -C <client> do session.select`), re-asserting the pane focus
+  after the switch — each ordering trap found and fixed live
+  (`doc/rex.md` documents the full sequence).
+- **Rex launcher** `rex/nav.lua`: non-blocking popup action, binary
+  preflight (`--host-api`), bindings `ctrl+s>s` / `cmd+k` (switcher),
+  `ctrl+s>a` / `cmd+shift+k` (agents), `ctrl+s>ctrl+t` (capture) —
+  herdr parity.
+- **Capture on Rex**: layouts from `session inspect` (normalized),
+  cwds per pane, best-effort commands (name-only — Rex reports no
+  argv — with a verify annotation).
+- **muxhost** dependency (v0.3.6, tag-pinned) shared with
+  herdr-zextract and herdr-flash.
+
+### Added — host-neutral paths and config
+
+- Config lookup `$NAV_CONFIG` → `~/.config/nav/config.toml` → the
+  legacy plugin dir; per-host `[host.rex]` / `[host.herdr]` override
+  tables (`groups`, `theme`). Pinned dirs (`targets.toml`) shared by
+  both hosts; writes stay where the data already lives.
+- Theme resolution: `[host.<host>].theme` → nav's `[theme]` → herdr's
+  config → default.
+
+### Fixed
+
+- **Agent interrupt/detach never worked** (`^c`/`^x` on agent rows):
+  the pane-id lookup stripped a prefix the agent node ids never had.
+- Under Rex, previews of panes in other sessions ("block target not
+  found") and template splits with non-even ratios (the anchor-share
+  vs new-block-percent conventions are inverted between the hosts).
+- Herdr plugin install on tagged versions now **downloads the release
+  binary** (sha256-checked) instead of requiring Rust.
+
 ## [0.6.0] — 2026-10-08
 
 ### Added
