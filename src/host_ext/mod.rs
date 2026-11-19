@@ -187,7 +187,16 @@ fn detect_rex() -> Box<dyn NavFull> {
     }
 }
 
-// ── Jump delegation (rex-migration.md R0/R3) ────────────────────────────────
+// ── Jump delegation (rex-migration.md R0/R3, R1 fallback active) ───────────
+
+/// Whether a jump was carried out this invocation — the Esc-exit
+/// focus-return in `main` skips it when the user already jumped.
+static JUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a jump has been carried out this process (see [`jump`]).
+pub fn jump_performed() -> bool {
+    JUMPED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Jump through the host. When the host DELEGATES the jump (Rex: the
 /// app's view is client-side and only the launcher's app-invoked
@@ -213,8 +222,55 @@ pub fn jump(
         }
         std::fs::write(&path, serde_json::to_string(&record).unwrap_or_default())
             .map_err(|e| format!("write {}: {e}", path.display()))?;
+        // R1 (Remote Control — the plan's documented fallback, activated
+        // 2026-11-20 when the inline wait proved to block the app's key
+        // delivery): the switcher itself asks the app to follow. The
+        // server-side focus already ran inside `host.jump`; this is the
+        // client-side `session.select` only the app can perform.
+        if host.name() == "rex" {
+            carry_out_rex_select(&record)?;
+            JUMPED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     Ok(outcome)
+}
+
+/// Ask the Rex app to select the target session
+/// (`rex -C <client> do session.select`). Needs the app's Remote
+/// Control setting; without the launcher's `NAV_CLIENT_ID` (a manual
+/// dev invocation) there is no client to ask — the server-side focus
+/// has already run and the app's view simply stays (the documented
+/// CLI limit, not an error).
+fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let Some(client) = var("NAV_CLIENT_ID") else {
+        return Ok(());
+    };
+    let Some(session) = record
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        return Err("jump record has no session_id — cannot select it in the app".to_string());
+    };
+    let cli = var("REX_CLI").unwrap_or_else(|| "rex".to_string());
+    let out = std::process::Command::new(&cli)
+        .args([
+            "-C",
+            &client,
+            "do",
+            "session.select",
+            &format!("session_id={session}"),
+        ])
+        .output()
+        .map_err(|e| format!("run {cli}: {e}"))?;
+    if !out.status.success() {
+        return Err(
+            "Rex Remote Control is off — enable it in the Rex app's settings so the switcher can follow your jump"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// The launcher's jump record (R0 spike: the action opens the popup,

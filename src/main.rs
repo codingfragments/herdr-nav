@@ -184,6 +184,21 @@ fn run() -> Result<(), String> {
         seed,
     );
 
+    // Rex, no jump (Esc): put the user back on the pane they came
+    // from. The launcher used to do this after its wait; the R1 mode
+    // (Remote Control) made the launcher non-blocking, so the
+    // switcher restores the source focus itself on its way out.
+    if result.is_ok() && !host_ext::jump_performed() && host.name() == "rex" {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        if let (Some(cli), Some(sid), Some(block)) =
+            (var("REX_CLI"), var("REX_SESSION"), var("NAV_SOURCE_BLOCK"))
+        {
+            let _ = std::process::Command::new(cli)
+                .args(["focus", "-s", &sid, &block])
+                .output();
+        }
+    }
+
     // Restore terminal regardless of how the loop exited.
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), cursor::Show).ok();

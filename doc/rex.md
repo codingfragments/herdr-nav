@@ -36,30 +36,30 @@ switcher writes a jump record and the launcher carries it out.
    and stays free; `ctrl+s>w` is `session.switch`. Capture gets a
    binding in Phase R5.
 
-## How the jump works
+## How the jump works (Remote Control)
 
-`rex/nav.lua`'s `nav` action (R0 spike, verified live):
+The launcher (`rex/nav.lua`) is **non-blocking** — it opens the popup
+and returns, so the app's key delivery keeps working while the popup is
+open. The switcher carries the jump out itself on Enter:
 
-1. Reads the focused block + window (`rex.session.view`) before the
-   layer takes focus — inside the popup, `REX_BLOCK` is the popup
-   itself, so the source is passed explicitly as `NAV_SOURCE_BLOCK`.
-2. Opens a floating layer at 80% × 80% running the binary with
-   `NAV_HOST=rex`, `REX_CLI`, `REX_SESSION`, `NAV_INTENT_FILE`, and the
-   login `PATH` (the Rex server runs with launchd's minimal PATH).
-3. Waits the popup out with a synchronous CLI `rex wait` (config Lua
-   has no `rex.wait`), staying in the app-invoked context — which is
-   what lets it queue the app's actions.
-4. Reads the jump record the switcher wrote:
-   `{"kind":"focus","session_id":…,"block_id":…}` or
-   `{"kind":"open_session","session_id":…}`, then
-   - `session.select` for the **app** (`rex.client.queue`),
-   - `rex focus -s SESSION BLOCK` for the server side
-     (`session.focus_block` from a foreign-attached connection silently
-     does nothing — R0 finding).
-5. No record (Esc): re-focuses the source pane.
+1. **Server side**: `rex focus -s SESSION BLOCK` (muxhost's
+   `RexHost::jump`; `session.focus_block` from a foreign-attached
+   connection silently does nothing — R0 finding).
+2. **App side**: `rex -C <NAV_CLIENT_ID> do session.select session_id=…`
+   — asks the app to follow. **This needs the app's Remote Control
+   setting enabled (once, in Rex's settings).** Without it the popup
+   stays open with a hint telling you to enable it.
 
-The record is deleted before each popup opens, so a stale file from a
-crashed run can never jump.
+Esc (no jump): the switcher runs `rex focus` back onto
+`NAV_SOURCE_BLOCK`, the pane you opened it from.
+
+> History: the original R0 design had the launcher wait out the popup
+> and queue the app actions itself — no Remote Control needed — but the
+> blocking wait froze the app's key delivery for the popup's lifetime
+> (the popup rendered but accepted no key presses; observed live).
+> That's why the plan's R1 fallback is the active mode. The jump record
+> is still written to `$NAV_INTENT_FILE` (diagnostics/fallback), and
+> deleted before each open so a stale file never lingers.
 
 ## Differences under Rex
 

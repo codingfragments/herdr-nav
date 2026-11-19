@@ -388,10 +388,18 @@ Original checklist:
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
 Status: ☑ implemented, installed in the user's Rex config
-(2026-11-20) — config reload clean (generation 27, no
- diagnostics). **Awaiting the live jump test**: ctrl+s>s in the Rex
- app, Enter on a target → the app switches session + the server-side
- focus lands on the block; Esc → focus returns to the source pane.
+(2026-11-20) — **redesigned to the R1 fallback the same day**: the
+R0 inline-wait design froze the app's key delivery for the popup's
+lifetime (the popup rendered but accepted no key presses — a blocking
+`rex.exec` in an action holds the app's Lua, exactly the
+"problematic long-lived actions" case the plan reserved the fallback
+for). The launcher is now non-blocking (zextract-shaped); the
+switcher carries the jump out itself: `rex focus -s S B` (muxhost
+v0.3.2's RexHost::jump server side) + `rex -C $NAV_CLIENT_ID do
+session.select` (Remote Control — one-time enable in the app; a
+refusal keeps the popup open with a hint), Esc re-focuses
+NAV_SOURCE_BLOCK on exit. **Awaiting the live jump test** with Remote
+Control enabled.
 
 - ☑ Action `nav{ seed = "string?" }` in `rex/nav.lua` (the shipped
   reference; installed at `~/.config/rex/plugins/nav.lua` +
