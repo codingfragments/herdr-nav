@@ -14,9 +14,14 @@ use serde::{Deserialize, Serialize};
 /// registered providers. A provider that fails leaves its group row in
 /// place with a red "unavailable" meta and an error preview (spec §5/§11).
 pub fn build_tree(host: &dyn NavFull, groups: &[String], cfg: &crate::config::Config) -> Vec<Node> {
+    // The Plugins group is host-gated (rex-migration R3): Rex has no
+    // plugin system, so `caps.plugins` hides the row instead of
+    // rendering an "unavailable" stub.
+    let plugins_on = host.caps().plugins;
     groups
         .iter()
         .filter_map(|name| Group::from_provider_id(name))
+        .filter(|g| plugins_on || *g != Group::Plugins)
         .map(|g| group_node(host, g, cfg))
         .map(populate_hint_if_empty)
         .collect()
@@ -177,8 +182,10 @@ impl Provider for SessionProvider<'_> {
                     .and_then(|n| node_for(id, &n).and_then(first_pane_under));
                 match first_pane {
                     Some(pid) => {
-                        self.host
-                            .jump(muxhost::navigate::Jump::FocusPane { pane_id: pid })?;
+                        crate::host_ext::jump(
+                            self.host,
+                            muxhost::navigate::Jump::FocusPane { pane_id: pid },
+                        )?;
                         Ok(crate::nav::Outcome::Close {
                             toast: format!("switched to {id}"),
                         })
@@ -302,7 +309,15 @@ impl Provider for PinnedProvider<'_> {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Open a new workspace at the pinned path, built from the
         // auto-resolved default template (spec §8.2 amended).
-        let (outcome, _first_pane) = open_dir_workspace_template(self.host, id, None)?;
+        let (outcome, first_pane) = open_dir_workspace_template(self.host, id, None)?;
+        // Jump to the new workspace's first pane: herdr's daemon may
+        // already have switched, but under Rex the jump is DELEGATED —
+        // host_ext::jump writes the intent record the launcher carries
+        // out (rex-migration R3).
+        if let Some(pane_id) = first_pane {
+            let _ =
+                crate::host_ext::jump(self.host, muxhost::navigate::Jump::FocusPane { pane_id });
+        }
         Ok(outcome)
     }
 }
@@ -346,7 +361,13 @@ impl Provider for ZoxideProvider<'_> {
     fn invoke(&self, id: &NodeId, _act: crate::nav::Act) -> Result<crate::nav::Outcome, String> {
         // Open a new workspace at the zoxide path, built from the
         // auto-resolved default template (spec §8.2 amended).
-        let (outcome, _first_pane) = open_dir_workspace_template(self.host, id, None)?;
+        let (outcome, first_pane) = open_dir_workspace_template(self.host, id, None)?;
+        // Same as the pinned provider: jump to the new workspace's
+        // first pane (under Rex: write the delegated jump intent).
+        if let Some(pane_id) = first_pane {
+            let _ =
+                crate::host_ext::jump(self.host, muxhost::navigate::Jump::FocusPane { pane_id });
+        }
         Ok(outcome)
     }
 }
@@ -1450,11 +1471,14 @@ mod tests {
 
     #[test]
     fn build_tree_five_groups_in_spec_order() {
-        // No host → every provider fails → 5 unavailable stubs, but
-        // the root structure (5 groups, spec §4 order, Session first) is
-        // intact. This is the dev/no-Herdr path (host_ext::NoHost).
+        // A host without a socket → the socket-backed providers fail →
+        // "unavailable" stubs, but the root structure (5 groups, spec §4
+        // order, Session first) is intact. This is the dev/no-Herdr path
+        // with a real herdr host (caps.plugins on → the Plugins row
+        // stays, as an unavailable stub).
+        let herdr = muxhost::herdr::HerdrHost::with_socket("/tmp/no-socket".to_string());
         let root = build_tree(
-            &NoHost,
+            &herdr,
             &[
                 "session".to_string(),
                 "agents".to_string(),
@@ -1478,6 +1502,29 @@ mod tests {
         assert_eq!(root[1].meta, "unavailable"); // Agents
                                                  // Plugins still unavailable (Phase 7).
         assert_eq!(root[4].meta, "unavailable");
+    }
+
+    #[test]
+    fn build_tree_hides_plugins_group_when_host_has_none() {
+        // rex-migration R3: a host without a plugin system (Rex, and
+        // the dev NoHost) doesn't even get the Plugins row — no
+        // "unavailable" stub, just gone (the @plugins query filter
+        // hints "not available on Rex" instead).
+        let root = build_tree(
+            &NoHost,
+            &[
+                "session".to_string(),
+                "agents".to_string(),
+                "pinned".to_string(),
+                "zoxide".to_string(),
+                "plugins".to_string(),
+            ],
+            &crate::config::Config::default(),
+        );
+        assert_eq!(root.len(), 4);
+        assert_eq!(root[0].label, "Session");
+        assert_eq!(root[3].label, "zoxide");
+        assert!(root.iter().all(|n| n.label != "Plugins"));
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! with "unavailable" groups (spec §11).
 
 mod herdr;
+mod rex;
 
 use muxhost::navigate::HostNavigate;
 use muxhost::topology::HostTopology;
@@ -121,29 +122,118 @@ impl<T: NavHost + TemplateHost + HostExt> NavFull for T {}
 /// Detect the host from the environment (launchers set `NAV_HOST`
 /// explicitly so a herdr running inside a Rex terminal — or the
 /// reverse — is never mistaken for the other host; see muxhost's
-/// `detect`). Herdr today; Rex lands in R3. Falls back to [`NoHost`]
-/// so the dev path (no multiplexer) still opens the popup with
-/// "unavailable" groups, exactly as an empty `HERDR_SOCKET_PATH` did
-/// before the migration.
+/// `detect`). Falls back to [`NoHost`] so the dev path (no
+/// multiplexer) still opens the popup with "unavailable" groups,
+/// exactly as an empty `HERDR_SOCKET_PATH` did before the migration.
 pub fn detect() -> Box<dyn NavFull> {
     let explicit = std::env::var("NAV_HOST").ok();
-    let is_herdr = explicit.as_deref() == Some("herdr")
-        || (explicit.is_none() && std::env::var_os("HERDR_SOCKET_PATH").is_some());
-    if is_herdr {
-        let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
-        if socket_path.is_empty() {
-            return Box::new(NoHost);
-        }
-        // from_env() also requires a launch context; nav treats the
-        // context as optional (a live socket with no context keeps
-        // working — only the focused-pane conveniences degrade), so
-        // fall back to with_socket on a context error.
-        return match muxhost::herdr::HerdrHost::from_env() {
-            Ok(h) => Box::new(h),
-            Err(_) => Box::new(muxhost::herdr::HerdrHost::with_socket(socket_path)),
-        };
+    match explicit.as_deref() {
+        Some("herdr") => return detect_herdr(),
+        Some("rex") => return detect_rex(),
+        Some(_) | None => {}
+    }
+    if std::env::var_os("REX_SESSION").is_some() {
+        return detect_rex();
+    }
+    if std::env::var_os("HERDR_SOCKET_PATH").is_some() {
+        return detect_herdr();
     }
     Box::new(NoHost)
+}
+
+fn detect_herdr() -> Box<dyn NavFull> {
+    let socket_path = std::env::var("HERDR_SOCKET_PATH").unwrap_or_default();
+    if socket_path.is_empty() {
+        return Box::new(NoHost);
+    }
+    // from_env() also requires a launch context; nav treats the
+    // context as optional (a live socket with no context keeps
+    // working — only the focused-pane conveniences degrade), so fall
+    // back to with_socket on a context error.
+    match muxhost::herdr::HerdrHost::from_env() {
+        Ok(h) => Box::new(h),
+        Err(_) => Box::new(muxhost::herdr::HerdrHost::with_socket(socket_path)),
+    }
+}
+
+fn detect_rex() -> Box<dyn NavFull> {
+    // The Rex launcher (rex/nav.lua, R4) sets NAV_SOURCE_BLOCK etc.;
+    // muxhost's RexHost::from_env("NAV") reads them. A plain terminal
+    // inside Rex also works: REX_SESSION is set, and the source block
+    // degrades to the focused block.
+    match muxhost::rex::RexHost::from_env("NAV") {
+        Ok(h) => Box::new(h),
+        // No source block (launched without the launcher): keep the
+        // socket-less conveniences working by defaulting the source to
+        // the session's focused block — the tree itself doesn't need
+        // a source pane.
+        Err(e) => {
+            let session = std::env::var("REX_SESSION").unwrap_or_default();
+            if session.is_empty() {
+                return Box::new(NoHost);
+            }
+            let cli = std::env::var("REX_CLI").unwrap_or_else(|_| "rex".to_string());
+            let host = muxhost::rex::RexHost::new(
+                Box::new(muxhost::rex::CliRunner { cli }),
+                session,
+                muxhost::SourceRef {
+                    pane_id: String::new(),
+                    tab_id: String::new(),
+                },
+            );
+            let _ = e; // the source block was the missing piece
+            Box::new(host)
+        }
+    }
+}
+
+// ── Jump delegation (rex-migration.md R0/R3) ────────────────────────────────
+
+/// Jump through the host. When the host DELEGATES the jump (Rex: the
+/// app's view is client-side and only the launcher's app-invoked
+/// action may queue `session.select` / `client.tab.*`), write the
+/// intent record the launcher reads after the popup closes, to
+/// `$NAV_INTENT_FILE` (the launcher sets it; fallback
+/// `~/.config/nav/intent.json`). Only for the user's FINAL jump —
+/// template building's intermediate focus calls go through the raw
+/// `host.jump` and ignore a delegated outcome.
+pub fn jump(
+    host: &dyn NavFull,
+    jump: muxhost::navigate::Jump,
+) -> Result<muxhost::navigate::JumpOutcome, String> {
+    use muxhost::navigate::JumpOutcome;
+    let outcome = host.jump(jump.clone())?;
+    if outcome == JumpOutcome::Delegated {
+        let path = std::env::var("NAV_INTENT_FILE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| crate::paths::nav_dir().join("intent.json"));
+        let record = intent_record(&jump);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&path, serde_json::to_string(&record).unwrap_or_default())
+            .map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+    Ok(outcome)
+}
+
+/// The launcher's jump record (R0 spike: the action opens the popup,
+/// waits it out, then reads this file and carries the jump out).
+fn intent_record(jump: &muxhost::navigate::Jump) -> serde_json::Value {
+    match jump {
+        muxhost::navigate::Jump::FocusPane { pane_id } => {
+            serde_json::json!({"kind": "focus", "block_id": pane_id})
+        }
+        muxhost::navigate::Jump::SelectSession {
+            session_id,
+            focus_pane,
+        } => match focus_pane {
+            Some(block_id) => serde_json::json!({
+                "kind": "focus", "session_id": session_id, "block_id": block_id,
+            }),
+            None => serde_json::json!({"kind": "open_session", "session_id": session_id}),
+        },
+    }
 }
 
 // ── NoHost: the dev fallback ─────────────────────────────────────────────────

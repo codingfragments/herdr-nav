@@ -265,11 +265,93 @@ fn read_pane_scrollback(
     }
 }
 
+/// Expand/strip the non-SGR escape sequences a multiplexer capture can
+/// carry, before `ansi-to-tui` parses (it handles SGR but *drops*
+/// cursor-forward, which would shift columns):
+/// - `CSI n C` (cursor forward — Rex's `--format=vt` uses it as
+///   run-length spaces) becomes n spaces;
+/// - SGR (`CSI … m`) is kept verbatim, for ansi-to-tui to style;
+/// - every other escape (OSC 8 hyperlinks, charset selection, other
+///   CSI) is dropped, so styles survive and columns line up.
+fn vt_prepare(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != 0x1b {
+            // copy the (UTF-8) char
+            let ch_len = utf8_len(bytes[i]);
+            out.push_str(&text[i..i + ch_len]);
+            i += ch_len;
+            continue;
+        }
+        i += 1;
+        match bytes.get(i) {
+            Some(b'[') => {
+                // CSI: params until a letter final
+                i += 1;
+                let start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                let final_byte = bytes.get(i).copied().unwrap_or(b'm');
+                i += 1;
+                match final_byte {
+                    b'C' => {
+                        let n: usize = text[start..i - 1]
+                            .split(';')
+                            .next()
+                            .and_then(|p| p.parse().ok())
+                            .unwrap_or(1);
+                        for _ in 0..n.max(1) {
+                            out.push(' ');
+                        }
+                    }
+                    b'm' => {
+                        out.push_str(&text[start - 2..i]); // keep "ESC[…m"
+                    }
+                    _ => {} // every other CSI: dropped
+                }
+            }
+            Some(b']') => {
+                // OSC: drop until BEL or ST (ESC \)
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            Some(b'(') | Some(b')') => i += 2, // charset designation + 1 char
+            _ => i += 1,                       // other single-char escapes
+        }
+    }
+    out
+}
+
+fn utf8_len(b: u8) -> usize {
+    match b {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        _ => 4,
+    }
+}
 /// Parse ANSI-styled text into one ratatui `Line` per line (spec §7;
-/// ported from herdr-flash's `parse_ansi_lines`). On any parse failure
-/// we fall back to plain unstyled lines so the preview never breaks.
+/// ported from herdr-flash's `parse_ansi_lines`; `vt_prepare` is
+/// flash's fix for Rex's `--format=vt`, which uses `CSI n C` as
+/// run-length spaces that ansi-to-tui would drop — columns then line
+/// up wrong). On any parse failure we fall back to plain unstyled
+/// lines so the preview never breaks.
 fn ansi_to_lines(text: &str) -> Vec<Line<'static>> {
     use ansi_to_tui::IntoText as _;
+    let text = vt_prepare(text);
     match text.into_text() {
         Ok(t) => t.lines.into_iter().collect(),
         Err(_) => text.lines().map(|l| Line::raw(l.to_string())).collect(),
@@ -755,5 +837,51 @@ mod tests {
         // The kept span retains its style.
         assert_eq!(clipped[0].spans.len(), 1);
         assert_eq!(clipped[0].spans[0].style, red);
+    }
+}
+
+#[cfg(test)]
+mod vt_fixture_tests {
+    use super::*;
+
+    /// The recorded Rex vt capture (tests/fixtures/rex/capture-vt.txt):
+    /// vt_prepare must expand CSI-n-C runs into spaces and ansi-to-tui
+    /// must turn the result into styled lines — the same fix
+    /// herdr-flash made for Rex's `--format=vt`.
+    #[test]
+    fn vt_fixture_parses_into_lines() {
+        let raw = include_str!("../tests/fixtures/rex/capture-vt.txt");
+        let lines = ansi_to_lines(raw);
+        assert!(!lines.is_empty(), "no lines parsed from the fixture");
+        let text: String = lines
+            .iter()
+            .flat_map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(
+            text.contains("fish"),
+            "fixture text not rendered: {:?}",
+            &text[..text.len().min(80)]
+        );
+        // CSI n C expanded into spaces, not dropped: no stray ESC in output.
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn vt_prepare_expands_cursor_forward() {
+        // "a" + ESC[10C + "b" -> 10 spaces between them, SGR kept.
+        let prepared = vt_prepare("a\u{1b}[10Cb\u{1b}[1;32m x \u{1b}[0m");
+        assert!(
+            prepared.contains("a          b"),
+            "cursor-forward not expanded: {prepared:?}"
+        );
+        assert!(
+            prepared.contains("\u{1b}[1;32m"),
+            "SGR must survive verbatim"
+        );
     }
 }

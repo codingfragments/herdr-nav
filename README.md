@@ -122,6 +122,16 @@ and rebuilds in place; there's no separate `herdr plugin update`.
 
 Once installed, bind a key — see [`doc/keybinding.md`](doc/keybinding.md).
 
+## Hosts
+
+`herdr-nav` runs under [Herdr](https://herdr.dev) (its native host) and
+[Rex](https://rex.dev) (from the R3 migration on): the same binary, one
+host layer ([`muxhost`](https://github.com/codingfragments/muxhost) +
+nav's `src/host_ext/`). Herdr needs no setup; under Rex the plugin
+group is hidden (Rex has no plugin system) and jumps are carried out by
+the Rex launcher, which reads the jump intent the switcher writes —
+see [`doc/env-vars.md`](doc/env-vars.md) and `rex-migration.md`.
+
 ## Platform support
 
 Built and tested for macOS (Apple Silicon) and Linux (x86_64 + aarch64).

@@ -1,0 +1,186 @@
+{
+    "sessions": [
+        {
+            "active": false,
+            "active_window_id": "window:01a1f0f1-1d81-7ee0-ad72-c32a32e7b4c6",
+            "label": "rolling-hollow",
+            "session_id": "session:01a1da11-70e7-708c-9cb3-986c917a8c85",
+            "windows": [
+                {
+                    "active": false,
+                    "blocks": [
+                        {
+                            "block_id": "block:01a1da11-70e7-71a5-8205-a8e0868feaca",
+                            "label": "shell",
+                            "program_status": {
+                                "records": {}
+                            },
+                            "pwd": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 21455
+                                },
+                                "pwd": "file://codingfragments3/Users/stefan.marx/projekteHome/marxworld/workEnvironment/herdr/herdr-flash"
+                            },
+                            "title": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 21455
+                                },
+                                "title": "~/p/m/w/h/herdr-flash"
+                            }
+                        },
+                        {
+                            "block_id": "block:01a1f066-eb28-7ad1-99be-6a929690a7a9",
+                            "label": "shell",
+                            "program_status": {
+                                "records": {}
+                            },
+                            "pwd": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 54087
+                                },
+                                "pwd": "file://codingfragments3/Users/stefan.marx/.ssh/workspaces"
+                            },
+                            "title": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 54087
+                                },
+                                "title": "~/.s/workspaces"
+                            }
+                        },
+                        {
+                            "block_id": "block:01a1def5-e1c6-7a44-8e3a-37924cc8b89e",
+                            "label": "shell",
+                            "program_status": {
+                                "records": {}
+                            },
+                            "pwd": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 21454
+                                },
+                                "pwd": "file://codingfragments3/Users/stefan.marx/.ssh/workspaces"
+                            },
+                            "title": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 21454
+                                },
+                                "title": "~/.s/workspaces"
+                            }
+                        }
+                    ],
+                    "focused_block_id": "block:01a1def5-e1c6-7a44-8e3a-37924cc8b89e",
+                    "label": "Window f977330d",
+                    "window_id": "window:01a1da11-7120-7c2d-a1ec-0dbcf977330d"
+                },
+                {
+                    "active": true,
+                    "blocks": [
+                        {
+                            "block_id": "block:01a1f0f1-1d45-74c6-b5d0-a55926322bf2",
+                            "label": "shell",
+                            "program_status": {
+                                "records": {}
+                            },
+                            "pwd": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 53259
+                                },
+                                "pwd": "file://codingfragments3/Users/stefan.marx/projekteHome/marxworld/workEnvironment/herdr/herdr-zextract"
+                            },
+                            "title": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 53259
+                                },
+                                "title": "~/p/m/w/h/herdr-zextract"
+                            }
+                        }
+                    ],
+                    "focused_block_id": "block:01a1f0f1-1d45-74c6-b5d0-a55926322bf2",
+                    "label": "Window 32e7b4c6",
+                    "window_id": "window:01a1f0f1-1d81-7ee0-ad72-c32a32e7b4c6"
+                }
+            ]
+        },
+        {
+            "active": false,
+            "active_window_id": "window:01a1f16e-588d-738e-bf83-1726f1cfd04d",
+            "label": "nav-r0-target",
+            "session_id": "session:01a1f16e-586d-7353-8999-13c60ad0d533",
+            "windows": [
+                {
+                    "active": true,
+                    "blocks": [
+                        {
+                            "block_id": "block:01a1f16e-586d-73cc-8fbd-0bfa15081fc5",
+                            "label": "shell",
+                            "program_status": {
+                                "records": {}
+                            },
+                            "pwd": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 53110
+                                },
+                                "pwd": "file://codingfragments3/Users/stefan.marx/.config/rex"
+                            },
+                            "title": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 53110
+                                },
+                                "title": "~/.c/rex"
+                            }
+                        }
+                    ],
+                    "focused_block_id": "block:01a1f16e-586d-73cc-8fbd-0bfa15081fc5",
+                    "label": "Window f1cfd04d",
+                    "window_id": "window:01a1f16e-588d-738e-bf83-1726f1cfd04d"
+                }
+            ]
+        },
+        {
+            "active": false,
+            "active_window_id": "window:01a1f1e0-52c7-7bcb-a0fc-6ccaaa445e78",
+            "label": "selftest",
+            "session_id": "session:01a1f1e0-528a-76b6-b9c5-13ae6ca90477",
+            "windows": [
+                {
+                    "active": true,
+                    "blocks": [
+                        {
+                            "block_id": "block:01a1f1e0-528a-780a-a291-0a216ec45633",
+                            "label": "shell",
+                            "program_status": {
+                                "records": {}
+                            },
+                            "pwd": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 39237
+                                },
+                                "pwd": "file://codingfragments3/Users/stefan.marx/.config/rex"
+                            },
+                            "title": {
+                                "owner": {
+                                    "name": "fish",
+                                    "pid": 39237
+                                },
+                                "title": "~/.c/rex"
+                            }
+                        }
+                    ],
+                    "focused_block_id": "block:01a1f1e0-528a-780a-a291-0a216ec45633",
+                    "label": "Window aa445e78",
+                    "window_id": "window:01a1f1e0-52c7-7bcb-a0fc-6ccaaa445e78"
+                }
+            ]
+        }
+    ]
+}

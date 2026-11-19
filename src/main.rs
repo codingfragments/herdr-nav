@@ -246,9 +246,24 @@ fn event_loop<B: ratatui::backend::Backend>(
     // Search view: None = browse mode, Some = search mode (query non-empty).
     // A non-empty `--seed` starts the popup in search mode directly
     // (e.g. "@agents" → flat list of all agent leaves, cursor at 0).
+    // The @plugins scope on a host without a plugin system (Rex)
+    // shows a "not available" flash instead of a bare empty list
+    // (rex-migration R3).
+    let plugins_hint = |view: Option<&search::SearchView>| -> Option<(String, String)> {
+        let v = view?;
+        if !host.caps().plugins && v.query.trim_start().starts_with("@plugins") {
+            Some(("plugins".to_string(), "not available on Rex".to_string()))
+        } else {
+            None
+        }
+    };
+
     let mut search_view: Option<search::SearchView> = seed
         .filter(|s| !s.trim().is_empty())
         .map(|s| search::view(&haystack, s, &cfg.bias));
+    if let Some(hint) = plugins_hint(search_view.as_ref()) {
+        flash_error = Some(hint);
+    }
     // Phase 16 "extend zoxide": once the user presses `Tab` in search
     // mode to extend the zoxide list beyond `zoxide_limit`, this flag
     // sticks for the rest of the invocation so we don't re-run the
@@ -838,8 +853,13 @@ fn event_loop<B: ratatui::backend::Backend>(
                         &prompt.template,
                     ) {
                         Ok(Some(pane_id)) => {
-                            // Focus the first pane so the user lands in it.
-                            let _ = host.jump(muxhost::navigate::Jump::FocusPane { pane_id });
+                            // Focus the first pane so the user lands in it
+                            // (under Rex this writes the jump intent the
+                            // launcher carries out).
+                            let _ = host_ext::jump(
+                                host,
+                                muxhost::navigate::Jump::FocusPane { pane_id },
+                            );
                             break;
                         }
                         Ok(None) => break,
@@ -1013,6 +1033,9 @@ fn event_loop<B: ratatui::backend::Backend>(
                             let mut v = search::view(&haystack, c.to_string(), &cfg.bias);
                             v.cursor = 0;
                             search_view = Some(v);
+                            if let Some(hint) = plugins_hint(search_view.as_ref()) {
+                                flash_error = Some(hint);
+                            }
                         }
                     }
                 }
@@ -1254,6 +1277,15 @@ fn main() {
     // match — no clap, to keep the binary zero-dep-increase and match
     // the popup's one-shot nature. See spec/capture-template-plan.md.
     match std::env::args().nth(1).as_deref() {
+        // Launcher preflight (rex-migration R3): the Rex launcher checks
+        // --host-api before opening the popup, so a binary too old for
+        // its jump-intent contract fails loudly instead of silently.
+        Some("--version") => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+        }
+        Some("--host-api") => {
+            println!("1");
+        }
         Some("capture") => {
             if let Err(e) = run_capture() {
                 eprintln!("herdr-nav: {e}");
