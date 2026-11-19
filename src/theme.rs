@@ -1,7 +1,10 @@
-//! Theme palette — auto-follows Herdr's `[theme]` setting.
+//! Theme palette — follows the `[theme]` setting (rex-migration.md R2).
 #![allow(clippy::doc_lazy_continuation, clippy::doc_markdown)]
 //!
-//! Reads `~/.config/herdr/config.toml` at launch, resolves the theme
+//! Resolution order: `[host.<host>].theme` in nav's config (a plain
+//! name), then `[theme]`/`[theme.custom]` in nav's config, then
+//! herdr's `~/.config/herdr/config.toml`, then the default. Reads
+//! `~/.config/herdr/config.toml` at launch, resolves the theme
 //! name to one of the 18 built-in palettes Herdr ships (catppuccin,
 //! catppuccin-latte, terminal, tokyo-night, …, vesper), and applies
 //! `[theme.custom]` overrides. Falls back to Herdr's default
@@ -570,25 +573,47 @@ pub fn parse_color(s: &str) -> Color {
 /// `[theme].name` and `[theme.custom]` overrides. Falls back to
 /// Herdr's default (catppuccin) if the file is missing, the theme
 /// is unknown, or parsing fails — never crashes.
-pub fn load() -> Palette {
-    let Some(home) = std::env::var("HOME").ok() else {
-        return Palette::default();
-    };
-    let path = format!("{home}/.config/herdr/config.toml");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Palette::default();
-    };
-    parse_config(&content).unwrap_or_else(|_| Palette::default())
+pub fn load(host: &str) -> Palette {
+    // Resolution order (rex-migration.md R2):
+    // 1. `[host.<host>].theme` in nav's config (a theme name).
+    // 2. `[theme]` / `[theme.custom]` in nav's config — only when that
+    //    config actually declares a theme section, so a nav config
+    //    without one still follows herdr's.
+    // 3. `[theme]` / `[theme.custom]` in herdr's config.
+    // 4. The default (catppuccin, herdr's own default).
+    let cfg = crate::config::Config::load();
+    if let Some(name) = cfg.host_theme(host) {
+        return Palette::from_name(&name).unwrap_or_else(Palette::default);
+    }
+    if let Some(path) = crate::paths::config_file() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Some(p) = parse_config(&content) {
+                return p;
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let path = format!("{home}/.config/herdr/config.toml");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Some(p) = parse_config(&content) {
+                return p;
+            }
+        }
+    }
+    Palette::default()
 }
 
 /// Parse the config TOML content into a palette. Minimal line-based
 /// parser (avoids a full TOML dep just for the theme block): finds
-/// `[theme]` name and `[theme.custom]` overrides.
-fn parse_config(content: &str) -> Result<Palette, String> {
+/// `[theme]` name and `[theme.custom]` overrides. Returns None when
+/// the content declares no theme section at all — the caller then
+/// falls through to the next config in the chain.
+fn parse_config(content: &str) -> Option<Palette> {
     let mut name = String::new();
     let mut custom: Vec<(String, String)> = Vec::new();
     let mut in_theme = false;
     let mut in_theme_custom = false;
+    let mut has_theme_section = false;
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -598,10 +623,12 @@ fn parse_config(content: &str) -> Result<Palette, String> {
             "[theme]" => {
                 in_theme = true;
                 in_theme_custom = false;
+                has_theme_section = true;
             }
             "[theme.custom]" => {
                 in_theme = false;
                 in_theme_custom = true;
+                has_theme_section = true;
             }
             s if s.starts_with('[') => {
                 in_theme = false;
@@ -623,6 +650,9 @@ fn parse_config(content: &str) -> Result<Palette, String> {
             }
         }
     }
+    if !has_theme_section {
+        return None;
+    }
     let mut palette = if name.is_empty() {
         Palette::default()
     } else {
@@ -631,7 +661,7 @@ fn parse_config(content: &str) -> Result<Palette, String> {
     for (k, v) in custom {
         palette = palette.with_override(&k, &v);
     }
-    Ok(palette)
+    Some(palette)
 }
 
 // ── Kind-glyph colour mapping (§9) ───────────────────────────────────────────
@@ -733,9 +763,18 @@ red = "#ff0000"
     }
 
     #[test]
-    fn parse_config_missing_theme_uses_default() {
+    fn parse_config_without_theme_section_is_none() {
+        // No [theme]/[theme.custom] at all → None, so the caller falls
+        // through to the next config in the chain (nav → herdr → default).
         let toml = "[other]\nkey = \"value\"\n";
-        let p = parse_config(toml).unwrap();
+        assert!(parse_config(toml).is_none());
+    }
+
+    #[test]
+    fn parse_config_empty_theme_section_means_default() {
+        // An explicit but empty [theme] section → the default palette
+        // (herdr's own fallback), not None.
+        let p = parse_config("[theme]\n").unwrap();
         assert_eq!(p, Palette::catppuccin());
     }
 }

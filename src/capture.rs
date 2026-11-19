@@ -967,13 +967,15 @@ fn inject_comments(yaml: &str, annotations: &[Annotation]) -> String {
 }
 
 /// The templates dir: `~/.config/herdr/templates/`.
+/// The templates write dir (rex-migration.md R2): the first of
+/// `~/.config/nav/templates/` and `~/.config/herdr/templates/` that
+/// exists, else nav's (created by `write_template`).
 fn templates_dir() -> Result<std::path::PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    Ok(std::path::PathBuf::from(home).join(".config/herdr/templates"))
+    Ok(crate::paths::templates_write_dir())
 }
 
-/// Write a template to `~/.config/herdr/templates/<name>.yaml`, creating
-/// the dir if missing. Returns the written path.
+/// Write a template to `<templates-dir>/<name>.yaml`, creating the
+/// dir if missing. Returns the written path.
 pub fn write_template(name: &str, yaml: &str) -> Result<std::path::PathBuf, String> {
     let dir = templates_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;

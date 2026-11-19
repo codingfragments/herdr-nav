@@ -17,8 +17,13 @@ hardcoded 1-tab/1-pane default.
 
 ### File layout
 
+Templates are read from `~/.config/nav/templates/` when that dir exists,
+else from the legacy `~/.config/herdr/templates/` (rex-migration R2).
+Captured templates (`herdr-nav capture`) are written to the first of the
+two that exists, else to nav's (created):
+
 ```
-~/.config/herdr/templates/
+~/.config/nav/templates/          # preferred
 ├── rust-dev.yaml
 ├── plain.yaml
 └── notes.yaml

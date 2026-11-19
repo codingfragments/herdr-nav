@@ -263,7 +263,33 @@ Original checklist:
 
 ### Phase R2: neutral config, pinned and template paths, in `phase/rex-2-paths`
 
-Status: ☐ not started
+Status: ☑ done (2026-11-20) — 200 tests green.
+
+- ☑ Lookup orders as in the table above, in the new `src/paths.rs`:
+  config.toml `$NAV_CONFIG` → `~/.config/nav/` → the legacy plugin
+  dir; targets.toml nav → herdr → plugin dir (shared by both hosts);
+  templates nav → herdr dir, write to the first existing dir else
+  nav's. Pin/unpin writes stay on a legacy file when it is the only
+  one that exists (no data fork — existing setups keep working
+  unchanged).
+- ☑ Theme: `[host.<host>].theme` (a name), then `[theme]`/
+  `[theme.custom]` in nav's config (only when that config declares a
+  theme section — a nav config without one still follows herdr's),
+  then herdr's config, then the default. `theme::load` takes the host
+  name.
+- ☑ Optional `[host.rex]` / `[host.herdr]` override tables with
+  `groups` and `theme` only; `resolved_groups(host)` and
+  `host_theme(host)` resolve them (unknown hosts — e.g. the dev
+  `NoHost` — use the top-level values).
+- ☑ Docs: `doc/config-reference.md`, `doc/templates.md`,
+  `doc/env-vars.md` (`NAV_HOST`, `NAV_CONFIG`), README, commented
+  examples in `config.example.toml`.
+- Also: the path logic is unit-tested with throwaway HOMEs
+  (`src/paths.rs`), and env-mutating tests now share an
+  `ENV_LOCK` (cargo test runs them in parallel threads — they were
+  racing on `HOME`).
+
+Original checklist:
 
 - [ ] Lookup orders as in the table above. Pinning (`write_pin`,
   `unpin`) and capture writes go to the nav paths unless a legacy file is

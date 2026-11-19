@@ -494,15 +494,15 @@ fn build_pinned_tree() -> Node {
     }
 }
 
-/// Append a pin to `~/.config/herdr/targets.toml` (spec §8: `^p`).
-/// `path` is already expanded (absolute). The slot is `max+1`, or 1
-/// if the file is empty/missing. Idempotent: a path already pinned
-/// is a no-op. Returns the slot assigned, or an error message.
+/// Append a pin to the pinned-targets file (spec §8: `^p`). `path` is
+/// already expanded (absolute). The file is nav's
+/// (`~/.config/nav/targets.toml`) unless only a legacy herdr file
+/// exists, in which case it stays there (rex-migration.md R2 — no
+/// data fork). The slot is `max+1`, or 1 if the file is empty/missing.
+/// Idempotent: a path already pinned is a no-op. Returns the slot
+/// assigned, or an error message.
 pub fn write_pin(path: &str) -> Result<u32, String> {
-    let dir = std::env::var("HOME")
-        .map(|h| format!("{h}/.config/herdr"))
-        .map_err(|_| "HOME not set".to_string())?;
-    let file = format!("{dir}/targets.toml");
+    let file = crate::paths::targets_write_path();
     let existing = std::fs::read_to_string(&file).unwrap_or_default();
     let pins = parse_targets_toml(&existing);
     // Idempotent: already pinned.
@@ -528,21 +528,20 @@ pub fn write_pin(path: &str) -> Result<u32, String> {
         format!("{prefix}\n[[pin]]\npath = \"{expanded}\"\nslot = {next_slot}\n")
     };
     // Create the dir if missing.
-    let _ = std::fs::create_dir_all(&dir);
+    if let Some(dir) = std::path::Path::new(&file).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     std::fs::write(&file, format!("{existing}{block}")).map_err(|e| e.to_string())?;
     Ok(next_slot)
 }
 
-/// Remove a pin from `~/.config/herdr/targets.toml` (spec §8: `^u`).
-/// `path` is already expanded (absolute). Rewrites the file with the
-/// pin removed and remaining slots renumbered 1..N. No-op (Ok) if the
-/// path isn't pinned or the file is missing. Returns true if a pin was
-/// removed.
+/// Remove a pin from the pinned-targets file (spec §8: `^u`). `path`
+/// is already expanded (absolute). Rewrites the file the pins live in
+/// (the R2 write target) with the pin removed and remaining slots
+/// renumbered 1..N. No-op (Ok) if the path isn't pinned or the file
+/// is missing. Returns true if a pin was removed.
 pub fn unpin(path: &str) -> Result<bool, String> {
-    let dir = std::env::var("HOME")
-        .map(|h| format!("{h}/.config/herdr"))
-        .map_err(|_| "HOME not set".to_string())?;
-    let file = format!("{dir}/targets.toml");
+    let file = crate::paths::targets_write_path();
     let existing = std::fs::read_to_string(&file).unwrap_or_default();
     let pins = parse_targets_toml(&existing);
     let expanded = expand_path(path);
@@ -565,20 +564,13 @@ pub fn unpin(path: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Read `~/.config/herdr/targets.toml` → `Vec<(path, slot)>`. Empty
-/// if missing or malformed (no crash).
+/// Read the pinned targets → `Vec<(path, slot)>`. Empty if missing or
+/// malformed (no crash).
 fn read_targets_toml() -> Vec<(String, u32)> {
-    // Spec §13: `~/.config/herdr/targets.toml` (herdr-level, shared —
-    // not the plugin's own config dir). Prefer the herdr-level file;
-    // fall back to the plugin dir, then HOME, so the tree still
-    // renders wherever the file lives.
-    let herdr_dir = std::env::var("HOME")
-        .ok()
-        .map(|h| format!("{h}/.config/herdr"));
-    let plugin_dir = std::env::var("HERDR_PLUGIN_CONFIG_DIR").ok();
-    let candidates = [herdr_dir, plugin_dir];
-    for dir in candidates.into_iter().flatten() {
-        let path = format!("{dir}/targets.toml");
+    // rex-migration.md R2: nav's `~/.config/nav/targets.toml` first,
+    // then the legacy herdr file, then the plugin dir — the first
+    // file that exists wins. Empty if none does (no crash).
+    for path in crate::paths::targets_read_candidates() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             return parse_targets_toml(&content);
         }
@@ -1079,17 +1071,13 @@ fn is_default_direction(d: &str) -> bool {
     d == "v"
 }
 
-/// Read every `*.yaml` in `~/.config/herdr/templates/` →
-/// `Vec<Template>`. Empty if the dir is missing or empty
-/// (no crash; Enter skips the picker and uses the hardcoded default).
-/// One file per template.
+/// Read every `*.yaml` in the templates dir → `Vec<Template>`. The
+/// dir is `~/.config/nav/templates/` when it exists, else the legacy
+/// `~/.config/herdr/templates/` (rex-migration.md R2). Empty if the
+/// dir is missing or empty (no crash; Enter skips the picker and uses
+/// the hardcoded default). One file per template.
 pub fn read_templates() -> Vec<Template> {
-    let Some(dir) = std::env::var("HOME")
-        .ok()
-        .map(|h| format!("{h}/.config/herdr/templates"))
-    else {
-        return Vec::new();
-    };
+    let dir = crate::paths::templates_read_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -1822,7 +1810,11 @@ mod dir_tests {
 
     #[test]
     fn expand_path_tilde() {
-        // ~/foo → $HOME/foo when HOME is set.
+        // ~/foo → $HOME/foo when HOME is set. (HOME is process-global —
+        // take the shared env lock.)
+        let _g = crate::paths::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         std::env::set_var("HOME", "/Users/test");
         assert_eq!(expand_path("~/foo"), "/Users/test/foo");
         assert_eq!(expand_path("/abs/path"), "/abs/path");
@@ -2002,6 +1994,9 @@ mod resolve_cwd_tests {
     }
     #[test]
     fn tilde_to_home() {
+        let _g = crate::paths::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         std::env::set_var("HOME", "/Users/test");
         assert_eq!(resolve_cwd("/base", "~/code"), "/Users/test/code");
         std::env::remove_var("HOME");
