@@ -388,7 +388,15 @@ Original checklist:
 ### Phase R4: Rex launcher and jump handler (`rex/nav.lua`), in `phase/rex-4-lua-launcher`
 
 Status: ☑ implemented, installed in the user's Rex config
-(2026-11-20; **fixed 2026-11-20 again**: the R3 jump-swap edit had
+(2026-11-20; **fixed twice on 2026-11-20** — third fix: a select
+made while the popup's layer is still open is undone when the app's
+focus logic snaps back on layer close (observed live: select exit=0,
+app attached, view stayed). The carry-out now fires a SECOND select
+from a detached nohup child 0.5 s after nav exits — the layer is
+closed, the state is clean, the deferred select wins (survival +
+switch verified live). The select also carries window_id: the app's
+tab strip follows client actions, not server focus, so cross-window
+jumps need it: the R3 jump-swap edit had
 silently no-op'd for the Session pane-jump and the Agents invoke —
 they still called the raw `host.jump`, whose Delegated outcome was
 ignored, so Enter closed the popup without jumping at all. Found by

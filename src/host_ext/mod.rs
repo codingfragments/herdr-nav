@@ -243,6 +243,8 @@ pub fn jump(
 /// has already run and the app's view simply stays (the documented
 /// CLI limit, not an error).
 fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     let Some(client) = var("NAV_CLIENT_ID") else {
         return Ok(());
@@ -255,28 +257,39 @@ fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
         return Err("jump record has no session_id — cannot select it in the app".to_string());
     };
     let cli = var("REX_CLI").unwrap_or_else(|| "rex".to_string());
-    let out = std::process::Command::new(&cli)
-        .args([
-            "-C",
-            &client,
-            "do",
-            "session.select",
-            &format!("session_id={session}"),
-        ])
-        .output()
-        .map_err(|e| format!("run {cli}: {e}"))?;
+    // The window matters: the app's tab strip follows client actions,
+    // not server focus — a cross-window jump needs window_id in the
+    // select too (the vim_nav lesson).
+    let window = record
+        .get("window_id")
+        .and_then(|w| w.as_str())
+        .filter(|w| !w.is_empty());
+    let mut select_args = vec![format!("session_id={session}")];
+    if let Some(w) = window {
+        select_args.push(format!("window_id={w}"));
+    }
+
+    // 1. Synchronous, for the error path: a refusal (Remote Control
+    //    off, unknown client) keeps the popup open with a hint.
+    let mut cmd = Command::new(&cli);
+    cmd.args(["-C", &client, "do", "session.select"]);
+    for a in &select_args {
+        cmd.arg(a);
+    }
+    let out = cmd.output().map_err(|e| format!("run {cli}: {e}"))?;
     // Debug trail (the popup is gone a moment later, so this is the
     // only place the carry-out can leave evidence): one line per jump.
     let _ = std::fs::write(
         "/tmp/herdr-nav-jump.log",
         format!(
-            "{} select client={} session={} exit={} stderr={:?}\n",
+            "{} select client={} session={} window={:?} exit={} stderr={:?}\n",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             client,
             session,
+            window,
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stderr)
                 .chars()
@@ -290,6 +303,36 @@ fn carry_out_rex_select(record: &serde_json::Value) -> Result<(), String> {
                 .to_string(),
         );
     }
+
+    // 2. Deferred re-select, AFTER this popup's layer closes (a child
+    //    that outlives nav): while the layer is open the app's focus
+    //    logic snaps back to the source on close, undoing a select
+    //    made in step 1 (observed live 2026-11-20: exit=0, the app
+    //    attached, the view stayed). The second select lands in a
+    //    clean state and wins. Idempotent — it re-selects the same
+    //    session/window.
+    // The child escapes this popup's process group (nohup + background
+    // via a shell that exits immediately — the pattern zextract's
+    // detached watcher uses, proven on this Rex version), so the
+    // layer's teardown can't kill it.
+    let q = |s: &str| s.replace('\'', "'\\''");
+    let mut inner = format!(
+        "sleep 0.5; exec '{}' -C '{}' do session.select",
+        q(&cli),
+        q(&client)
+    );
+    for a in &select_args {
+        inner.push_str(&format!(" '{}'", q(a)));
+    }
+    let outer = format!("nohup /bin/sh -c '{}' >/dev/null 2>&1 &", q(&inner));
+    let _ = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(outer)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
     Ok(())
 }
 
