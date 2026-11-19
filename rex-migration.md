@@ -567,7 +567,31 @@ Status: ☐ not started
 
 ### Phase R6: distribution and release `v0.7.0`, in `phase/rex-6-distribution` then `release/0.7.0`
 
-Status: ☐ not started
+Status: ☑ done (2026-11-19) — **the migration is complete.**
+
+- ☑ README Install rewritten: Herdr (`herdr plugin install` — the
+  `[[build]]` step downloads the release binary on tagged versions,
+  sha256-checked, source build as fallback; no Rust needed), Rex
+  (`mise use -g github:codingfragments/herdr-nav` + the
+  `rex/nav.lua` launcher + Remote Control), `cargo install --git`
+  as the from-source fallback (PR #54).
+- ☑ Release PR #55: version bumps (Cargo.toml +
+  herdr-plugin.toml → 0.7.0) and the CHANGELOG "Rex release" entry.
+- ☑ Tag `v0.7.0` pushed; the Release workflow built all three
+  triples with sha256s plus the rolling `latest` tag. (First run
+  failed — `macos-14` is retired; runner bumped to `macos-15`,
+  PR #56, tag re-pushed.)
+- ☑ Verified live: `mise use -g github:codingfragments/herdr-nav@0.7.0`
+  installed and pinned (config generation 2 clean); the
+  `~/.local/bin/herdr-nav` **dev symlink removed** — the login PATH
+  now serves the release binary; `bin/fetch-binary` against a fresh
+  clone of the tag downloaded and sha256-verified the release
+  binary (the `herdr plugin install` path).
+- ☑ Dotfiles: herdr-nav moved from "impossible under Rex" to Done in
+  the Rex migration plan, mise pin included (leika/Dotfiles#101),
+  and the live `nav.lua` (capture action + cmd+k bindings) tracked
+  (leika/Dotfiles#102). Not done: the optional Linux-host mise
+  check (no Linux host available here).
 
 - [ ] Check that `mise use -g github:codingfragments/herdr-nav@<ver>`
   works on macOS arm64 and on one Linux host.
