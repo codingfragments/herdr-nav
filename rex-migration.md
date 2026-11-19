@@ -479,7 +479,9 @@ copies or symlinks it to `~/.config/rex/plugins/nav.lua` and adds
 
 ### Phase R5: templates and capture on Rex, in `phase/rex-5-templates-capture` (go/no-go)
 
-Status: ▐ in progress (2026-11-20, started early on user direction:
+Status: ☑ done (2026-11-20, GO delivered — PR #53)
+
+(R5 finished early: it had been (2026-11-20, started early on user direction:
 "the templates should be different from the herdr templates"):
 - ☑ Template dirs are host-scoped: herdr keeps the R2 chain
   (`~/.config/nav/templates/` → the legacy herdr dir); **Rex gets its
@@ -532,8 +534,9 @@ Status: ▐ in progress (2026-11-20, started early on user direction:
   server wrote a correct template (nested v60/h50 split, both tabs,
   relative cwds) to `~/.config/nav/rex/templates/`. The `nav_capture`
   action + `ctrl+s>ctrl+t` binding are live in the user's config.
-- ☐ Left for the user: the wizard under Rex (`ctrl+s>ctrl+t` in the
-  app) and opening the captured template via the switcher.
+- ☑ User-confirmed (2026-11-20): the wizard (`ctrl+s>ctrl+t`) and
+  opening the captured template via the switcher both work. **R5
+  done** (PR #53).
 
 Original checklist:
 
