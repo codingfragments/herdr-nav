@@ -25,16 +25,50 @@ switcher writes a jump record and the launcher carries it out.
    require("plugins.nav")
    ```
 
+   A binary installed with mise is only found if you also add a
+   `lib/env.lua`; see [Environment](#environment-the-rex-cli-and-your-login-path)
+   below.
+
 3. Bindings (the same keys as under herdr):
 
    | Key | Action | herdr equivalent |
    |---|---|---|
    | `ctrl+s>s`, `cmd+k` | the switcher | `prefix+s`, `super+k` |
    | `ctrl+s>a`, `cmd+shift+k` | agents only (opens seeded with `@agents`) | `super+shift+k` |
+   | `ctrl+s>ctrl+t` | capture the session as a template | `prefix+ctrl+t` |
 
    `ctrl+k` is [vim-herdr-navigation](https://github.com/codingfragments/vim-herdr-navigation)'s
-   and stays free; `ctrl+s>w` is `session.switch`. Capture gets a
-   binding in Phase R5.
+   and stays free; `ctrl+s>w` is `session.switch`.
+
+## Environment: the `rex` CLI and your login PATH
+
+The launcher needs two things from your Rex config, because the Rex
+server is started by the macOS app with a minimal `PATH`
+(`/usr/bin:/bin:/usr/sbin:/sbin`, no Homebrew, no mise shims):
+
+| It needs | Without it |
+|---|---|
+| the **`rex` CLI's absolute path** | the popup opens, but `herdr-nav` cannot call back into Rex |
+| a **login `PATH`** that contains `herdr-nav` | the popup says `nav: herdr-nav not found on this host` |
+
+On a standard macOS install the CLI is found with no setup (the launcher
+falls back to the app bundle under your own `$HOME`). Its fallback
+`PATH`, though, has **no mise shims and no `~/.local/bin`**, so a binary
+installed with `mise use -g` is **not found until you add a
+`~/.config/rex/lib/env.lua`**. One file serves every Rex launcher:
+
+```sh
+mkdir -p ~/.config/rex/lib
+curl -fsSL https://raw.githubusercontent.com/codingfragments/muxhost/main/examples/rex/lib/env.lua \
+  -o ~/.config/rex/lib/env.lua
+```
+
+That sample finds the CLI and asks your login shell (fish, zsh, bash, …)
+for its `PATH`, with nothing tied to an account or a home directory. To
+pin values by hand instead, to check what it resolves to, or to
+troubleshoot, see the muxhost guide:
+[The Rex environment for launchers](https://github.com/codingfragments/muxhost/blob/main/doc/rex-environment.md).
+Reload your config afterwards (`ctrl+s>shift+r`).
 
 ## How the jump works (Remote Control)
 
