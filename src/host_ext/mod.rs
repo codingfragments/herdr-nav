@@ -75,8 +75,8 @@ pub trait TemplateHost: Host {
     ) -> Result<String, String>;
 
     /// Whether [`split_pane`](TemplateHost::split_pane) actually starts
-    /// the new pane at `cwd` (herdr's `pane.split` does; Rex's `rex
-    /// split` has no cwd flag). When it doesn't, the builder sends an
+    /// the new pane at `cwd` (both hosts do: herdr's `pane.split` and
+    /// Rex's `rex split -c`). When a host can't, the builder sends an
     /// explicit `cd` to every split-off pane. Default `true`.
     fn split_pane_carries_cwd(&self) -> bool {
         true
