@@ -7,6 +7,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-11-21
+
+### Fixed — Rex
+
+- **Splits and later windows now start in the target cwd.** Opening a
+  session from a directory/template landed only the *first* pane in
+  the target path — `rex split` and `rex window new` both have a
+  `-c/--cwd` flag, but nav never sent it, and the `cd`-fallback never
+  fired because `split_pane_carries_cwd()` stayed at its default.
+  Every pane of a built template (splits, later tabs' roots) now lands
+  where the template says. Stale "rex split has no cwd flag"
+  comments corrected.
+
+### Added — development
+
+- `just rex-swap` / `just rex-restore`: run a dev build in place of
+  the mise-managed `herdr-nav` (the binary the Rex launcher resolves
+  through the mise shim) — one-time `.orig` backup, path-guarded to
+  mise install dirs.
+
 ## [0.7.0] — 2026-11-20
 
 The Rex release: the same binary now runs under [Rex](https://rex.dev)
