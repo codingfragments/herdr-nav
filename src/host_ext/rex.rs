@@ -43,14 +43,18 @@ impl TemplateHost for RexHost {
         })
     }
 
-    /// `rex window new -s S LABEL --json` → the new window's root block.
+    /// `rex window new -s S -c CWD [LABEL] --json` → the new window's
+    /// root block. `-c` sets the root block's working directory
+    /// (`rex window new` has a cwd flag, verified live) — without it
+    /// every later tab's first pane starts wherever Rex spawns it,
+    /// not the tab cwd.
     fn create_window(
         &self,
         session_id: &str,
-        _cwd: &str,
+        cwd: &str,
         label: Option<&str>,
     ) -> Result<String, String> {
-        let mut args: Vec<&str> = vec!["window", "new", "-s", session_id];
+        let mut args: Vec<&str> = vec!["window", "new", "-s", session_id, "-c", cwd];
         if let Some(label) = label {
             args.push(label);
         }
@@ -67,17 +71,20 @@ impl TemplateHost for RexHost {
             .to_string())
     }
 
-    /// `rex split -s S -b B --split=right|below --ratio PCT --json` →
-    /// the new block's id. `--ratio` is an INTEGER PERCENT of the split
-    /// the new block gets (verified live — a fraction is a flag parse
-    /// error); nav's ratio is a 0–1 float. The new block comes back as
-    /// the top-level `block_ids[0]`.
+    /// `rex split -s S -b B --split=right|below --ratio PCT -c CWD
+    /// --json` → the new block's id. `--ratio` is an INTEGER PERCENT
+    /// of the split the new block gets (verified live — a fraction is
+    /// a flag parse error); nav's ratio is a 0–1 float. The new block
+    /// comes back as the top-level `block_ids[0]`. `-c` starts the new
+    /// block in `cwd` (`rex split` gained a cwd flag; without it every
+    /// split-off pane stays wherever Rex spawns it — only the first
+    /// pane, created by `rex new -c`, landed in the target path).
     fn split_pane(
         &self,
         pane_id: &str,
         direction: &str,
         ratio: f64,
-        _cwd: &str,
+        cwd: &str,
     ) -> Result<String, String> {
         // nav's directions are herdr's split verbs; map to Rex's.
         let split = match direction {
@@ -98,6 +105,8 @@ impl TemplateHost for RexHost {
                 &block_session(self, pane_id),
                 "-b",
                 pane_id,
+                "-c",
+                cwd,
                 "--split",
                 split,
                 "--ratio",
@@ -533,6 +542,8 @@ mod tests {
                 "session:s1",
                 "-b",
                 "block:b1",
+                "-c",
+                "/tmp/x", // the split-off block starts in the child cwd
                 "--split",
                 "right",
                 "--ratio",
@@ -547,7 +558,34 @@ mod tests {
         let h = host(&runner);
         h.split_pane("block:b1", "down", 0.6, "/tmp/x").unwrap();
         let args = &runner.calls.borrow()[1].0;
-        assert_eq!(args[6], "below");
-        assert_eq!(args[8], "40");
+        assert_eq!(args[8], "below");
+        assert_eq!(args[10], "40");
+    }
+
+    /// Later tabs' root blocks: `rex window new` must carry the tab
+    /// cwd (`-c`) and, when given, the label — and still answer the
+    /// flat `block_ids[0]` shape.
+    #[test]
+    fn create_window_passes_cwd_and_label() {
+        let runner = FakeRunner::default()
+            .reply(Ok(r#"{"window_id":"window:w2","block_ids":["block:b9"]}"#));
+        let h = host(&runner);
+        let block = h
+            .create_window("session:s1", "/tmp/x", Some("logs"))
+            .unwrap();
+        assert_eq!(block, "block:b9");
+        assert_eq!(
+            runner.calls.borrow()[0].0,
+            vec![
+                "window",
+                "new",
+                "-s",
+                "session:s1",
+                "-c",
+                "/tmp/x",
+                "logs",
+                "--json"
+            ]
+        );
     }
 }

@@ -1249,10 +1249,12 @@ fn build_layout(host: &dyn NavFull, first_pane_id: &str, layout: &Layout, cwd: &
             if let Ok(new_id) = host.split_pane(&current, direction, ratio, &child_cwd) {
                 current = new_id;
             }
-            // Hosts whose split cannot set the new pane's cwd (Rex's
-            // `rex split` has no cwd flag): `cd` it explicitly — the
-            // split's starting cwd is unknown, so this is the only way
-            // the pane lands in `child_cwd` deterministically.
+            // Hosts whose split cannot set the new pane's cwd: `cd`
+            // it explicitly — the split's starting cwd is unknown, so
+            // this is the only way the pane lands in `child_cwd`
+            // deterministically. (Both current hosts pass cwd at split
+            // time — herdr's `pane.split`, Rex's `rex split -c` — so
+            // this fallback stays off.)
             if !host.split_pane_carries_cwd() {
                 let _ = host.insert_text(&current, &format!("cd {child_cwd}\n"));
             }
