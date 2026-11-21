@@ -2,25 +2,25 @@
 //!
 //! nav used to keep everything under `~/.config/herdr/` because it only
 //! ran as a herdr plugin. With Rex coming (R3), the files move to
-//! nav's own dir — `~/.config/nav/` — with the herdr locations kept as
+//! nav's own dir — `~/.config/cf-nav/` — with the herdr locations kept as
 //! legacy fallbacks so existing setups keep working unchanged:
 //!
 //! | File | Lookup order (read) | Write target |
 //! |---|---|---|
-//! | `config.toml` | `$NAV_CONFIG` → `~/.config/nav/config.toml` → `$HERDR_PLUGIN_CONFIG_DIR/config.toml` | — |
-//! | `targets.toml` | `~/.config/nav/` → `~/.config/herdr/` → `$HERDR_PLUGIN_CONFIG_DIR/` | nav path, unless a legacy file is the only one that exists (then there — no data fork) |
-//! | `templates/*.yaml` | `~/.config/nav/templates/` → `~/.config/herdr/templates/` (first dir that exists) | first dir that exists, else nav's (created) |
+//! | `config.toml` | `$NAV_CONFIG` → `~/.config/cf-nav/config.toml` → `$HERDR_PLUGIN_CONFIG_DIR/config.toml` | — |
+//! | `targets.toml` | `~/.config/cf-nav/` → `~/.config/herdr/` → `$HERDR_PLUGIN_CONFIG_DIR/` | nav path, unless a legacy file is the only one that exists (then there — no data fork) |
+//! | `templates/*.yaml` | `~/.config/cf-nav/templates/` → `~/.config/herdr/templates/` (first dir that exists) | first dir that exists, else nav's (created) |
 //!
 //! `targets.toml` (the pinned dirs) is shared by both hosts — it is
 //! pure user data with nothing host-specific in it.
 
 use std::path::PathBuf;
 
-/// nav's own config/data dir: `~/.config/nav`. (`HOME` is expected to
+/// nav's own config/data dir: `~/.config/cf-nav`. (`HOME` is expected to
 /// be set in every real launch context; the relative degenerate case
 /// just fails file ops later instead of panicking here.)
 pub fn nav_dir() -> PathBuf {
-    home().join(".config").join("nav")
+    home().join(".config").join("cf-nav")
 }
 
 /// herdr's config dir: `~/.config/herdr` (the legacy location).
@@ -37,7 +37,7 @@ fn home() -> PathBuf {
 // ── config.toml ──────────────────────────────────────────────────────────────
 
 /// Every `config.toml` candidate, in lookup order: `$NAV_CONFIG` (a
-/// full path, for launchers/tests), `~/.config/nav/config.toml`, then
+/// full path, for launchers/tests), `~/.config/cf-nav/config.toml`, then
 /// the legacy plugin dir. The first existing file wins.
 pub fn config_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
@@ -97,9 +97,9 @@ pub fn targets_write_path() -> PathBuf {
 // ── templates ───────────────────────────────────────────────────────────────
 //
 // Host-scoped (2026-11-20, R5 direction): Rex's templates are its OWN
-// set — `~/.config/nav/rex/templates/` — deliberately NOT falling back
+// set — `~/.config/cf-nav/rex/templates/` — deliberately NOT falling back
 // to the herdr dirs. The herdr flow keeps the R2 chain
-// (`~/.config/nav/templates/` → the legacy `~/.config/herdr/templates/`).
+// (`~/.config/cf-nav/templates/` → the legacy `~/.config/herdr/templates/`).
 
 /// The template dir to READ for a host ("rex" gets its own set; every
 /// other host follows the nav → herdr chain).
@@ -158,7 +158,7 @@ mod tests {
             Self(dir)
         }
         fn nav(&self) -> PathBuf {
-            self.0.join(".config").join("nav")
+            self.0.join(".config").join("cf-nav")
         }
         fn herdr(&self) -> PathBuf {
             self.0.join(".config").join("herdr")

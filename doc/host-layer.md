@@ -127,7 +127,7 @@ failed jump leaves its trace there.
 
 | Data | herdr | Rex |
 |---|---|---|
-| templates | `~/.config/nav/templates/`, then the legacy `~/.config/herdr/templates/` | **its own set**, `~/.config/nav/rex/templates/`, no fallback to herdr's |
+| templates | `~/.config/cf-nav/templates/`, then the legacy `~/.config/herdr/templates/` | **its own set**, `~/.config/cf-nav/rex/templates/`, no fallback to herdr's |
 | config groups / theme | `[host.herdr]` | `[host.rex]` |
 | pinned dirs (`targets.toml`) | shared by both hosts | shared by both hosts |
 

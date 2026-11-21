@@ -523,7 +523,7 @@ fn build_pinned_tree() -> Node {
 
 /// Append a pin to the pinned-targets file (spec §8: `^p`). `path` is
 /// already expanded (absolute). The file is nav's
-/// (`~/.config/nav/targets.toml`) unless only a legacy herdr file
+/// (`~/.config/cf-nav/targets.toml`) unless only a legacy herdr file
 /// exists, in which case it stays there (rex-migration.md R2 — no
 /// data fork). The slot is `max+1`, or 1 if the file is empty/missing.
 /// Idempotent: a path already pinned is a no-op. Returns the slot
@@ -594,7 +594,7 @@ pub fn unpin(path: &str) -> Result<bool, String> {
 /// Read the pinned targets → `Vec<(path, slot)>`. Empty if missing or
 /// malformed (no crash).
 fn read_targets_toml() -> Vec<(String, u32)> {
-    // rex-migration.md R2: nav's `~/.config/nav/targets.toml` first,
+    // rex-migration.md R2: nav's `~/.config/cf-nav/targets.toml` first,
     // then the legacy herdr file, then the plugin dir — the first
     // file that exists wins. Empty if none does (no crash).
     for path in crate::paths::targets_read_candidates() {
@@ -1099,8 +1099,8 @@ fn is_default_direction(d: &str) -> bool {
 }
 
 /// Read every `*.yaml` in the templates dir → `Vec<Template>`.
-/// Host-scoped (R5): herdr reads `~/.config/nav/templates/` (then the
-/// legacy herdr dir); Rex reads its own `~/.config/nav/rex/templates/`
+/// Host-scoped (R5): herdr reads `~/.config/cf-nav/templates/` (then the
+/// legacy herdr dir); Rex reads its own `~/.config/cf-nav/rex/templates/`
 /// — no herdr fallback. Empty if the
 /// dir is missing or empty (no crash; Enter skips the picker and uses
 /// the hardcoded default). One file per template.

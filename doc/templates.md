@@ -17,15 +17,15 @@ hardcoded 1-tab/1-pane default.
 
 ### File layout
 
-Templates are **host-scoped** (R5): herdr reads `~/.config/nav/templates/`
+Templates are **host-scoped** (R5): herdr reads `~/.config/cf-nav/templates/`
 when it exists, else the legacy `~/.config/herdr/templates/`; **Rex reads
-its own set** — `~/.config/nav/rex/templates/` — with no herdr fallback,
+its own set** — `~/.config/cf-nav/rex/templates/` — with no herdr fallback,
 because a layout tuned for one multiplexer is rarely what you want in the
 other. Captures (`herdr-nav capture`) write to the first dir in the
 running host's chain, creating it when none exists:
 
 ```
-~/.config/nav/templates/          # preferred
+~/.config/cf-nav/templates/          # preferred
 ├── rust-dev.yaml
 ├── plain.yaml
 └── notes.yaml

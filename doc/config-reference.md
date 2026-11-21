@@ -4,17 +4,17 @@
 R2):
 
 1. `$NAV_CONFIG` (a full file path — for launchers and tests),
-2. `~/.config/nav/config.toml`,
+2. `~/.config/cf-nav/config.toml`,
 3. `$HERDR_PLUGIN_CONFIG_DIR/config.toml` (the legacy plugin dir).
 
 A missing or malformed config never crashes the plugin — parse errors are
 reported on stderr and built-in defaults are used. Copy
-[`config.example.toml`](../config.example.toml) to `~/.config/nav/` as
+[`config.example.toml`](../config.example.toml) to `~/.config/cf-nav/` as
 `config.toml` to customize (the legacy location still works unchanged).
 
 ```sh
 herdr plugin config-dir herdr-nav   # prints the legacy (plugin) directory
-mkdir -p ~/.config/nav              # the new preferred location
+mkdir -p ~/.config/cf-nav              # the new preferred location
 ```
 
 The palette follows the `[theme]` setting — resolved from
@@ -93,10 +93,10 @@ top-level values.
 
 ## Templates — host-scoped dirs
 
-- **herdr**: reads `~/.config/nav/templates/`, else the legacy
+- **herdr**: reads `~/.config/cf-nav/templates/`, else the legacy
   `~/.config/herdr/templates/`; writes to the first that exists, else
   nav's.
-- **Rex**: its own set, `~/.config/nav/rex/templates/` — read and
+- **Rex**: its own set, `~/.config/cf-nav/rex/templates/` — read and
   write, no herdr fallback (a layout tuned for one multiplexer is
   rarely what you want in the other).
 
@@ -106,10 +106,10 @@ host-specific fields); see [`doc/templates.md`](templates.md).
 ## Pinned dirs — `targets.toml`
 
 Pinned directories live in the first existing of
-`~/.config/nav/targets.toml` and the legacy
+`~/.config/cf-nav/targets.toml` and the legacy
 `~/.config/herdr/targets.toml` (shared by both hosts — it is pure user
 data), separate from the switcher config (spec §13). Writes go to
-`~/.config/nav/targets.toml` unless only the legacy file exists, in
+`~/.config/cf-nav/targets.toml` unless only the legacy file exists, in
 which case they stay there:
 
 ```toml

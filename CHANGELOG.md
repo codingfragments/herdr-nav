@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-21
+
+### Changed
+
+- **Config and data dir renamed: `~/.config/nav/` → `~/.config/cf-nav/`.**
+  The plugin's own files (`config.toml`, `targets.toml`, `templates/`,
+  `rex/templates/`, `intent.json`) now live under `~/.config/cf-nav/`
+  instead of `~/.config/nav/`. Move your existing dir once:
+
+  ```sh
+  mv ~/.config/nav ~/.config/cf-nav
+  ```
+
+  The legacy `~/.config/herdr/` fallbacks and the `$NAV_CONFIG` /
+  `$HERDR_PLUGIN_CONFIG_DIR` overrides are unchanged.
+
 ## [0.7.1] — 2026-11-21
 
 ### Fixed — Rex
