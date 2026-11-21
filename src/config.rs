@@ -1,7 +1,7 @@
 //! Config loading for `herdr-nav` (spec §13).
 //!
 //! Config lookup order (rex-migration.md R2): `$NAV_CONFIG`, then
-//! `~/.config/nav/config.toml`, then the legacy plugin dir
+//! `~/.config/cf-nav/config.toml`, then the legacy plugin dir
 //! (`$HERDR_PLUGIN_CONFIG_DIR/config.toml`) — the first existing file
 //! wins. A missing or malformed config never crashes the plugin —
 //! parse errors are reported on stderr and built-in defaults are used.
@@ -279,7 +279,7 @@ impl Default for BiasCfg {
 
 impl Config {
     /// Load config from the R2 lookup order (`$NAV_CONFIG` →
-    /// `~/.config/nav/config.toml` → the legacy plugin dir), falling
+    /// `~/.config/cf-nav/config.toml` → the legacy plugin dir), falling
     /// back to built-in defaults on any error (missing file, parse
     /// error). Parse errors are reported on stderr.
     pub fn load() -> Self {

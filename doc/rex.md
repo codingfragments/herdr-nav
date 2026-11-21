@@ -138,11 +138,11 @@ where a failed jump leaves its evidence.
   query filter flashes "not available on Rex".
 - **`^x` detach agent** — hidden (no agent-release action).
 - **Templates/capture** — both work. Templates are Rex's own set
-  (`~/.config/nav/rex/templates/`, no herdr fallback). `capture`
+  (`~/.config/cf-nav/rex/templates/`, no herdr fallback). `capture`
   (the wizard, `ctrl+s>ctrl+t`, or `herdr-nav capture` with flags)
   reads the session's windows, layouts, cwds and **best-effort
   commands — name-only**: Rex reports the foreground process name but
   not its arguments, so a running `nvim src/ --clean` is captured as
   `nvim` with a `best-effort: verify` annotation.
-- Config and data files live in `~/.config/nav/` with the herdr
+- Config and data files live in `~/.config/cf-nav/` with the herdr
   locations as fallbacks — see [`doc/config-reference.md`](config-reference.md).

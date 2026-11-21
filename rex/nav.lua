@@ -145,12 +145,12 @@ rex.action{
 }
 
 -- Capture (herdr parity: prefix+ctrl+t / nav-capture): analyze the
--- current session and write a template YAML to ~/.config/nav/rex/
+-- current session and write a template YAML to ~/.config/cf-nav/rex/
 -- templates/. Non-blocking like `nav`, for the same reason.
 rex.action{
   name  = "nav_capture",
   title = "nav: capture session as template",
-  description = "Open the capture wizard over the focused session: reads its windows, layouts, cwds and best-effort commands, and writes a template YAML to ~/.config/nav/rex/templates/.",
+  description = "Open the capture wizard over the focused session: reads its windows, layouts, cwds and best-effort commands, and writes a template YAML to ~/.config/cf-nav/rex/templates/.",
   args  = {},
   run   = function(ctx)
     local v = rex.session.view{ session_id = ctx.session_id }

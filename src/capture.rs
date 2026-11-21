@@ -968,8 +968,8 @@ fn inject_comments(yaml: &str, annotations: &[Annotation]) -> String {
 
 /// The templates dir: `~/.config/herdr/templates/`.
 /// The templates write dir for a host (R5): herdr writes the first of
-/// `~/.config/nav/templates/` and the legacy herdr dir that exists;
-/// Rex writes its own `~/.config/nav/rex/templates/`.
+/// `~/.config/cf-nav/templates/` and the legacy herdr dir that exists;
+/// Rex writes its own `~/.config/cf-nav/rex/templates/`.
 fn templates_dir(host: &str) -> Result<std::path::PathBuf, String> {
     Ok(crate::paths::templates_write_dir_for(host))
 }

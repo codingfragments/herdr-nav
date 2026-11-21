@@ -217,7 +217,7 @@ pub fn jump_performed() -> bool {
 /// action may queue `session.select` / `client.tab.*`), write the
 /// intent record the launcher reads after the popup closes, to
 /// `$NAV_INTENT_FILE` (the launcher sets it; fallback
-/// `~/.config/nav/intent.json`). Only for the user's FINAL jump —
+/// `~/.config/cf-nav/intent.json`). Only for the user's FINAL jump —
 /// template building's intermediate focus calls go through the raw
 /// `host.jump` and ignore a delegated outcome.
 pub fn jump(
