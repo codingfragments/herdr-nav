@@ -370,6 +370,8 @@ fn agent_preview(node: &Node, host: &dyn NavFull, palette: &Palette) -> Preview 
         semantic: match status.as_str() {
             "waiting" => ChipSemantic::Blocked,
             "working" => ChipSemantic::Ok,
+            "error" => ChipSemantic::Error,
+            "done" => ChipSemantic::Info,
             _ => ChipSemantic::Info,
         },
     }];
@@ -573,7 +575,7 @@ fn group_preview(node: &Node, palette: &Palette) -> Preview {
     let mut body = vec![Line::raw("")];
     let role = match node.id.as_str() {
         "group:session" => "live panes in your current session",
-        "group:agents" => "agents waiting on you",
+        "group:agents" => "agent panes · red = waiting on you",
         "group:pinned" => "directories you pinned (⌘1–⌘9)",
         "group:zoxide" => "frequently-visited directories (frecency)",
         "group:plugins" => "installed plugins",

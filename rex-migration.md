@@ -321,10 +321,15 @@ answer.
   file:// pwd (path only). Active = `REX_SESSION`; focused = the
   source block.
 - ☑ Agents: blocks with non-empty `program_status.records` map
-  blocked→waiting/working/idle. **Caveat:** no live block reported a
-  status during the spike (records `[]`/`{}`), so the record shape is
-  parsed defensively (array or object, `status` field) — verify
-  against the user's real agents in R4 live testing.
+  blocked→waiting/working/idle. **Caveat resolved (2026-11-22):** the
+  spike guessed a `status` field no real record carries; live records
+  (rex 0.1.0-preview.22, verified with reporting pi agents) use
+  `state` and name the program in `app`, so every agent fell to
+  `Unknown`. Fixed in muxhost v0.4.0 (`state` parsing, `app` name,
+  new `Done`/`Error` statuses — OSC 7501 `done`/`error` survive a
+  run's end) + nav rendering (`●` blue done, `✖` red error, sort
+  waiting → working → error → done → idle). Live-verified in a driven
+  `--seed @agents` pane: 1 working (green), 2 done (blue).
 - ☑ Pinned/zoxide unchanged; dir-open under Rex = `rex new -c DIR` +
   a delegated FocusPane jump (the intent file the launcher carries
   out). The provider path now jumps to the created pane explicitly
