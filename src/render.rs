@@ -50,6 +50,7 @@ struct Colors {
     mauve: Color,
     red: Color,
     green: Color,
+    blue: Color,
     peach: Color,
 }
 
@@ -64,6 +65,7 @@ impl Colors {
             mauve: p.mauve,
             red: p.red,
             green: p.green,
+            blue: p.blue,
             peach: p.peach,
         }
     }
@@ -89,8 +91,10 @@ fn kind_color(p: &Palette, kind: Kind) -> Color {
 
 /// Agent status dot — the side-panel-style indicator prepended to
 /// agent rows in both the browse tree and the flat search list:
-/// `●` red when waiting on you, `●` green when working, `○` dim
-/// for idle / unknown. The right-aligned meta text stays as-is.
+/// `●` red when waiting on you, `●` green when working, `●` blue
+/// when finished (result ready, OSC 7501 `done`), `✖` red bold when
+/// failed (OSC 7501 `error`), `○` dim for idle / unknown. The
+/// right-aligned meta text stays as-is.
 fn agent_status_dot(meta: &str, c: &Colors) -> Span<'static> {
     match meta {
         "waiting" => Span::styled(
@@ -100,6 +104,14 @@ fn agent_status_dot(meta: &str, c: &Colors) -> Span<'static> {
         "working" => Span::styled(
             "● ",
             Style::default().fg(c.green).add_modifier(Modifier::BOLD),
+        ),
+        "done" => Span::styled(
+            "● ",
+            Style::default().fg(c.blue).add_modifier(Modifier::BOLD),
+        ),
+        "error" => Span::styled(
+            "✖ ",
+            Style::default().fg(c.red).add_modifier(Modifier::BOLD),
         ),
         _ => Span::styled("○ ", Style::default().fg(c.surface2)),
     }
@@ -1509,6 +1521,20 @@ mod tests {
         let span = agent_status_dot("working", &colors());
         assert_eq!(span.content, "● ");
         assert_eq!(span.style.fg, Some(colors().green));
+    }
+
+    #[test]
+    fn agent_status_dot_done_blue() {
+        let span = agent_status_dot("done", &colors());
+        assert_eq!(span.content, "● ");
+        assert_eq!(span.style.fg, Some(colors().blue));
+    }
+
+    #[test]
+    fn agent_status_dot_error_red_cross() {
+        let span = agent_status_dot("error", &colors());
+        assert_eq!(span.content, "✖ ");
+        assert_eq!(span.style.fg, Some(colors().red));
     }
 
     #[test]

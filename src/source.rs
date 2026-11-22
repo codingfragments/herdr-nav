@@ -204,7 +204,7 @@ impl Provider for SessionProvider<'_> {
 
 /// The Agents provider (spec §5): every pane running an agent with its
 /// status, via the host's `list_agents`. Flat list, sort waiting →
-/// working → idle then recency. Meta = status.
+/// working → error → done → idle then recency. Meta = status.
 pub struct AgentsProvider<'a> {
     host: &'a dyn NavFull,
 }
@@ -249,8 +249,8 @@ impl Provider for AgentsProvider<'_> {
 }
 
 /// Build the Agents group node (flat list of agent leaves, spec §4/§5).
-/// Sort waiting → working → idle, then focused first. Meta =
-/// status. Each agent leaf's id is `agents:<pane_id>` so invoke can
+/// Sort waiting → working → error → done → idle, then focused first.
+/// Meta = status. Each agent leaf's id is `agents:<pane_id>` so invoke can
 /// strip the prefix and focus the pane.
 fn build_agents_tree(agents: &[AgentEntry]) -> Node {
     let mut leaves: Vec<Node> = agents
@@ -266,11 +266,15 @@ fn build_agents_tree(agents: &[AgentEntry]) -> Node {
             actions: crate::nav::Actions::default(),
         })
         .collect();
-    // Sort waiting → working → idle (spec §4), then focused first.
+    // Sort waiting → working → error → done → idle (spec §4, extended
+    // with OSC 7501's finished and failed states), then focused first.
     leaves.sort_by_key(|n| match n.meta.as_str() {
         "waiting" => 0,
         "working" => 1,
-        _ => 2,
+        "error" => 2,
+        "done" => 3,
+        "idle" => 4,
+        _ => 5,
     });
     Node {
         id: "group:agents".to_string(),
@@ -1821,14 +1825,21 @@ mod agents_tests {
         let agents = vec![
             agent("wA:p1", "pi", AgentStatus::Working, "π - herdr-nav"),
             agent("wA:p2", "codex", AgentStatus::Waiting, "cx - sandbox"),
+            agent("wA:p3", "pi", AgentStatus::Done, "π - finished"),
+            agent("wA:p4", "codex", AgentStatus::Error, "cx - failed"),
+            agent("wA:p5", "pi", AgentStatus::Idle, "π - idle"),
         ];
         let group = build_agents_tree(&agents);
         assert_eq!(group.kind, Kind::Group);
         assert_eq!(group.label, "Agents");
-        assert_eq!(group.children.len(), 2);
-        // waiting sorts before working (spec §4).
+        assert_eq!(group.children.len(), 5);
+        // waiting → working → error → done → idle (spec §4, extended
+        // with OSC 7501's finished and failed states).
         assert_eq!(group.children[0].meta, "waiting");
         assert_eq!(group.children[1].meta, "working");
+        assert_eq!(group.children[2].meta, "error");
+        assert_eq!(group.children[3].meta, "done");
+        assert_eq!(group.children[4].meta, "idle");
         // Label is the agent's display title.
         assert!(group.children[0].label.contains("sandbox"));
     }

@@ -7,6 +7,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Finished and failed agent states in the Agents group: `●` blue =
+  done (result ready to look at), `✖` red bold = error, alongside the
+  existing red waiting / green working / dim idle dots. Agent rows sort
+  waiting → working → error → done → idle; the agent preview chip turns
+  red on error. Based on muxhost v0.4.0's `AgentStatus::Done`/`Error`
+  (Rex OSC 7501 `done`/`error` survive a run's end).
+
+### Fixed
+
+- Agent statuses under Rex parse now: muxhost read a spike-guessed
+  `status` field no real record carries, so every agent fell to the dim
+  unknown dot. Live records (rex 0.1.0-preview.22) use `state` and name
+  the program in `app` — verified live with reporting pi agents
+  (3 done, 1 working). Bumps muxhost to v0.4.0.
+
 ## [0.8.0] — 2026-11-21
 
 ### Changed
