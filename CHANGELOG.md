@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-11-22
+
 ### Added
 
 - Finished and failed agent states in the Agents group: `●` blue =
