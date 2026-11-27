@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Stale Rex agent entries in the Agents group are now filtered out:
+  panes whose agent already exited back to the shell no longer linger
+  from leftover OSC 7501 `program_status` records. Bumps muxhost to
+  v0.4.1 (checks `record.owner` against `process.foreground` and
+  `process.ancestors`, and drops exited blocks).
+
 ## [0.8.1] — 2026-11-22
 
 ### Added
