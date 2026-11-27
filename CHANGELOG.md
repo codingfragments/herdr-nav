@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-11-27
+
 ### Fixed
 
 - Stale Rex agent entries in the Agents group are now filtered out:
